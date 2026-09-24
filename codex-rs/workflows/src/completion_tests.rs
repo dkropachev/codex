@@ -1,0 +1,168 @@
+use pretty_assertions::assert_eq;
+use serde_json::json;
+
+use super::*;
+
+fn schema() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "action": {
+                "description": "Action to run.",
+                "enum": ["review", "report"]
+            },
+            "targetRef": {
+                "description": "Target revision.",
+                "type": "string"
+            }
+        }
+    })
+}
+
+#[test]
+fn derives_field_and_enum_completions_from_schema() {
+    let fields = static_completions(
+        &schema(),
+        &CompletionRequest {
+            input: json!({}),
+            active_field: None,
+            prefix: "--t".to_string(),
+            mode: CompletionMode::Field,
+        },
+    );
+    assert_eq!(
+        items(fields),
+        vec![CompletionItem {
+            value: "--target-ref".to_string(),
+            description: Some("Target revision.".to_string()),
+        }]
+    );
+
+    let values = static_completions(
+        &schema(),
+        &CompletionRequest {
+            input: json!({}),
+            active_field: Some("action".to_string()),
+            prefix: "re".to_string(),
+            mode: CompletionMode::Value,
+        },
+    );
+    assert_eq!(
+        items(values),
+        vec![
+            CompletionItem {
+                value: "review".to_string(),
+                description: Some("Action to run.".to_string()),
+            },
+            CompletionItem {
+                value: "report".to_string(),
+                description: Some("Action to run.".to_string()),
+            },
+        ]
+    );
+}
+
+#[test]
+fn merges_and_deduplicates_dynamic_completions() {
+    assert_eq!(
+        merge_completions(
+            vec![CompletionCandidate {
+                item: CompletionItem {
+                    value: "review".to_string(),
+                    description: None,
+                },
+                insertion: "review".to_string(),
+            }],
+            vec![
+                CompletionItem {
+                    value: "review".to_string(),
+                    description: Some("Dynamic description".to_string()),
+                },
+                CompletionItem {
+                    value: "repair".to_string(),
+                    description: None,
+                },
+            ],
+        ),
+        candidates(vec![
+            CompletionItem {
+                value: "repair".to_string(),
+                description: None,
+            },
+            CompletionItem {
+                value: "review".to_string(),
+                description: Some("Dynamic description".to_string()),
+            },
+        ])
+    );
+}
+
+#[test]
+fn preserves_json_types_for_schema_values_and_honors_const() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "choice": {
+                "const": "true",
+                "enum": ["true", "ignored"]
+            },
+            "shape": {
+                "enum": [null, [1, 2], {"kind": "report"}]
+            }
+        }
+    });
+    let string_candidates = static_completions(
+        &schema,
+        &CompletionRequest {
+            input: json!({}),
+            active_field: Some("choice".to_string()),
+            prefix: String::new(),
+            mode: CompletionMode::Value,
+        },
+    );
+    assert_eq!(string_candidates.len(), 1);
+    assert_eq!(string_candidates[0].item.value, "true");
+    assert_eq!(string_candidates[0].insertion, r#""true""#);
+
+    let structured = static_completions(
+        &schema,
+        &CompletionRequest {
+            input: json!({}),
+            active_field: Some("shape".to_string()),
+            prefix: String::new(),
+            mode: CompletionMode::Value,
+        },
+    );
+    assert_eq!(
+        structured
+            .into_iter()
+            .map(|candidate| (candidate.item.value, candidate.insertion))
+            .collect::<Vec<_>>(),
+        vec![
+            ("null".to_string(), "null".to_string()),
+            ("[1,2]".to_string(), "[1,2]".to_string()),
+            (
+                r#"{"kind":"report"}"#.to_string(),
+                r#"{"kind":"report"}"#.to_string(),
+            ),
+        ]
+    );
+}
+
+fn items(candidates: Vec<CompletionCandidate>) -> Vec<CompletionItem> {
+    candidates
+        .into_iter()
+        .map(|candidate| candidate.item)
+        .collect()
+}
+
+fn candidates(items: Vec<CompletionItem>) -> Vec<CompletionCandidate> {
+    items
+        .into_iter()
+        .map(|item| CompletionCandidate {
+            insertion: item.value.clone(),
+            item,
+        })
+        .collect()
+}

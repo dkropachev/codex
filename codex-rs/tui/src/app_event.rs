@@ -38,6 +38,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
+use codex_workflows::CompletionRequest;
+use codex_workflows::CompletionResult;
 
 use crate::app_command::AppCommand;
 use crate::app_server_session::AppServerStartedThread;
@@ -325,6 +327,24 @@ pub(crate) enum AppEvent {
     FileSearchResult {
         query: String,
         matches: Vec<FileMatch>,
+    },
+
+    /// Load schema and hook completion for only the workflow active in the composer.
+    StartWorkflowCompletion {
+        generation: u64,
+        workflow_dir: PathBuf,
+        request: CompletionRequest,
+    },
+
+    /// Cancel the active workflow completion when the composer leaves its workflow context.
+    CancelWorkflowCompletion,
+
+    /// Result of a bounded workflow completion request. Late generations are ignored.
+    WorkflowCompletionResult {
+        generation: u64,
+        workflow_dir: PathBuf,
+        request: CompletionRequest,
+        result: CompletionResult,
     },
 
     /// Refresh account rate limits in the background.

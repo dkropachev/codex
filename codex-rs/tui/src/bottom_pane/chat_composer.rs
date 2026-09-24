@@ -269,6 +269,7 @@ mod footer_state;
 mod history_search;
 mod popup_state;
 mod slash_input;
+mod workflow_completion;
 
 #[cfg(test)]
 #[path = "chat_composer/plugins__mentions.rs"]
@@ -313,6 +314,8 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
+
+use codex_workflows::CompletionRequest;
 
 use ratatui::style::Color;
 
@@ -495,6 +498,9 @@ pub(crate) struct ChatComposer {
     service_tier_commands: Vec<ServiceTierCommand>,
     workflow_commands_enabled: bool,
     workflow_commands: Vec<WorkflowCommand>,
+    workflow_completion_cwd: PathBuf,
+    workflow_completion_generation: u64,
+    workflow_completion_request: Option<(PathBuf, CompletionRequest)>,
     mentions_v2_enabled: bool,
     goal_command_enabled: bool,
     personality_command_enabled: bool,
@@ -676,6 +682,9 @@ impl ChatComposer {
             service_tier_commands: Vec::new(),
             workflow_commands_enabled: false,
             workflow_commands: Vec::new(),
+            workflow_completion_cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            workflow_completion_generation: 0,
+            workflow_completion_request: None,
             mentions_v2_enabled: false,
             goal_command_enabled: false,
             personality_command_enabled: false,
@@ -837,13 +846,34 @@ impl ChatComposer {
         self.sync_popups();
     }
 
+    pub fn set_workflow_commands_context(
+        &mut self,
+        enabled: bool,
+        cwd: PathBuf,
+        commands: Vec<WorkflowCommand>,
+    ) {
+        if self.workflow_completion_request.is_some() {
+            self.app_event_tx.send(AppEvent::CancelWorkflowCompletion);
+        }
+        self.workflow_commands_enabled = enabled;
+        self.workflow_completion_cwd = cwd;
+        self.workflow_commands = commands;
+        self.workflow_completion_request = None;
+        self.workflow_completion_generation = self.workflow_completion_generation.wrapping_add(1);
+        self.sync_popups();
+    }
+
+    #[cfg(test)]
     pub fn set_workflow_commands_enabled(&mut self, enabled: bool) {
         self.workflow_commands_enabled = enabled;
         self.sync_popups();
     }
 
+    #[cfg(test)]
     pub fn set_workflow_commands(&mut self, commands: Vec<WorkflowCommand>) {
         self.workflow_commands = commands;
+        self.workflow_completion_request = None;
+        self.workflow_completion_generation = self.workflow_completion_generation.wrapping_add(1);
         self.sync_popups();
     }
 
@@ -3874,9 +3904,14 @@ impl ChatComposer {
     fn sync_command_popup(&mut self, allow: bool) {
         let text = self.draft.textarea.text();
         let first_line_end = text.find('\n').unwrap_or(text.len());
-        let first_line = &text[..first_line_end];
+        let first_line = text[..first_line_end].to_string();
+        let cursor = self.draft.textarea.cursor();
+        let caret_on_first_line = cursor <= first_line_end;
+        if !allow || !caret_on_first_line {
+            self.cancel_workflow_completion();
+        }
         // Keep an explicitly dismissed popup closed until the command token changes.
-        let command_token = slash_input::command_popup_filter_text(first_line, /*cursor*/ 0);
+        let command_token = slash_input::command_popup_filter_text(&first_line, /*cursor*/ 0);
         if let Some(command_token) = command_token.as_deref()
             && self.popups.dismissed_command_token.as_deref() == Some(command_token)
         {
@@ -3891,15 +3926,16 @@ impl ChatComposer {
             return;
         }
         // Determine whether the caret is inside the initial '/name' token on the first line.
-        let cursor = self.draft.textarea.cursor();
-        let caret_on_first_line = cursor <= first_line_end;
+        if caret_on_first_line {
+            self.sync_workflow_completion(&first_line, cursor);
+        }
 
         let is_editing_slash_command_name = caret_on_first_line
             && self
                 .slash_input()
-                .is_editing_command_name(first_line, cursor);
+                .is_editing_command_name(&first_line, cursor);
         let command_filter_text = caret_on_first_line
-            .then(|| slash_input::command_popup_filter_text(first_line, cursor))
+            .then(|| slash_input::command_popup_filter_text(&first_line, cursor))
             .flatten();
 
         // If the cursor is currently positioned within an `@token`, prefer the

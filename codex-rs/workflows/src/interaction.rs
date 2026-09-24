@@ -8,12 +8,13 @@ use serde::Deserialize;
 use serde_json::Map;
 use serde_json::Value;
 
-use super::WORKFLOW_CONTROL_VERSION;
+use crate::runner::MAX_WORKFLOW_CONTROL_FRAME_BYTES;
+use crate::runner::WORKFLOW_CONTROL_VERSION;
+use crate::runner::WORKFLOW_OUTPUT_MAX_BYTES;
 
-pub(super) const MAX_WORKFLOW_CONTROL_FRAME_BYTES: usize = 16 * 1024;
 pub(super) const MAX_WORKFLOW_QUESTION_HEADER_CHARS: usize = 12;
 pub(super) const MAX_WORKFLOW_OPTIONS: usize = 10;
-const MAX_WORKFLOW_USER_INPUT_REQUESTS: u64 = 64;
+pub const MAX_WORKFLOW_USER_INPUT_REQUESTS: u64 = 64;
 const MAX_WORKFLOW_QUESTION_ID_CHARS: usize = 64;
 const MAX_WORKFLOW_QUESTION_CHARS: usize = 1_024;
 const MAX_WORKFLOW_OPTION_LABEL_CHARS: usize = 80;
@@ -23,11 +24,11 @@ const USER_NOTE_PREFIX: &str = "user_note: ";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct WorkflowControlRequest {
-    pub(super) v: u8,
-    pub(super) id: u64,
-    pub(super) method: String,
-    pub(super) params: Value,
+pub struct WorkflowControlRequest {
+    v: u8,
+    pub id: u64,
+    method: String,
+    pub params: Value,
 }
 
 #[derive(Deserialize)]
@@ -45,18 +46,7 @@ struct WorkflowCompletionParams {
     markdown: String,
 }
 
-#[derive(Deserialize)]
-struct WorkflowControlMethod {
-    method: String,
-}
-
-pub(super) fn is_completion(payload: &str) -> Result<bool, String> {
-    serde_json::from_str::<WorkflowControlMethod>(payload)
-        .map(|frame| frame.method == "complete")
-        .map_err(|err| format!("invalid workflow control frame: {err}"))
-}
-
-pub(super) fn parse_completion(payload: &str) -> Result<String, String> {
+pub fn parse_completion(payload: &str) -> Result<String, String> {
     let completion = serde_json::from_str::<WorkflowCompletion>(payload)
         .map_err(|err| format!("invalid workflow completion frame: {err}"))?;
     if completion.v != WORKFLOW_CONTROL_VERSION
@@ -65,10 +55,15 @@ pub(super) fn parse_completion(payload: &str) -> Result<String, String> {
     {
         return Err("invalid workflow completion frame header".to_string());
     }
+    if completion.params.markdown.len() > WORKFLOW_OUTPUT_MAX_BYTES {
+        return Err(format!(
+            "workflow markdown exceeded {WORKFLOW_OUTPUT_MAX_BYTES} bytes"
+        ));
+    }
     Ok(completion.params.markdown)
 }
 
-pub(super) fn parse_control_request(
+pub fn parse_control_request(
     payload: &str,
     expected_request_id: u64,
 ) -> Result<WorkflowControlRequest, String> {
@@ -95,11 +90,6 @@ pub(super) fn parse_control_request(
         return Err(format!(
             "workflow control request id {} was out of order; expected {expected_request_id}",
             request.id
-        ));
-    }
-    if request.id > MAX_WORKFLOW_USER_INPUT_REQUESTS {
-        return Err(format!(
-            "workflow exceeded the limit of {MAX_WORKFLOW_USER_INPUT_REQUESTS} user input requests"
         ));
     }
     Ok(request)
@@ -193,7 +183,7 @@ pub(super) fn validate_user_input_request(
     Ok(args)
 }
 
-pub(super) fn decode_user_input_request(params: Value) -> Result<RequestUserInputArgs, String> {
+pub fn decode_user_input_request(params: Value) -> Result<RequestUserInputArgs, String> {
     let params = require_object(&params, "requestUserInput params")?;
     reject_unknown_fields(
         params,
@@ -231,7 +221,7 @@ pub(super) fn decode_user_input_request(params: Value) -> Result<RequestUserInpu
     validate_user_input_request(args)
 }
 
-pub(super) fn validate_user_input_response(
+pub fn validate_user_input_response(
     request: &RequestUserInputArgs,
     response: RequestUserInputResponse,
 ) -> Result<RequestUserInputResponse, String> {

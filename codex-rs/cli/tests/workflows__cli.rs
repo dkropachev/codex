@@ -13,7 +13,7 @@ use tempfile::TempDir;
 struct FakeBun {
     bin_dir: TempDir,
     capture_cwd: PathBuf,
-    capture_args: PathBuf,
+    capture_input: PathBuf,
 }
 
 impl FakeBun {
@@ -23,16 +23,31 @@ impl FakeBun {
 
         let bin_dir = TempDir::new()?;
         let capture_cwd = codex_home.join("captured-cwd.txt");
-        let capture_args = codex_home.join("captured-args.txt");
+        let capture_input = codex_home.join("captured-input.json");
         let fake_bun = bin_dir.path().join("bun");
         fs::write(
             &fake_bun,
             r#"#!/bin/sh
 printf '%s\n' "$PWD" > "$CODEX_TEST_WORKFLOW_CWD"
-: > "$CODEX_TEST_WORKFLOW_ARGS"
-for arg in "$@"; do
-  printf '%s\n' "$arg" >> "$CODEX_TEST_WORKFLOW_ARGS"
-done
+if [ "${2:-}" = "inspect" ]; then
+  workflow_id=$(sed -n 's/^id: //p' workflow.yaml)
+  workflow_title=$(sed -n 's/^title: //p' workflow.yaml)
+  callable_name=$(sed -n 's/^callableName: //p' workflow.yaml)
+  printf '{"apiVersion":1,"id":"%s","title":"%s","callableName":"%s","inputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"workingDirectory":{"type":"string"}},"additionalProperties":true},"outputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true},"hasComplete":true}\n' \
+    "$workflow_id" "$workflow_title" "$callable_name"
+fi
+if [ "${2:-}" = "scan" ]; then
+  printf '%s\n' '[{"path":"src/workflow.ts","exports":["inputSchema","outputSchema"],"imports":[]}]'
+fi
+if [ "${2:-}" = "run" ]; then
+  cat "${3:?}" > "$CODEX_TEST_WORKFLOW_INPUT"
+  printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{"v":1,"id":1,"method":"contract","params":{"inputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true},"outputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true}}}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
+  IFS= read -r _response
+  printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{"v":1,"id":2,"method":"validateOutput","params":{"output":{}}}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
+  IFS= read -r _response
+  printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{"v":1,"id":0,"method":"complete","params":{"markdown":"ok\n"}}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
+  IFS= read -r _response
+fi
 "#,
         )?;
         let mut permissions = fs::metadata(&fake_bun)?.permissions();
@@ -42,7 +57,7 @@ done
         Ok(Self {
             bin_dir,
             capture_cwd,
-            capture_args,
+            capture_input,
         })
     }
 
@@ -54,7 +69,7 @@ done
         )?;
         cmd.env("PATH", path)
             .env("CODEX_TEST_WORKFLOW_CWD", &self.capture_cwd)
-            .env("CODEX_TEST_WORKFLOW_ARGS", &self.capture_args);
+            .env("CODEX_TEST_WORKFLOW_INPUT", &self.capture_input);
         Ok(())
     }
 
@@ -62,15 +77,14 @@ done
         Ok(fs::read_to_string(&self.capture_cwd)?)
     }
 
-    fn captured_args(&self) -> Result<Vec<String>> {
-        Ok(fs::read_to_string(&self.capture_args)?
-            .lines()
-            .map(ToString::to_string)
-            .collect())
+    fn captured_workflow_input(&self) -> Result<Value> {
+        Ok(serde_json::from_str(&fs::read_to_string(
+            &self.capture_input,
+        )?)?)
     }
 
     fn was_invoked(&self) -> bool {
-        self.capture_cwd.exists() || self.capture_args.exists()
+        self.capture_cwd.exists() || self.capture_input.exists()
     }
 }
 
@@ -99,6 +113,29 @@ fn write_workflow(root: &Path, dirname: &str, yaml: &str) -> Result<PathBuf> {
     fs::create_dir_all(&workflow_dir)?;
     fs::write(workflow_dir.join("workflow.yaml"), yaml)?;
     Ok(workflow_dir)
+}
+
+fn scaffold_canonical_workflow(
+    codex_home: &Path,
+    cwd: &Path,
+    id: &str,
+    callable_name: &str,
+) -> Result<PathBuf> {
+    let mut cmd = codex_command(codex_home, cwd)?;
+    cmd.args([
+        "workflow",
+        "develop",
+        "--location",
+        "global",
+        "--id",
+        id,
+        "--command",
+        callable_name,
+        "Test workflow",
+    ])
+    .assert()
+    .success();
+    Ok(codex_home.join("workflows").join(id))
 }
 
 fn write_workflow_source(workflow_dir: &Path) -> Result<()> {
@@ -207,6 +244,49 @@ userDescription: Build a project report.
 }
 
 #[test]
+fn exact_workflow_id_takes_precedence_over_another_packages_alias() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let project = TempDir::new()?;
+    enable_workflows(codex_home.path())?;
+    let root = codex_home.path().join("workflows");
+    let alpha = write_workflow(
+        &root,
+        "alpha",
+        "id: alpha\ncommand: beta\nuserDescription: Alias owner\n",
+    )?;
+    let beta = write_workflow(
+        &root,
+        "beta",
+        "id: beta\ncommand: other\nuserDescription: Exact ID owner\n",
+    )?;
+    write_workflow(
+        &root,
+        "gamma",
+        "id: gamma\ncommand: duplicate\nuserDescription: First duplicate\n",
+    )?;
+    write_workflow(
+        &root,
+        "delta",
+        "id: delta\ncommand: duplicate\nuserDescription: Second duplicate\n",
+    )?;
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    cmd.args(["workflow", "where", "beta"])
+        .assert()
+        .success()
+        .stdout(format!("{}\n", beta.display()));
+    assert_ne!(alpha, beta);
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    cmd.args(["workflow", "duplicate"])
+        .assert()
+        .failure()
+        .stderr(contains("alias `duplicate` is ambiguous"));
+
+    Ok(())
+}
+
+#[test]
 fn workflow_run_unknown_command_reports_available_commands() -> Result<()> {
     let codex_home = TempDir::new()?;
     let project = TempDir::new()?;
@@ -228,16 +308,64 @@ fn workflow_run_unknown_command_reports_available_commands() -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
 #[test]
-fn workflow_alias_invokes_bun_like_old_cli_surface() -> Result<()> {
+fn workflow_run_legacy_package_reports_migration_guidance() -> Result<()> {
     let codex_home = TempDir::new()?;
     let project = TempDir::new()?;
     enable_workflows(codex_home.path())?;
     write_workflow(
         &codex_home.path().join("workflows"),
         "code-review",
-        "id: review/fix\ncommand: code-review\nuserDescription: Run a code review workflow.\n",
+        "id: code-review\ncommand: code-review\nuserDescription: Run a code review workflow.\n",
+    )?;
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    cmd.args(["workflow", "run", "code-review", "--scope", "repo"])
+        .assert()
+        .failure()
+        .stderr(contains("is not a canonical package"))
+        .stderr(contains("migrate to workflow package v1"));
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn workflow_run_rejects_an_incomplete_canonical_package() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let project = TempDir::new()?;
+    enable_workflows(codex_home.path())?;
+    let workflow_dir = scaffold_canonical_workflow(
+        codex_home.path(),
+        project.path(),
+        "incomplete",
+        "incomplete",
+    )?;
+    fs::remove_file(workflow_dir.join("README.md"))?;
+    let fake_bun = FakeBun::new(codex_home.path())?;
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    fake_bun.apply_to_command(&mut cmd)?;
+    cmd.args(["workflow", "run", "incomplete"])
+        .assert()
+        .failure()
+        .stderr(contains("does not satisfy the canonical v1 contract"))
+        .stderr(contains("README.md"));
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn workflow_alias_invokes_bun_like_old_cli_surface() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let project = TempDir::new()?;
+    enable_workflows(codex_home.path())?;
+    scaffold_canonical_workflow(
+        codex_home.path(),
+        project.path(),
+        "review/fix",
+        "code-review",
     )?;
     let fake_bun = FakeBun::new(codex_home.path())?;
 
@@ -247,9 +375,8 @@ fn workflow_alias_invokes_bun_like_old_cli_surface() -> Result<()> {
         .assert()
         .success();
 
-    let args = fake_bun.captured_args()?;
     assert_eq!(
-        serde_json::from_str::<Value>(&args[2])?,
+        fake_bun.captured_workflow_input()?,
         json!({
             "scope": "repo",
             "workingDirectory": existing_path_display(project.path())?,
@@ -261,7 +388,7 @@ fn workflow_alias_invokes_bun_like_old_cli_surface() -> Result<()> {
 
 #[cfg(unix)]
 #[test]
-fn workflow_alias_positional_args_use_legacy_payload() -> Result<()> {
+fn workflow_alias_positional_args_report_migration_guidance() -> Result<()> {
     let codex_home = TempDir::new()?;
     let project = TempDir::new()?;
     enable_workflows(codex_home.path())?;
@@ -276,17 +403,13 @@ fn workflow_alias_positional_args_use_legacy_payload() -> Result<()> {
     fake_bun.apply_to_command(&mut cmd)?;
     cmd.args(["workflow", "code-review", "current", "sprint"])
         .assert()
-        .success();
-
-    let args = fake_bun.captured_args()?;
-    assert_eq!(
-        serde_json::from_str::<Value>(&args[2])?,
-        json!({
-            "argv": ["current", "sprint"],
-            "text": "current sprint",
-            "workingDirectory": existing_path_display(project.path())?,
-        })
-    );
+        .failure()
+        .stderr(contains(
+            "positional value 'current' is no longer supported",
+        ))
+        .stderr(contains("--kebab-case flags"))
+        .stderr(contains("--input"));
+    assert!(!fake_bun.was_invoked());
 
     Ok(())
 }
@@ -297,10 +420,11 @@ fn workflow_run_invokes_bun_with_structured_input() -> Result<()> {
     let codex_home = TempDir::new()?;
     let project = TempDir::new()?;
     enable_workflows(codex_home.path())?;
-    let workflow_dir = write_workflow(
-        &codex_home.path().join("workflows"),
+    let workflow_dir = scaffold_canonical_workflow(
+        codex_home.path(),
+        project.path(),
         "code-review",
-        "command: code-review\nuserDescription: Run a code review workflow.\n",
+        "code-review",
     )?;
     let fake_bun = FakeBun::new(codex_home.path())?;
 
@@ -326,12 +450,8 @@ fn workflow_run_invokes_bun_with_structured_input() -> Result<()> {
         existing_path_display(&workflow_dir)?
     );
 
-    let args = fake_bun.captured_args()?;
-    assert_eq!(args.len(), 3);
-    assert_eq!(args[0], "src/workflow.ts");
-    assert_eq!(args[1], "--input");
     assert_eq!(
-        serde_json::from_str::<Value>(&args[2])?,
+        fake_bun.captured_workflow_input()?,
         json!({
             "action": "list-reports",
             "allowedAreas": "tui",
@@ -349,10 +469,15 @@ fn workflow_run_by_nested_id_merges_json_input_and_flags() -> Result<()> {
     let codex_home = TempDir::new()?;
     let project = TempDir::new()?;
     enable_workflows(codex_home.path())?;
-    let workflow_dir = write_workflow(
-        &codex_home.path().join("workflows"),
+    let workflow_dir = scaffold_canonical_workflow(
+        codex_home.path(),
+        project.path(),
         "review/fix",
-        "id: review/fix\ncommand: code-review\nuserDescription: Run a code review workflow.\n",
+        "code-review",
+    )?;
+    fs::write(
+        project.path().join("input.json"),
+        r#"{"scope":"repo","workingDirectory":"/tmp/custom"}"#,
     )?;
     let fake_bun = FakeBun::new(codex_home.path())?;
 
@@ -363,7 +488,9 @@ fn workflow_run_by_nested_id_merges_json_input_and_flags() -> Result<()> {
         "run",
         "review/fix",
         "--input",
-        r#"{"scope":"repo","workingDirectory":"/tmp/custom"}"#,
+        "@input.json",
+        "--scope",
+        "cli",
         "--max-count",
         "3",
     ])
@@ -376,11 +503,10 @@ fn workflow_run_by_nested_id_merges_json_input_and_flags() -> Result<()> {
         existing_path_display(&workflow_dir)?
     );
 
-    let args = fake_bun.captured_args()?;
     assert_eq!(
-        serde_json::from_str::<Value>(&args[2])?,
+        fake_bun.captured_workflow_input()?,
         json!({
-            "scope": "repo",
+            "scope": "cli",
             "maxCount": 3,
             "workingDirectory": "/tmp/custom",
         })
@@ -430,8 +556,8 @@ fn workflow_management_commands_match_old_surface() -> Result<()> {
     let mut cmd = codex_command(codex_home.path(), project.path())?;
     cmd.args(["workflow", "validate", "review/fix"])
         .assert()
-        .success()
-        .stdout(contains("review/fix is valid"));
+        .failure()
+        .stdout(contains("migrate"));
 
     let mut cmd = codex_command(codex_home.path(), project.path())?;
     cmd.args(["workflow", "status", "review/fix"])
@@ -536,21 +662,17 @@ fn workflow_validate_reports_invalid_workflow_at_cli_boundary() -> Result<()> {
     let codex_home = TempDir::new()?;
     let project = TempDir::new()?;
     enable_workflows(codex_home.path())?;
-    let workflow_dir = write_workflow(
+    write_workflow(
         &codex_home.path().join("workflows"),
         "review/fix",
         "id: review/fix\ncommand: code-review\nuserDescription: Run a code review workflow.\n",
     )?;
-    let workflow_ts = workflow_dir.canonicalize()?.join("src").join("workflow.ts");
-
     let mut cmd = codex_command(codex_home.path(), project.path())?;
     cmd.args(["workflow", "validate", "review/fix"])
         .assert()
         .failure()
-        .stdout(contains(format!(
-            "review/fix is invalid: missing {}",
-            workflow_ts.display()
-        )));
+        .stdout(contains("missing"))
+        .stdout(contains("src/workflow.ts"));
 
     Ok(())
 }
@@ -625,10 +747,170 @@ fn workflow_develop_scaffolds_project_workflow() -> Result<()> {
 
     let workflow_dir = project.path().join(".codex/workflows/reports/jira");
     let workflow_yaml = fs::read_to_string(workflow_dir.join("workflow.yaml"))?;
-    assert!(workflow_yaml.contains("id: \"reports/jira\""));
-    assert!(workflow_yaml.contains("command: \"jira-report\""));
+    assert!(workflow_yaml.contains("apiVersion: 1"));
+    assert!(workflow_yaml.contains("id: reports/jira"));
+    assert!(workflow_yaml.contains("callableName: jira-report"));
+    assert!(workflow_dir.join("package.json").is_file());
+    assert!(workflow_dir.join(".gitignore").is_file());
+    assert!(workflow_dir.join("README.md").is_file());
+    assert!(workflow_dir.join("DESIGN.md").is_file());
     assert!(workflow_dir.join("src/workflow.ts").is_file());
+    assert!(workflow_dir.join("src/tests").is_dir());
+    assert!(workflow_dir.join("state/.gitkeep").is_file());
+    assert!(workflow_dir.join(".git").is_dir());
 
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn workflow_validate_prints_exact_success_marker_for_fresh_scaffold() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let project = TempDir::new()?;
+    enable_workflows(codex_home.path())?;
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    cmd.args([
+        "workflow",
+        "develop",
+        "--location",
+        "project",
+        "--id",
+        "hello",
+        "A hello workflow",
+    ])
+    .assert()
+    .success();
+
+    let fake_bun = FakeBun::new(codex_home.path())?;
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    fake_bun.apply_to_command(&mut cmd)?;
+    cmd.args(["workflow", "validate", "hello"])
+        .assert()
+        .success()
+        .stdout("valid\n");
+
+    Ok(())
+}
+
+#[test]
+fn workflow_validate_reports_an_undiscoverable_package_by_safe_id_path() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let project = TempDir::new()?;
+    enable_workflows(codex_home.path())?;
+    let workflow_dir =
+        scaffold_canonical_workflow(codex_home.path(), project.path(), "broken", "broken")?;
+    let manifest_path = workflow_dir.join("workflow.yaml");
+    let manifest = fs::read_to_string(&manifest_path)?;
+    fs::write(
+        &manifest_path,
+        manifest
+            .lines()
+            .filter(|line| !line.starts_with("callableName:"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )?;
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    cmd.args(["workflow", "validate", "broken"])
+        .assert()
+        .failure()
+        .stdout(contains("metadata:"))
+        .stdout(contains("callableName"))
+        .stderr(predicates::str::is_empty());
+
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
+fn workflow_run_executes_fresh_scaffold_and_formats_markdown() -> Result<()> {
+    which::which("bun").context("workflow runtime tests require Bun")?;
+
+    let codex_home = TempDir::new()?;
+    let project = TempDir::new()?;
+    enable_workflows(codex_home.path())?;
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    cmd.args([
+        "workflow",
+        "develop",
+        "--location",
+        "project",
+        "--id",
+        "hello",
+        "A hello workflow",
+    ])
+    .assert()
+    .success();
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    cmd.args(["workflow", "run", "hello", "--message", "Ready."])
+        .assert()
+        .success()
+        .stdout("# Hello\n\nReady.\n")
+        .stderr(contains("Running workflow"));
+
+    Ok(())
+}
+
+#[test]
+fn workflow_develop_refuses_to_overwrite_an_existing_target() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let project = TempDir::new()?;
+    enable_workflows(codex_home.path())?;
+    let workflow_dir = project.path().join(".codex/workflows/reports/jira");
+    fs::create_dir_all(&workflow_dir)?;
+    let marker = workflow_dir.join("keep-me.txt");
+    fs::write(&marker, "original")?;
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    cmd.args([
+        "workflow",
+        "develop",
+        "--location",
+        "project",
+        "--id",
+        "reports/jira",
+        "Prepare Jira summaries",
+    ])
+    .assert()
+    .failure()
+    .stderr(contains("already exists"));
+
+    assert_eq!(fs::read_to_string(marker)?, "original");
+    assert!(!workflow_dir.join("workflow.yaml").exists());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn workflow_develop_refuses_to_traverse_a_symlink() -> Result<()> {
+    use std::os::unix::fs::symlink;
+
+    let codex_home = TempDir::new()?;
+    let project = TempDir::new()?;
+    let outside = TempDir::new()?;
+    enable_workflows(codex_home.path())?;
+    let workflows_root = project.path().join(".codex/workflows");
+    fs::create_dir_all(&workflows_root)?;
+    symlink(outside.path(), workflows_root.join("reports"))?;
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    cmd.args([
+        "workflow",
+        "develop",
+        "--location",
+        "project",
+        "--id",
+        "reports/jira",
+        "Prepare Jira summaries",
+    ])
+    .assert()
+    .failure()
+    .stderr(contains("symbolic link"));
+
+    assert!(!outside.path().join("jira").exists());
     Ok(())
 }
 
@@ -813,14 +1095,15 @@ fn workflow_repair_alias_repairs_workflow_without_running_workflow_runtime() -> 
 
 #[cfg(unix)]
 #[test]
-fn workflow_recover_invokes_bun_with_resume_action() -> Result<()> {
+fn workflow_recover_uses_the_same_canonical_input_normalization_as_run() -> Result<()> {
     let codex_home = TempDir::new()?;
     let project = TempDir::new()?;
     enable_workflows(codex_home.path())?;
-    write_workflow(
-        &codex_home.path().join("workflows"),
+    scaffold_canonical_workflow(
+        codex_home.path(),
+        project.path(),
         "code-review",
-        "command: code-review\nuserDescription: Run a code review workflow.\n",
+        "code-review",
     )?;
     let fake_bun = FakeBun::new(codex_home.path())?;
 
@@ -830,12 +1113,10 @@ fn workflow_recover_invokes_bun_with_resume_action() -> Result<()> {
         .assert()
         .success();
 
-    let args = fake_bun.captured_args()?;
     assert_eq!(
-        serde_json::from_str::<Value>(&args[2])?,
+        fake_bun.captured_workflow_input()?,
         json!({
-            "action": "resume",
-            "reviewId": "abc",
+            "failureId": "abc",
             "workingDirectory": existing_path_display(project.path())?,
         })
     );

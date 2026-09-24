@@ -33,6 +33,7 @@ pub(super) async fn make_test_app() -> App {
         runtime_approval_policy_override: None,
         runtime_permission_profile_override: None,
         file_search,
+        workflow_completion_cancel: None,
         transcript_cells: Vec::new(),
         overlay: None,
         deferred_history_lines: Vec::new(),

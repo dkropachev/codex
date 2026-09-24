@@ -9,7 +9,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 use super::*;
-use crate::tasks::workflow_command::runtime::WORKFLOW_CONTROL_VERSION;
+use crate::runner::WORKFLOW_CONTROL_VERSION;
 
 fn option(label: &str) -> RequestUserInputQuestionOption {
     RequestUserInputQuestionOption {
@@ -295,24 +295,18 @@ fn invalid_control_frames_are_rejected() {
 }
 
 #[test]
-fn request_count_boundary_is_enforced() {
-    let last_allowed = parse_control_request(
-        &frame(WORKFLOW_CONTROL_VERSION, /*id*/ 64, "requestUserInput"),
-        /*expected_request_id*/ 64,
-    )
-    .expect("request 64 should be accepted");
-    assert_eq!(last_allowed.id, 64);
-
-    frame_rejected(
+fn request_ids_are_not_confused_with_the_host_enforced_request_count() {
+    let request = parse_control_request(
         &frame(WORKFLOW_CONTROL_VERSION, /*id*/ 65, "requestUserInput"),
-        /*expected_id*/ 65,
-        "exceeded the limit of 64 user input requests",
-    );
+        /*expected_request_id*/ 65,
+    )
+    .expect("contract and output requests may consume earlier control IDs");
+    assert_eq!(request.id, 65);
 }
 
 #[test]
 fn completion_frame_preserves_escaped_markdown_within_output_cap() {
-    let markdown = "\"\n".repeat(20_000);
+    let markdown = "\"\n".repeat(3_000);
     let payload = json!({
         "v": WORKFLOW_CONTROL_VERSION,
         "id": 0,
@@ -321,8 +315,8 @@ fn completion_frame_preserves_escaped_markdown_within_output_cap() {
     })
     .to_string();
 
-    assert!(payload.len() > crate::tasks::workflow_command::WORKFLOW_OUTPUT_MAX_BYTES);
-    assert!(markdown.len() <= crate::tasks::workflow_command::WORKFLOW_OUTPUT_MAX_BYTES);
+    assert!(payload.len() > crate::runner::WORKFLOW_OUTPUT_MAX_BYTES);
+    assert!(markdown.len() <= crate::runner::WORKFLOW_OUTPUT_MAX_BYTES);
     assert_eq!(
         parse_completion(&payload).expect("completion frame should parse"),
         markdown

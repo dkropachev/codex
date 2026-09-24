@@ -334,9 +334,9 @@ impl CommandPopup {
                 _ => None,
             })
             .flat_map(|command| command.option_hints.iter())
-            .filter_map(|option| option.display.split_whitespace().next())
-            .filter(|option_name| option_name.starts_with(current_token))
-            .map(ToString::to_string)
+            .filter(|option| !option.display.chars().any(char::is_whitespace))
+            .filter(|option| option.display.starts_with(current_token))
+            .map(|option| option.display.clone())
             .collect::<Vec<_>>();
         candidates.sort_unstable();
         candidates.dedup();
@@ -382,15 +382,14 @@ fn workflow_value_hint_rows(
         command
             .option_hints
             .iter()
-            .filter(|option| option_name_from_display(&option.display) == Some(option_name))
-            .flat_map(|option| {
-                value_hint_values(&option.display)
-                    .into_iter()
-                    .filter(move |value| value.starts_with(value_prefix))
-                    .map(|value| WorkflowCommandOptionHint {
-                        display: format!("{option_name} {value}"),
-                        description: option.description.clone(),
-                    })
+            .filter_map(|option| {
+                let (raw, insertion) = option_value_parts(&option.display)?;
+                (option_name_from_display(&option.display) == Some(option_name)
+                    && raw.starts_with(value_prefix))
+                .then(|| WorkflowCommandOptionHint {
+                    display: format!("{option_name} {insertion}"),
+                    description: option.description.clone(),
+                })
             })
             .collect(),
     )
@@ -403,14 +402,22 @@ fn workflow_value_candidates(command: &WorkflowCommand, workflow_filter: &str) -
     command
         .option_hints
         .iter()
-        .filter(|option| option_name_from_display(&option.display) == Some(option_name))
-        .flat_map(|option| value_hint_values(&option.display))
-        .filter(|value| value.starts_with(value_prefix))
+        .filter_map(|option| {
+            let (raw, insertion) = option_value_parts(&option.display)?;
+            (option_name_from_display(&option.display) == Some(option_name)
+                && raw.starts_with(value_prefix))
+            .then(|| insertion.to_string())
+        })
         .collect()
 }
 
 fn workflow_value_context(workflow_filter: &str) -> Option<(&str, &str)> {
     let tokens = workflow_filter.split_whitespace().collect::<Vec<_>>();
+    if let Some((option_name, value_prefix)) = tokens.last().and_then(|token| token.split_once('='))
+        && option_name.starts_with("--")
+    {
+        return Some((option_name, value_prefix));
+    }
     if tokens.len() < 2
         || workflow_filter
             .chars()
@@ -438,21 +445,18 @@ fn option_name_from_display(display: &str) -> Option<&str> {
     display.split_whitespace().next()
 }
 
-fn value_hint_values(display: &str) -> Vec<String> {
-    let Some(value_hint) = display.split_whitespace().nth(1) else {
-        return Vec::new();
+fn option_value_parts(display: &str) -> Option<(String, &str)> {
+    let (_, insertion) = display.split_once(char::is_whitespace)?;
+    let insertion = insertion.trim();
+    let arguments = shlex::split(insertion)?;
+    let [argument] = arguments.as_slice() else {
+        return None;
     };
-    let Some(values) = value_hint
-        .strip_prefix('<')
-        .and_then(|value| value.strip_suffix('>'))
-    else {
-        return Vec::new();
+    let raw = match serde_json::from_str::<serde_json::Value>(argument) {
+        Ok(serde_json::Value::String(value)) => value,
+        Ok(_) | Err(_) => argument.clone(),
     };
-    values
-        .split('|')
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .collect()
+    Some((raw, insertion))
 }
 
 impl CommandItem {
@@ -635,14 +639,14 @@ mod tests {
     }
 
     #[test]
-    fn workflow_exact_command_shows_static_option_hints() {
+    fn workflow_exact_command_shows_schema_field_hints() {
         let workflow = WorkflowCommand {
             id: "code-review".to_string(),
             command: "code-review".to_string(),
             description: "Run a code review workflow.".to_string(),
             option_hints: vec![
                 WorkflowCommandOptionHint {
-                    display: "--action <review|list-reports>".to_string(),
+                    display: "--action".to_string(),
                     description: Some("Run mode.".to_string()),
                 },
                 WorkflowCommandOptionHint {
@@ -673,13 +677,90 @@ mod tests {
                     Some("Run a code review workflow.".to_string()),
                     false,
                 ),
-                (
-                    "--action <review|list-reports>".to_string(),
-                    Some("Run mode.".to_string()),
-                    true,
-                ),
+                ("--action".to_string(), Some("Run mode.".to_string()), true,),
             ]
         );
+    }
+
+    #[test]
+    fn workflow_schema_and_dynamic_field_completion_snapshot() {
+        let mut popup = workflow_completion_popup(vec![
+            WorkflowCommandOptionHint {
+                display: "--action".to_string(),
+                description: Some("Run mode from inputSchema.".to_string()),
+            },
+            WorkflowCommandOptionHint {
+                display: "--report".to_string(),
+                description: Some("Report supplied by complete().".to_string()),
+            },
+        ]);
+        popup.on_composer_text_change("/code-review --".to_string());
+
+        insta::assert_snapshot!(
+            "command_popup_workflow_schema_and_dynamic_fields",
+            render_popup(&popup)
+        );
+    }
+
+    #[test]
+    fn workflow_schema_enum_value_completion_snapshot() {
+        let mut popup = workflow_completion_popup(vec![
+            WorkflowCommandOptionHint {
+                display: "--action review".to_string(),
+                description: Some("Run mode.".to_string()),
+            },
+            WorkflowCommandOptionHint {
+                display: "--action list-reports".to_string(),
+                description: Some("Run mode.".to_string()),
+            },
+        ]);
+        popup.on_composer_text_change("/code-review --action li".to_string());
+
+        insta::assert_snapshot!(
+            "command_popup_workflow_schema_enum_value",
+            render_popup(&popup)
+        );
+    }
+
+    #[test]
+    fn workflow_completion_failure_snapshot() {
+        let mut popup = workflow_completion_popup(Vec::new());
+        popup.on_composer_text_change("/code-review --action".to_string());
+
+        insta::assert_snapshot!(
+            "command_popup_workflow_completion_failure",
+            render_popup(&popup)
+        );
+    }
+
+    fn workflow_completion_popup(option_hints: Vec<WorkflowCommandOptionHint>) -> CommandPopup {
+        CommandPopup::new_with_workflows(
+            CommandPopupFlags {
+                workflow_commands_enabled: true,
+                ..CommandPopupFlags::default()
+            },
+            Vec::new(),
+            vec![WorkflowCommand {
+                id: "code-review".to_string(),
+                command: "code-review".to_string(),
+                description: "Run a code review workflow.".to_string(),
+                option_hints,
+                workflow_dir: PathBuf::from("/tmp/code-review"),
+            }],
+        )
+    }
+
+    fn render_popup(popup: &CommandPopup) -> String {
+        let width = 72;
+        let area = Rect::new(
+            /*x*/ 0,
+            /*y*/ 0,
+            width,
+            popup.calculate_required_height(width),
+        );
+        let mut buf = Buffer::empty(area);
+        popup.render_ref(area, &mut buf);
+        format!("{buf:?}")
     }
 
     #[test]
@@ -690,11 +771,11 @@ mod tests {
             description: "Run a code review workflow.".to_string(),
             option_hints: vec![
                 WorkflowCommandOptionHint {
-                    display: "--action <review|list-reports>".to_string(),
+                    display: "--action".to_string(),
                     description: Some("Run mode.".to_string()),
                 },
                 WorkflowCommandOptionHint {
-                    display: "--allowed-areas <Test|Code>".to_string(),
+                    display: "--allowed-areas".to_string(),
                     description: Some("Allowed areas.".to_string()),
                 },
             ],
@@ -733,11 +814,11 @@ mod tests {
             description: "Run a code review workflow.".to_string(),
             option_hints: vec![
                 WorkflowCommandOptionHint {
-                    display: "--action <review|list-reports>".to_string(),
+                    display: "--action".to_string(),
                     description: Some("Run mode.".to_string()),
                 },
                 WorkflowCommandOptionHint {
-                    display: "--allowed-areas <Test|Code>".to_string(),
+                    display: "--allowed-areas".to_string(),
                     description: Some("Allowed areas.".to_string()),
                 },
             ],
@@ -756,10 +837,7 @@ mod tests {
         let rows = popup.rows_from_matches(popup.filtered());
         assert_eq!(
             rows.into_iter().map(|row| row.name).collect::<Vec<_>>(),
-            vec![
-                "/code-review".to_string(),
-                "--allowed-areas <Test|Code>".to_string(),
-            ]
+            vec!["/code-review".to_string(), "--allowed-areas".to_string(),]
         );
     }
 
@@ -771,11 +849,11 @@ mod tests {
             description: "Run a code review workflow.".to_string(),
             option_hints: vec![
                 WorkflowCommandOptionHint {
-                    display: "--action <review|list-reports>".to_string(),
+                    display: "--action list-reports".to_string(),
                     description: Some("Run mode.".to_string()),
                 },
                 WorkflowCommandOptionHint {
-                    display: "--allowed-areas <Test|Code>".to_string(),
+                    display: "--allowed-areas Test".to_string(),
                     description: Some("Allowed areas.".to_string()),
                 },
             ],

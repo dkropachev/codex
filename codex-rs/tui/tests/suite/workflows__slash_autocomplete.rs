@@ -8,6 +8,8 @@ use codex_protocol::ThreadId;
 use codex_utils_pty::TerminalSize;
 use codex_utils_pty::combine_output_receivers;
 use codex_utils_pty::spawn_pty_process;
+use codex_workflows::ScaffoldRequest;
+use codex_workflows::scaffold_workflow;
 use tempfile::tempdir;
 use tokio::sync::broadcast;
 
@@ -57,19 +59,10 @@ trust_level = "trusted"
         r#"{"OPENAI_API_KEY":"dummy","tokens":null,"last_refresh":null}"#,
     )?;
 
-    let workflow_dir = codex_home.path().join("workflows/code-review");
-    std::fs::create_dir_all(workflow_dir.join("src"))?;
-    std::fs::write(
-        workflow_dir.join("workflow.yaml"),
-        r#"id: code-review
-command: code-review
-title: /code-review
-userDescription: Run a code review workflow.
-"#,
-    )?;
-    std::fs::write(
-        workflow_dir.join("src/workflow.ts"),
-        "export default { run() {}, format() {} };\n",
+    let _workflow_dir = scaffold_test_workflow(
+        &codex_home.path().join("workflows"),
+        "code-review",
+        "Workflow Test",
     )?;
 
     let bun_path = fake_bin.path().join("bun");
@@ -79,6 +72,23 @@ userDescription: Run a code review workflow.
 set -eu
 : "${CODEX_TEST_WORKFLOW_RELEASE:?}"
 : "${CODEX_TEST_WORKFLOW_FAILURE:?}"
+case "${2:-}" in
+inspect)
+  printf '%s\n' '{"apiVersion":1,"id":"code-review","title":"Workflow Test","callableName":"code-review","inputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"workingDirectory":{"type":"string"}},"additionalProperties":true},"outputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true},"hasComplete":true}'
+  exit 0
+  ;;
+scan)
+  printf '%s\n' '[{"path":"src/workflow.ts","exports":["inputSchema","outputSchema"],"imports":[]}]'
+  exit 0
+  ;;
+run) ;;
+*)
+  printf '%s\n' 'expected shared workflow runner operation' >&2
+  exit 64
+  ;;
+esac
+printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{"v":1,"id":1,"method":"contract","params":{"inputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"workingDirectory":{"type":"string"}},"additionalProperties":true},"outputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true}}}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
+IFS= read -r _contract_ack
 while [ ! -f "$CODEX_TEST_WORKFLOW_RELEASE" ]; do
   sleep 0.05
 done
@@ -86,6 +96,8 @@ if [ -f "$CODEX_TEST_WORKFLOW_FAILURE" ]; then
   printf '%s\n' 'workflow failed for test' >&2
   exit 42
 fi
+printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{"v":1,"id":2,"method":"validateOutput","params":{"output":{}}}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
+IFS= read -r _output_ack
 printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{"v":1,"id":0,"method":"complete","params":{"markdown":"# Workflow finished\n\nVisible workflow result.\n"}}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
 IFS= read -r _completion_ack
 "##,
@@ -235,15 +247,13 @@ IFS= read -r _completion_ack
     Ok(())
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn workflow_command_autocompletes_in_live_tui() -> Result<()> {
-    if cfg!(windows) {
-        return Ok(());
-    }
-
     let codex = codex_utils_cargo_bin::cargo_bin("codex-tui")?;
     let codex_home = tempdir()?;
     let workspace = tempdir()?;
+    let fake_bin = tempdir()?;
 
     let workspace_display = workspace.path().display();
     let parent_display = workspace
@@ -275,27 +285,15 @@ trust_level = "trusted"
         r#"{"OPENAI_API_KEY":"dummy","tokens":null,"last_refresh":null}"#,
     )?;
 
-    let workflow_dir = codex_home
-        .path()
-        .join("workflows")
-        .join("review")
-        .join("fix");
-    std::fs::create_dir_all(&workflow_dir)?;
-    std::fs::write(
-        workflow_dir.join("workflow.yaml"),
-        r#"id: review/fix
-command: code-review
-title: /code-review
-userDescription: Run a code review workflow.
-usage:
-  options:
-    - flag: --action
-      valueHint: <review|list-reports>
-      description: Run mode.
-    - flag: --allowed-areas
-      valueHint: <Test|Code>
-      description: Allowed areas.
-"#,
+    let _workflow_dir = scaffold_test_workflow(
+        &codex_home.path().join("workflows"),
+        "review/fix",
+        "/code-review",
+    )?;
+    write_completion_fake_bun(fake_bin.path())?;
+    let existing_path = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        std::iter::once(fake_bin.path().to_path_buf()).chain(std::env::split_paths(&existing_path)),
     )?;
 
     let env = HashMap::from([
@@ -307,6 +305,7 @@ usage:
         ("OPENAI_API_KEY".to_string(), "dummy".to_string()),
         ("RUST_LOG".to_string(), "trace".to_string()),
         ("TERM".to_string(), "xterm-256color".to_string()),
+        ("PATH".to_string(), path.to_string_lossy().to_string()),
         (
             "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT".to_string(),
             "1".to_string(),
@@ -355,7 +354,8 @@ usage:
         "completed workflow command",
         |contents| {
             contents.contains("/code-review")
-                && contents.contains("--action <review|list-reports>")
+                && contents.contains("--action")
+                && contents.contains("--dynamic")
                 && contents.contains("Run mode.")
         },
     )
@@ -371,7 +371,7 @@ usage:
         "workflow command option popup",
         |contents| {
             contents.contains("/code-review --acti")
-                && contents.contains("--action <review|list-reports>")
+                && contents.contains("--action")
                 && contents.contains("Run mode.")
         },
     )
@@ -396,7 +396,7 @@ usage:
         "workflow second option popup",
         |contents| {
             contents.contains("/code-review --action list-reports --allo")
-                && contents.contains("--allowed-areas <Test|Code>")
+                && contents.contains("--allowed-areas")
                 && contents.contains("Allowed areas.")
         },
     )
@@ -433,6 +433,57 @@ usage:
     .await?;
 
     spawned.session.terminate();
+    Ok(())
+}
+
+fn scaffold_test_workflow(
+    root: &std::path::Path,
+    id: &str,
+    title: &str,
+) -> Result<std::path::PathBuf> {
+    scaffold_workflow(
+        root,
+        &ScaffoldRequest {
+            id: id.to_string(),
+            title: title.to_string(),
+            callable_name: "code-review".to_string(),
+            description: "Run a code review workflow.".to_string(),
+        },
+    )
+}
+
+#[cfg(unix)]
+fn write_completion_fake_bun(root: &std::path::Path) -> Result<()> {
+    let path = root.join("bun");
+    std::fs::write(
+        &path,
+        r##"#!/bin/sh
+set -eu
+case "${2:-}" in
+  inspect)
+    printf '%s\n' '{"apiVersion":1,"id":"review/fix","title":"/code-review","callableName":"code-review","inputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"workingDirectory":{"type":"string"},"action":{"description":"Run mode.","enum":["review","list-reports"]},"allowedAreas":{"description":"Allowed areas.","enum":["Test","Code"]}},"additionalProperties":false},"outputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true},"hasComplete":true,"sources":[]}'
+    ;;
+  scan)
+    printf '%s\n' '[{"path":"src/workflow.ts","exports":["inputSchema","outputSchema"],"imports":[]}]'
+    ;;
+  complete)
+    request=$(cat "${3:?}")
+    case "$request" in
+      *'"mode":"field"'*) items='[{"value":"--dynamic","description":"Dynamic option."}]' ;;
+      *) items='[]' ;;
+    esac
+    printf '%s\n' "{\"inspection\":{\"apiVersion\":1,\"id\":\"review/fix\",\"title\":\"/code-review\",\"callableName\":\"code-review\",\"inputSchema\":{\"\$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"workingDirectory\":{\"type\":\"string\"},\"action\":{\"description\":\"Run mode.\",\"enum\":[\"review\",\"list-reports\"]},\"allowedAreas\":{\"description\":\"Allowed areas.\",\"enum\":[\"Test\",\"Code\"]}},\"additionalProperties\":false},\"outputSchema\":{\"\$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"additionalProperties\":true},\"hasComplete\":true},\"items\":$items}"
+    ;;
+  *)
+    printf '%s\n' 'unexpected workflow runner operation' >&2
+    exit 64
+    ;;
+esac
+"##,
+    )?;
+    let mut permissions = std::fs::metadata(&path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions)?;
     Ok(())
 }
 

@@ -775,6 +775,16 @@ visible for the complete lifecycle:
 - `item/started` and `item/completed` for the formatted assistant message
 - `turn/completed`
 
+`workflowDir` must name a canonical v1 TypeScript package. Its `workflow.yaml` metadata must match
+the default `defineWorkflow(...)` object exported by `src/workflow.ts`; the module must also export
+explicit Draft 2020-12 `inputSchema` and `outputSchema` values. The server validates input and
+output with those schemas and records only the result of `format(output, { format:
+"markdown.v1" })`. Legacy workflow packages remain discoverable by CLI/TUI management surfaces but
+this method fails their turn with actionable migration guidance rather than adapting the old
+runtime. `input` must be an object. If it omits `workingDirectory`, the server injects the selected
+primary environment cwd using that environment's native path convention; an explicit value is
+preserved.
+
 Workflow input requests are serialized, so at most one is outstanding for the turn. Resuming the
 live thread replays an unresolved request with the same request ID and payload; resolved requests
 are not replayed. Interrupting the turn resolves any pending server request, terminates the workflow

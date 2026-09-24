@@ -412,7 +412,7 @@ async fn queued_malformed_workflow_command_reports_error_and_drains_next_input()
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        rendered.contains("Invalid workflow arguments: invalid flag name '--bad-'"),
+        rendered.contains("Invalid workflow arguments: invalid kebab-case flag name '--bad-'"),
         "expected invalid-args message, got:\n{rendered}"
     );
     assert!(chat.input_queue.queued_user_messages.is_empty());

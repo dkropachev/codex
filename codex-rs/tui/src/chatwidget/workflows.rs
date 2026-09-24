@@ -10,10 +10,12 @@ impl ChatWidget {
         } else {
             Vec::new()
         };
-        self.bottom_pane
-            .set_workflow_commands_enabled(workflows_enabled);
-        self.bottom_pane
-            .set_workflow_commands(self.workflow_commands.clone());
+        let completion_cwd = self.workflow_invocation_cwd();
+        self.bottom_pane.set_workflow_commands_context(
+            workflows_enabled,
+            completion_cwd,
+            self.workflow_commands.clone(),
+        );
     }
 
     pub(super) fn current_workflow_commands(&self) -> Vec<WorkflowCommand> {

@@ -8,9 +8,16 @@ use anyhow::bail;
 use clap::Parser;
 use codex_core::config::Config;
 use codex_features::Feature;
-use codex_tui::workflow_commands::WorkflowCommand;
-use codex_tui::workflow_commands::discover_workflow_commands;
-use codex_tui::workflow_commands::workflow_invocation_input_from_args;
+use codex_workflows::ScaffoldRequest;
+use codex_workflows::WorkflowCommand;
+use codex_workflows::WorkflowPackage;
+use codex_workflows::discover_workflow_commands;
+use codex_workflows::normalize_workflow_id;
+use codex_workflows::runner::run_cli_workflow;
+use codex_workflows::scaffold_workflow;
+use codex_workflows::validate_workflow as validate_workflow_package;
+use codex_workflows::workflow_invocation_input_from_args;
+use codex_workflows::workflow_path;
 use serde::Serialize;
 use serde_json::Value;
 use serde_json::json;
@@ -33,51 +40,20 @@ pub struct WorkflowCli {
 #[derive(Debug)]
 enum ParsedWorkflowCommand {
     Mode,
-    List {
-        json: bool,
-    },
-    Run {
-        target: String,
-        args: Vec<String>,
-        invocation: WorkflowInvocationKind,
-    },
-    Fix {
-        target: String,
-    },
-    Recover {
-        target: String,
-        args: Vec<String>,
-    },
-    Validate {
-        target: String,
-    },
-    Impact {
-        target: String,
-    },
-    Status {
-        target: Option<String>,
-    },
-    Show {
-        target: String,
-        json: bool,
-    },
-    Where {
-        target: String,
-    },
+    List { json: bool },
+    Run { target: String, args: Vec<String> },
+    Fix { target: String },
+    Recover { target: String, args: Vec<String> },
+    Validate { target: String },
+    Impact { target: String },
+    Status { target: Option<String> },
+    Show { target: String, json: bool },
+    Where { target: String },
     Config(WorkflowConfigCommand),
     Develop(WorkflowDevelopRequest),
-    Describe {
-        target: String,
-        description: String,
-    },
-    Docs {
-        target: String,
-        instruction: String,
-    },
-    Edit {
-        target: String,
-        instruction: String,
-    },
+    Describe { target: String, description: String },
+    Docs { target: String, instruction: String },
+    Edit { target: String, instruction: String },
     Publish,
     Discard,
     Done,
@@ -88,12 +64,6 @@ enum WorkflowConfigCommand {
     Show,
     Set { key: String, value: String },
     Clear { key: String },
-}
-
-#[derive(Debug, Clone, Copy)]
-enum WorkflowInvocationKind {
-    Explicit,
-    Alias,
 }
 
 #[derive(Debug)]
@@ -137,21 +107,6 @@ impl From<&WorkflowCommand> for JsonWorkflowCommand {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum WorkflowAction {
-    Run,
-    Recover,
-}
-
-impl WorkflowAction {
-    fn input_action(self) -> Option<&'static str> {
-        match self {
-            WorkflowAction::Run => None,
-            WorkflowAction::Recover => Some("resume"),
-        }
-    }
-}
-
 pub fn run(cli: WorkflowCli, config: &Config) -> anyhow::Result<()> {
     ensure_workflows_enabled(config)?;
     let commands = discover_workflow_commands(config.codex_home.as_path(), config.cwd.as_path());
@@ -159,28 +114,14 @@ pub fn run(cli: WorkflowCli, config: &Config) -> anyhow::Result<()> {
     match command {
         ParsedWorkflowCommand::Mode => show_mode(&commands),
         ParsedWorkflowCommand::List { json } => list_workflows(&commands, json),
-        ParsedWorkflowCommand::Run {
-            target,
-            args,
-            invocation,
-        } => run_workflow(
-            target,
-            args,
-            invocation,
-            WorkflowAction::Run,
-            config,
-            &commands,
-        ),
+        ParsedWorkflowCommand::Run { target, args } => {
+            run_workflow(target, args, config, &commands)
+        }
         ParsedWorkflowCommand::Fix { target } => repair_workflow(&target, config, &commands),
-        ParsedWorkflowCommand::Recover { target, args } => run_workflow(
-            target,
-            args,
-            WorkflowInvocationKind::Explicit,
-            WorkflowAction::Recover,
-            config,
-            &commands,
-        ),
-        ParsedWorkflowCommand::Validate { target } => validate_workflow(&target, &commands),
+        ParsedWorkflowCommand::Recover { target, args } => {
+            run_workflow(target, args, config, &commands)
+        }
+        ParsedWorkflowCommand::Validate { target } => validate_workflow(&target, config, &commands),
         ParsedWorkflowCommand::Impact { target } => impact_workflow(&target, &commands),
         ParsedWorkflowCommand::Status { target } => status_workflows(target.as_deref(), &commands),
         ParsedWorkflowCommand::Show { target, json } => show_workflow(&target, &commands, json),
@@ -250,7 +191,6 @@ fn parse_workflow_command(
         "run" => Ok(ParsedWorkflowCommand::Run {
             target: required(args, /*index*/ 1, "run", "a workflow id")?.to_string(),
             args: args.get(2..).unwrap_or_default().to_vec(),
-            invocation: WorkflowInvocationKind::Explicit,
         }),
         "validate" => Ok(ParsedWorkflowCommand::Validate {
             target: single_id(args, "validate")?,
@@ -285,15 +225,11 @@ fn parse_workflow_command(
             Ok(ParsedWorkflowCommand::Done)
         }
         alias => {
-            if find_workflow_command(workflows, alias).is_ok() {
-                Ok(ParsedWorkflowCommand::Run {
-                    target: alias.to_string(),
-                    args: args.get(1..).unwrap_or_default().to_vec(),
-                    invocation: WorkflowInvocationKind::Alias,
-                })
-            } else {
-                bail!("unknown workflow command `{alias}`");
-            }
+            find_workflow_command(workflows, alias)?;
+            Ok(ParsedWorkflowCommand::Run {
+                target: alias.to_string(),
+                args: args.get(1..).unwrap_or_default().to_vec(),
+            })
         }
     }
 }
@@ -508,77 +444,23 @@ fn list_workflows(commands: &[WorkflowCommand], json: bool) -> anyhow::Result<()
 fn run_workflow(
     target: String,
     args: Vec<String>,
-    invocation: WorkflowInvocationKind,
-    action: WorkflowAction,
     config: &Config,
     commands: &[WorkflowCommand],
 ) -> anyhow::Result<()> {
     let command = find_workflow_command(commands, &target)?;
-    let mut input = workflow_input_from_args(config.cwd.as_path(), &args, invocation)
+    let input = workflow_invocation_input_from_args(config.cwd.as_path(), &args)
         .map_err(|err| anyhow::anyhow!("{}", err.message()))?;
-    if let Some(action) = action.input_action() {
-        let Some(input) = input.as_object_mut() else {
-            bail!("workflow input must be a JSON object");
-        };
-        if let Some(failure_id) = input.remove("failureId") {
-            input.entry("reviewId".to_string()).or_insert(failure_id);
-        }
-        input.insert("action".to_string(), Value::String(action.to_string()));
-    }
     run_workflow_process(command, input)
 }
 
-fn workflow_input_from_args(
-    cwd: &Path,
-    args: &[String],
-    invocation: WorkflowInvocationKind,
-) -> Result<Value, codex_tui::workflow_commands::WorkflowInvocationError> {
-    match invocation {
-        WorkflowInvocationKind::Explicit => workflow_invocation_input_from_args(cwd, args),
-        WorkflowInvocationKind::Alias => workflow_alias_input_from_args(cwd, args),
-    }
-}
-
-fn workflow_alias_input_from_args(
-    cwd: &Path,
-    args: &[String],
-) -> Result<Value, codex_tui::workflow_commands::WorkflowInvocationError> {
-    let legacy_input = legacy_alias_input(args);
-    if args.iter().any(|arg| arg.starts_with("--")) {
-        return workflow_invocation_input_from_args(cwd, args);
-    }
-
-    let mut input = legacy_input;
-    if let Some(input) = input.as_object_mut() {
-        input.insert(
-            "workingDirectory".to_string(),
-            Value::String(cwd.to_string_lossy().to_string()),
-        );
-    }
-    Ok(input)
-}
-
-fn legacy_alias_input(args: &[String]) -> Value {
-    json!({
-        "argv": args,
-        "text": args.join(" "),
-    })
-}
-
 fn run_workflow_process(command: &WorkflowCommand, input: Value) -> anyhow::Result<()> {
-    let input_json = serde_json::to_string(&input).context("failed to serialize workflow input")?;
-    let status = Command::new("bun")
-        .arg("src/workflow.ts")
-        .arg("--input")
-        .arg(input_json)
-        .current_dir(&command.workflow_dir)
-        .status()
-        .with_context(|| {
-            format!(
-                "failed to run workflow command `{}` with `bun`",
-                command.command
-            )
-        })?;
+    let package = WorkflowPackage::load_executable(&command.workflow_dir).with_context(|| {
+        format!(
+            "workflow command `{}` is not a canonical package",
+            command.command
+        )
+    })?;
+    let status = run_cli_workflow(&command.workflow_dir, &package.manifest, &input)?;
 
     if status.success() {
         return Ok(());
@@ -587,13 +469,29 @@ fn run_workflow_process(command: &WorkflowCommand, input: Value) -> anyhow::Resu
     std::process::exit(status.code().unwrap_or(1));
 }
 
-fn validate_workflow(target: &str, commands: &[WorkflowCommand]) -> anyhow::Result<()> {
-    let command = find_workflow_command(commands, target)?;
-    if let Some(error) = workflow_validation_error(command) {
-        println!("{} is invalid: {error}", command.id);
+fn validate_workflow(
+    target: &str,
+    config: &Config,
+    commands: &[WorkflowCommand],
+) -> anyhow::Result<()> {
+    let workflow_dir = if let Ok(command) = find_workflow_command(commands, target) {
+        command.workflow_dir.clone()
+    } else {
+        let id = normalize_workflow_id(target)?;
+        repair_workflow_roots(config)
+            .into_iter()
+            .map(|root| workflow_path(&root, &id))
+            .collect::<anyhow::Result<Vec<_>>>()?
+            .into_iter()
+            .find(|path| path.exists())
+            .ok_or_else(|| anyhow::anyhow!("Unknown workflow `{target}`."))?
+    };
+    let report = validate_workflow_package(&workflow_dir);
+    if !report.is_valid() {
+        println!("{}", report.render());
         std::process::exit(1);
     }
-    println!("{} is valid", command.id);
+    println!("valid");
     Ok(())
 }
 
@@ -615,11 +513,6 @@ fn repair_workflow(
     }
     println!("{} repair check completed.", target.id);
     Ok(())
-}
-
-fn workflow_validation_error(command: &WorkflowCommand) -> Option<String> {
-    let workflow_ts = command.workflow_dir.join("src").join("workflow.ts");
-    (!workflow_ts.is_file()).then(|| format!("missing {}", workflow_ts.display()))
 }
 
 fn resolve_repair_workflow_target(
@@ -675,7 +568,8 @@ fn apply_compatibility_repairs(target: &RepairWorkflowTarget) -> anyhow::Result<
         )?;
         repairs.push(format!("Created {}", workflow_yaml.display()));
     }
-    if is_code_review_repair_target(target) {
+    let canonical_metadata = is_canonical_workflow_metadata(&workflow_yaml);
+    if is_code_review_repair_target(target) && !canonical_metadata {
         let contents = fs::read_to_string(&workflow_yaml)
             .with_context(|| format!("failed to read {}", workflow_yaml.display()))?;
         let repaired = repair_code_review_workflow_metadata(&contents);
@@ -690,6 +584,13 @@ fn apply_compatibility_repairs(target: &RepairWorkflowTarget) -> anyhow::Result<
 
     let workflow_ts = target.workflow_dir.join("src").join("workflow.ts");
     if !workflow_ts.is_file() {
+        if canonical_metadata {
+            bail!(
+                "canonical workflow {} is missing {}; restore it or scaffold a new workflow id",
+                target.id,
+                workflow_ts.display()
+            );
+        }
         fs::create_dir_all(
             workflow_ts
                 .parent()
@@ -700,6 +601,17 @@ fn apply_compatibility_repairs(target: &RepairWorkflowTarget) -> anyhow::Result<
     }
 
     Ok(repairs)
+}
+
+fn is_canonical_workflow_metadata(path: &Path) -> bool {
+    fs::read_to_string(path).is_ok_and(|contents| {
+        contents.lines().any(|line| {
+            !line.chars().next().is_some_and(char::is_whitespace)
+                && line
+                    .split_once(':')
+                    .is_some_and(|(key, _)| key.trim() == "apiVersion")
+        })
+    })
 }
 
 fn is_code_review_repair_target(target: &RepairWorkflowTarget) -> bool {
@@ -843,24 +755,14 @@ fn develop_workflow(request: WorkflowDevelopRequest, config: &Config) -> anyhow:
             config.cwd.join(".codex").join("workflows").to_path_buf()
         }
     };
-    let workflow_dir = workflow_path(&root, &id)?;
-    fs::create_dir_all(workflow_dir.join("src"))?;
-    fs::write(
-        workflow_dir.join("workflow.yaml"),
-        format!(
-            "id: {}\ncommand: {}\ntitle: {}\nuserDescription: {}\n",
-            yaml_scalar(&id),
-            yaml_scalar(&command),
-            yaml_scalar(&title),
-            yaml_scalar(&request.description)
-        ),
-    )?;
-    fs::write(
-        workflow_dir.join("src").join("workflow.ts"),
-        r#"const inputArg = process.argv[process.argv.indexOf("--input") + 1] ?? "{}";
-const input = JSON.parse(inputArg);
-console.log(JSON.stringify({ ok: true, input }, null, 2));
-"#,
+    let workflow_dir = scaffold_workflow(
+        &root,
+        &ScaffoldRequest {
+            id: id.clone(),
+            title,
+            callable_name: command,
+            description: request.description,
+        },
     )?;
     println!("Created workflow {id} at {}", workflow_dir.display());
     Ok(())
@@ -875,9 +777,14 @@ fn update_workflow_description(
     let workflow_yaml = command.workflow_dir.join("workflow.yaml");
     let contents = fs::read_to_string(&workflow_yaml)
         .with_context(|| format!("failed to read {}", workflow_yaml.display()))?;
+    let key = if is_canonical_workflow_metadata(&workflow_yaml) {
+        "description"
+    } else {
+        "userDescription"
+    };
     fs::write(
         &workflow_yaml,
-        set_top_level_yaml_scalar(&contents, "userDescription", description),
+        set_top_level_yaml_scalar(&contents, key, description),
     )?;
     println!("Updated description for {}", command.id);
     Ok(())
@@ -947,10 +854,22 @@ fn find_workflow_command<'a>(
     commands: &'a [WorkflowCommand],
     target: &str,
 ) -> anyhow::Result<&'a WorkflowCommand> {
-    if let Some(workflow_command) = commands.iter().find(|workflow_command| {
-        workflow_command.id == target || workflow_command.command == target
-    }) {
+    if let Some(workflow_command) = commands
+        .iter()
+        .find(|workflow_command| workflow_command.id == target)
+    {
         return Ok(workflow_command);
+    }
+    let mut aliases = commands
+        .iter()
+        .filter(|workflow_command| workflow_command.command == target);
+    if let Some(workflow_command) = aliases.next() {
+        if aliases.next().is_none() {
+            return Ok(workflow_command);
+        }
+        bail!(
+            "Workflow alias `{target}` is ambiguous. Invoke one of the matching workflow IDs instead."
+        );
     }
 
     let available = commands
@@ -963,43 +882,6 @@ fn find_workflow_command<'a>(
     }
 
     bail!("Unknown workflow `{target}`. Available workflows: {available}.");
-}
-
-fn workflow_path(root: &Path, id: &str) -> anyhow::Result<PathBuf> {
-    let mut path = root.to_path_buf();
-    for component in normalize_workflow_id(id)?.split('/') {
-        path.push(component);
-    }
-    Ok(path)
-}
-
-fn normalize_workflow_id(raw: &str) -> anyhow::Result<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed.contains('\\') {
-        bail!("workflow id is invalid: {raw}");
-    }
-    let path = Path::new(trimmed);
-    if path.is_absolute() {
-        bail!("workflow id must be relative: {raw}");
-    }
-    let mut components = Vec::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::Normal(component) => {
-                components.push(component.to_str().context("workflow id must be UTF-8")?);
-            }
-            std::path::Component::CurDir | std::path::Component::ParentDir => {
-                bail!("workflow id must not contain '.' or '..': {raw}");
-            }
-            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
-                bail!("workflow id must be relative: {raw}");
-            }
-        }
-    }
-    if components.is_empty() {
-        bail!("workflow id is invalid: {raw}");
-    }
-    Ok(components.join("/"))
 }
 
 fn slugify(value: &str) -> String {

@@ -1560,6 +1560,17 @@ impl ChatWidget {
         self.bottom_pane.on_file_search_result(query, matches);
     }
 
+    pub(crate) fn apply_workflow_completion_result(
+        &mut self,
+        generation: u64,
+        workflow_dir: PathBuf,
+        request: codex_workflows::CompletionRequest,
+        result: codex_workflows::CompletionResult,
+    ) {
+        self.bottom_pane
+            .on_workflow_completion_result(generation, workflow_dir, request, result);
+    }
+
     /// Return the markdown body width available to an active stream.
     ///
     /// Streaming controllers render only the message body, while history cells add bullets,
