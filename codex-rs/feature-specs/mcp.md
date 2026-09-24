@@ -146,7 +146,7 @@ CLI coverage should exercise MCP server configuration commands.
 #### Test cases
 
 - MCP add/remove CLI behavior is covered: codex-rs/cli/tests/mcp__add_remove.rs:add_and_remove_server_updates_global_config,add_cant_add_command_and_url,add_streamable_http_rejects_removed_flag,add_streamable_http_with_custom_env_var,add_streamable_http_with_oauth_options,add_streamable_http_without_manual_token,add_with_env_preserves_key_order_and_values,profile_mcp_reports_legacy_profile_migration
-- MCP list/get CLI behavior is covered: codex-rs/cli/tests/mcp__list.rs:get_disabled_server_shows_single_line,list_and_get_render_expected_output,list_shows_empty_state
+- MCP list/get CLI behavior is covered: codex-rs/cli/tests/mcp__list.rs:get_disabled_server_shows_single_line,list_and_get_render_expected_output,list_discovers_local_oauth_server_through_environment_proxy,list_shows_empty_state,list_with_macos_proxy_resolution_does_not_panic
 
 ### tui-e2e (full terminal TUI behavior)
 
