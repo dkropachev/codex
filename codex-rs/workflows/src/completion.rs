@@ -77,7 +77,7 @@ pub fn complete_workflow_cancellable(
     request: &CompletionRequest,
     cancelled: Arc<AtomicBool>,
 ) -> CompletionResult {
-    let package = match WorkflowPackage::load(root) {
+    let package = match WorkflowPackage::load_executable(root) {
         Ok(package) => package,
         Err(err) => {
             return CompletionResult {
@@ -121,34 +121,22 @@ fn static_completions(
     input_schema: &Value,
     request: &CompletionRequest,
 ) -> Vec<CompletionCandidate> {
-    let Some(schema) = input_schema.as_object() else {
-        return Vec::new();
-    };
-    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
-        return Vec::new();
-    };
+    let properties = crate::completion_schema::top_level_properties(input_schema);
     match request.mode {
-        CompletionMode::Field => {
-            let mut fields = properties.iter().collect::<Vec<_>>();
-            fields.sort_by_key(|(left, _)| *left);
-            fields
-                .into_iter()
-                .filter_map(|(name, schema)| {
-                    let flag = format!("--{}", camel_to_kebab(name));
-                    flag.starts_with(&request.prefix)
-                        .then(|| CompletionCandidate {
-                            insertion: flag.clone(),
-                            item: CompletionItem {
-                                value: flag,
-                                description: schema
-                                    .get("description")
-                                    .and_then(Value::as_str)
-                                    .map(ToString::to_string),
-                            },
-                        })
-                })
-                .collect()
-        }
+        CompletionMode::Field => properties
+            .iter()
+            .filter_map(|(name, schema)| {
+                let flag = format!("--{}", camel_to_kebab(name));
+                flag.starts_with(&request.prefix)
+                    .then(|| CompletionCandidate {
+                        insertion: flag.clone(),
+                        item: CompletionItem {
+                            value: flag,
+                            description: schema.description(input_schema).map(str::to_string),
+                        },
+                    })
+            })
+            .collect(),
         CompletionMode::Value => {
             let Some(active_field) = request.active_field.as_deref() else {
                 return Vec::new();
@@ -156,29 +144,10 @@ fn static_completions(
             let Some(property) = properties.get(active_field) else {
                 return Vec::new();
             };
-            let description = property
-                .get("description")
-                .and_then(Value::as_str)
-                .map(ToString::to_string);
-            let values = if let Some(value) = property.get("const") {
-                if property
-                    .get("enum")
-                    .and_then(Value::as_array)
-                    .is_none_or(|values| values.contains(value))
-                {
-                    vec![value.clone()]
-                } else {
-                    Vec::new()
-                }
-            } else {
-                property
-                    .get("enum")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default()
-            };
+            let description = property.description(input_schema).map(str::to_string);
+            let values = property.values(input_schema);
             values
-                .iter()
+                .into_iter()
                 .filter_map(completion_value)
                 .filter(|(value, _)| value.starts_with(&request.prefix))
                 .map(|(value, insertion)| CompletionCandidate {

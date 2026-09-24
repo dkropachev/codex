@@ -38,6 +38,26 @@ fn explicit_flags_override_base_and_repeats_form_arrays() {
 }
 
 #[test]
+fn hosted_input_defers_implicit_working_directory_but_preserves_an_explicit_value() {
+    assert_eq!(
+        hosted_workflow_invocation_input(Path::new("/host/work"), "")
+            .expect("parse empty hosted input"),
+        json!({})
+    );
+    assert_eq!(
+        hosted_workflow_invocation_input(
+            Path::new("/host/work"),
+            r#"--input '{"workingDirectory":"C:\\remote\\project","scope":"repo"}'"#,
+        )
+        .expect("parse explicit hosted working directory"),
+        json!({
+            "scope": "repo",
+            "workingDirectory": r"C:\remote\project",
+        })
+    );
+}
+
+#[test]
 fn repeated_array_values_remain_distinct_occurrences() {
     let input = workflow_invocation_input_from_args(
         Path::new("/work"),

@@ -15,7 +15,7 @@ const MAX_COVERAGE_TEST_FILES: usize = 256;
 const MAX_COVERAGE_TEST_ENTRIES: usize = 1_024;
 const MAX_COVERAGE_TEST_BYTES: usize = 1024 * 1024;
 const MAX_COVERAGE_TEST_DEPTH: usize = 32;
-const MAX_GITIGNORE_BYTES: u64 = 64 * 1024;
+pub(super) const MAX_GITIGNORE_BYTES: u64 = 64 * 1024;
 
 pub(super) fn validate_coverage(
     package: &WorkflowPackage,
@@ -198,8 +198,16 @@ pub(super) fn validate_commands(
 }
 
 pub(super) fn validate_gitignore(root: &Path, findings: &mut BTreeSet<ValidationFinding>) {
-    let Ok(contents) = read_bounded_utf8(&root.join(".gitignore"), MAX_GITIGNORE_BYTES) else {
-        return;
+    let path = root.join(".gitignore");
+    let contents = match read_bounded_utf8(&path, MAX_GITIGNORE_BYTES) {
+        Ok(contents) => contents,
+        Err(err) => {
+            findings.insert(ValidationFinding::new(
+                "gitignore",
+                format!("failed to read .gitignore: {err:#}"),
+            ));
+            return;
+        }
     };
     for required in ["node_modules/", "artifacts/", "state/*", "!state/.gitkeep"] {
         if !contents.lines().any(|line| line.trim() == required) {
@@ -215,15 +223,29 @@ pub(super) fn validate_git_layout(root: &Path, findings: &mut BTreeSet<Validatio
     if !root.join(".git").is_dir() {
         return;
     }
-    let Ok(output) = Command::new("git")
+    let output = match Command::new("git")
         .arg("-C")
         .arg(root)
         .args(["ls-files", "--", "node_modules", "artifacts", "state"])
         .output()
-    else {
-        return;
+    {
+        Ok(output) => output,
+        Err(err) => {
+            findings.insert(ValidationFinding::new(
+                "layout",
+                format!("failed to inspect workflow git repository: {err}"),
+            ));
+            return;
+        }
     };
     if !output.status.success() {
+        findings.insert(ValidationFinding::new(
+            "layout",
+            format!(
+                "failed to inspect workflow git repository: git ls-files exited with {}",
+                output.status
+            ),
+        ));
         return;
     }
     for path in String::from_utf8_lossy(&output.stdout).lines() {

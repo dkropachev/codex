@@ -82,9 +82,18 @@ struct WorkflowDevelopRequest {
 }
 
 #[derive(Debug)]
-struct RepairWorkflowTarget {
+struct ResolvedWorkflowTarget {
     id: String,
     workflow_dir: PathBuf,
+}
+
+impl From<&WorkflowCommand> for ResolvedWorkflowTarget {
+    fn from(command: &WorkflowCommand) -> Self {
+        Self {
+            id: command.id.clone(),
+            workflow_dir: command.workflow_dir.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -490,19 +499,8 @@ fn validate_workflow(
     config: &Config,
     commands: &[WorkflowCommand],
 ) -> anyhow::Result<()> {
-    let workflow_dir = if let Ok(command) = find_workflow_command(commands, target) {
-        command.workflow_dir.clone()
-    } else {
-        let id = normalize_workflow_id(target)?;
-        repair_workflow_roots(config)
-            .into_iter()
-            .map(|root| workflow_path(&root, &id))
-            .collect::<anyhow::Result<Vec<_>>>()?
-            .into_iter()
-            .find(|path| path.exists())
-            .ok_or_else(|| anyhow::anyhow!("Unknown workflow `{target}`."))?
-    };
-    let report = validate_workflow_package(&workflow_dir);
+    let target = resolve_management_workflow_target(target, config, commands)?;
+    let report = validate_workflow_package(&target.workflow_dir);
     if !report.is_valid() {
         println!("{}", report.render());
         std::process::exit(1);
@@ -516,7 +514,7 @@ fn repair_workflow(
     config: &Config,
     commands: &[WorkflowCommand],
 ) -> anyhow::Result<()> {
-    let target = resolve_repair_workflow_target(target, config, commands)?;
+    let target = resolve_management_workflow_target(target, config, commands)?;
     println!("Repairing workflow {} with compatibility mode.", target.id);
 
     let repairs = apply_compatibility_repairs(&target)?;
@@ -531,31 +529,28 @@ fn repair_workflow(
     Ok(())
 }
 
-fn resolve_repair_workflow_target(
+fn resolve_management_workflow_target(
     target: &str,
     config: &Config,
     commands: &[WorkflowCommand],
-) -> anyhow::Result<RepairWorkflowTarget> {
-    if let Some(command) = commands
-        .iter()
-        .find(|command| command.id == target || command.command == target)
-    {
-        return Ok(RepairWorkflowTarget {
-            id: command.id.clone(),
-            workflow_dir: command.workflow_dir.clone(),
-        });
+) -> anyhow::Result<ResolvedWorkflowTarget> {
+    if let Some(command) = find_workflow_command_by_id(commands, target) {
+        return Ok(command.into());
     }
 
     let id = normalize_workflow_id(target)?;
     for root in repair_workflow_roots(config) {
         let workflow_dir = workflow_path(&root, &id)?;
         if workflow_dir.is_dir() {
-            return Ok(RepairWorkflowTarget { id, workflow_dir });
+            return Ok(ResolvedWorkflowTarget { id, workflow_dir });
         }
     }
 
-    find_workflow_command(commands, target)?;
-    unreachable!("find_workflow_command returns on successful lookup only");
+    if let Some(command) = find_workflow_command_by_alias(commands, target)? {
+        return Ok(command.into());
+    }
+
+    find_workflow_command(commands, target).map(ResolvedWorkflowTarget::from)
 }
 
 fn repair_workflow_roots(config: &Config) -> [PathBuf; 2] {
@@ -565,7 +560,7 @@ fn repair_workflow_roots(config: &Config) -> [PathBuf; 2] {
     ]
 }
 
-fn apply_compatibility_repairs(target: &RepairWorkflowTarget) -> anyhow::Result<Vec<String>> {
+fn apply_compatibility_repairs(target: &ResolvedWorkflowTarget) -> anyhow::Result<Vec<String>> {
     let mut repairs = Vec::new();
     fs::create_dir_all(&target.workflow_dir)?;
 
@@ -630,7 +625,7 @@ fn is_canonical_workflow_metadata(path: &Path) -> bool {
     })
 }
 
-fn is_code_review_repair_target(target: &RepairWorkflowTarget) -> bool {
+fn is_code_review_repair_target(target: &ResolvedWorkflowTarget) -> bool {
     target.id == "code-review"
         || target
             .workflow_dir
@@ -870,22 +865,11 @@ fn find_workflow_command<'a>(
     commands: &'a [WorkflowCommand],
     target: &str,
 ) -> anyhow::Result<&'a WorkflowCommand> {
-    if let Some(workflow_command) = commands
-        .iter()
-        .find(|workflow_command| workflow_command.id == target)
-    {
+    if let Some(workflow_command) = find_workflow_command_by_id(commands, target) {
         return Ok(workflow_command);
     }
-    let mut aliases = commands
-        .iter()
-        .filter(|workflow_command| workflow_command.command == target);
-    if let Some(workflow_command) = aliases.next() {
-        if aliases.next().is_none() {
-            return Ok(workflow_command);
-        }
-        bail!(
-            "Workflow alias `{target}` is ambiguous. Invoke one of the matching workflow IDs instead."
-        );
+    if let Some(workflow_command) = find_workflow_command_by_alias(commands, target)? {
+        return Ok(workflow_command);
     }
 
     let available = commands
@@ -898,6 +882,33 @@ fn find_workflow_command<'a>(
     }
 
     bail!("Unknown workflow `{target}`. Available workflows: {available}.");
+}
+
+fn find_workflow_command_by_id<'a>(
+    commands: &'a [WorkflowCommand],
+    target: &str,
+) -> Option<&'a WorkflowCommand> {
+    commands
+        .iter()
+        .find(|workflow_command| workflow_command.id == target)
+}
+
+fn find_workflow_command_by_alias<'a>(
+    commands: &'a [WorkflowCommand],
+    target: &str,
+) -> anyhow::Result<Option<&'a WorkflowCommand>> {
+    let mut aliases = commands
+        .iter()
+        .filter(|workflow_command| workflow_command.command == target);
+    if let Some(workflow_command) = aliases.next() {
+        if aliases.next().is_none() {
+            return Ok(Some(workflow_command));
+        }
+        bail!(
+            "Workflow alias `{target}` is ambiguous. Invoke one of the matching workflow IDs instead."
+        );
+    }
+    Ok(None)
 }
 
 fn slugify(value: &str) -> String {

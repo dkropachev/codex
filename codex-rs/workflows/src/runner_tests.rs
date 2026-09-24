@@ -101,6 +101,95 @@ fn sync_control_reader_bounds_lines_before_allocating_the_whole_frame() {
     assert_eq!(next.bytes, b"next");
 }
 
+#[cfg(unix)]
+#[test]
+fn bounded_command_terminates_descendants_after_child_exit() {
+    for expected_code in [0, 17] {
+        let directory = tempfile::tempdir().expect("create process fixture");
+        let pid_path = directory.path().join("descendant.pid");
+        let command = descendant_command(
+            &pid_path,
+            &format!("sleep 60 & echo $! > \"$1\"; exit {expected_code}"),
+        );
+
+        let (status, _, _, _) = run_bounded_command(
+            command,
+            Duration::from_secs(/*secs*/ 2),
+            /*maximum_stdout_bytes*/ 1024,
+            /*cancelled*/ None,
+        )
+        .expect("run bounded command");
+        let descendant = read_descendant_pid(&pid_path);
+
+        assert_eq!(status.code(), Some(expected_code));
+        assert_process_terminated(descendant);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn bounded_command_terminates_descendants_on_timeout() {
+    let directory = tempfile::tempdir().expect("create process fixture");
+    let pid_path = directory.path().join("descendant.pid");
+    let command = descendant_command(&pid_path, "sleep 60 & echo $! > \"$1\"; wait");
+
+    let error = run_bounded_command(
+        command,
+        Duration::from_secs(/*secs*/ 1),
+        /*maximum_stdout_bytes*/ 1024,
+        /*cancelled*/ None,
+    )
+    .expect_err("command must time out");
+    let descendant = read_descendant_pid(&pid_path);
+
+    assert!(error.to_string().contains("timed out"));
+    assert_process_terminated(descendant);
+}
+
+#[cfg(unix)]
+#[test]
+fn bounded_command_terminates_descendants_on_cancellation() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+
+    let directory = tempfile::tempdir().expect("create process fixture");
+    let pid_path = directory.path().join("descendant.pid");
+    let command = descendant_command(&pid_path, "sleep 60 & echo $! > \"$1\"; wait");
+    let cancelled = AtomicBool::new(false);
+
+    let error = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let _ = read_descendant_pid(&pid_path);
+            cancelled.store(true, Ordering::Relaxed);
+        });
+        run_bounded_command(
+            command,
+            Duration::from_secs(/*secs*/ 5),
+            /*maximum_stdout_bytes*/ 1024,
+            Some(&cancelled),
+        )
+        .expect_err("command must be cancelled")
+    });
+    let descendant = read_descendant_pid(&pid_path);
+
+    assert_eq!(error.to_string(), "workflow runner was cancelled");
+    assert_process_terminated(descendant);
+}
+
+#[cfg(unix)]
+#[test]
+fn workflow_child_guard_terminates_descendants_on_drop() {
+    let directory = tempfile::tempdir().expect("create process fixture");
+    let pid_path = directory.path().join("descendant.pid");
+    let mut command = descendant_command(&pid_path, "sleep 60 & echo $! > \"$1\"; wait");
+    let child = WorkflowChildGuard::spawn(&mut command).expect("spawn guarded command");
+    let descendant = read_descendant_pid(&pid_path);
+
+    drop(child);
+
+    assert_process_terminated(descendant);
+}
+
 #[test]
 #[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
 fn cli_run_imports_the_module_once_and_omits_optional_interaction() {
@@ -157,11 +246,7 @@ fn cli_runner_rejects_input_and_output_schema_violations() {
         "return { message: input.message };",
         "return [];",
     ));
-    let (status, markdown) = run_output(
-        input_root.path(),
-        &manifest,
-        &json!({ "message": 7 }),
-    );
+    let (status, markdown) = run_output(input_root.path(), &manifest, &json!({ "message": 7 }));
     assert!(!status.success(), "invalid input must fail the Bun runner");
     assert_eq!(markdown, Vec::<u8>::new());
 
@@ -391,6 +476,49 @@ fn completion_imports_the_module_once() {
 
 #[test]
 #[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
+fn completion_does_not_import_a_package_that_fails_executable_validation() {
+    let registry = tempfile::tempdir().expect("create workflow registry");
+    let root = scaffold_workflow(
+        registry.path(),
+        &ScaffoldRequest {
+            id: "unsafe-completion".to_string(),
+            title: "Unsafe Completion".to_string(),
+            callable_name: "unsafe-completion".to_string(),
+            description: "Ensure unsafe completion modules are not imported.".to_string(),
+        },
+    )
+    .expect("scaffold workflow");
+    let source_path = root.join("src/workflow.ts");
+    let source = fs::read_to_string(&source_path).expect("read scaffold source");
+    fs::write(
+        &source_path,
+        format!(
+            "import {{ writeFileSync }} from 'node:fs';\nwriteFileSync('state/imported', 'yes');\nconst unsafeSpecifier = './unsafe';\nvoid import(unsafeSpecifier);\n{source}"
+        ),
+    )
+    .expect("write workflow import side effect");
+
+    let completion = crate::complete_workflow(
+        &root,
+        &CompletionRequest {
+            input: json!({}),
+            active_field: None,
+            prefix: String::new(),
+            mode: CompletionMode::Field,
+        },
+    );
+
+    assert_eq!(completion.items, Vec::<CompletionItem>::new());
+    assert!(
+        completion
+            .error
+            .is_some_and(|error| error.contains("non-literal dynamic import or require"))
+    );
+    assert!(!root.join("state/imported").exists());
+}
+
+#[test]
+#[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
 fn source_scan_bounds_entries_depth_and_file_size() {
     let (root, _) = write_fixture(&canonical_source(
         "return { message: input.message };",
@@ -505,4 +633,43 @@ export default {{
 }};
 "#
     )
+}
+
+#[cfg(unix)]
+fn descendant_command(pid_path: &Path, script: &str) -> std::process::Command {
+    let mut command = std::process::Command::new("sh");
+    command
+        .args(["-c", script, "workflow-process-test"])
+        .arg(pid_path);
+    command
+}
+
+#[cfg(unix)]
+fn read_descendant_pid(pid_path: &Path) -> rustix::process::Pid {
+    let deadline = Instant::now() + Duration::from_secs(/*secs*/ 2);
+    loop {
+        if let Ok(encoded) = fs::read_to_string(pid_path)
+            && let Ok(raw_pid) = encoded.trim().parse::<i32>()
+            && let Some(pid) = rustix::process::Pid::from_raw(raw_pid)
+        {
+            return pid;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "descendant did not publish its process ID"
+        );
+        std::thread::sleep(Duration::from_millis(/*millis*/ 10));
+    }
+}
+
+#[cfg(unix)]
+fn assert_process_terminated(pid: rustix::process::Pid) {
+    let deadline = Instant::now() + Duration::from_secs(/*secs*/ 2);
+    while rustix::process::test_kill_process(pid).is_ok() {
+        assert!(
+            Instant::now() < deadline,
+            "descendant process {pid} remained alive"
+        );
+        std::thread::sleep(Duration::from_millis(/*millis*/ 10));
+    }
 }

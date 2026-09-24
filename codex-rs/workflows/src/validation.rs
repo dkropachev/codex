@@ -462,12 +462,13 @@ fn tree_exports_type(tree: &Tree, source: &str, expected: &str) -> bool {
                         && node_field_text(specifier, "alias", source)
                             .or_else(|| node_field_text(specifier, "name", source))
                             == Some(expected)
-                        && (export.child_by_field_name("source").is_some()
-                            || node_field_text(specifier, "name", source).is_some_and(
-                                |local_name| {
-                                    tree_has_top_level_type_binding(tree, source, local_name)
-                                },
-                            ))
+                        && if export.child_by_field_name("source").is_some() {
+                            node_has_type_modifier(export) || node_has_type_modifier(specifier)
+                        } else {
+                            node_field_text(specifier, "name", source).is_some_and(|local_name| {
+                                tree_has_top_level_type_binding(tree, source, local_name)
+                            })
+                        }
                 })
         })
     })
@@ -492,11 +493,46 @@ fn tree_has_top_level_type_binding(tree: &Tree, source: &str, expected: &str) ->
         }) {
             return true;
         }
-        if node.kind() == "import_statement" && subtree_has_identifier(node, source, expected) {
-            return true;
+        if node.kind() == "import_statement" {
+            if node_has_type_modifier(node) && subtree_has_identifier(node, source, expected) {
+                return true;
+            }
+            for index in 0..node.named_child_count() {
+                let Some(clause) = node.named_child(index) else {
+                    continue;
+                };
+                if subtree_has_type_import(clause, source, expected) {
+                    return true;
+                }
+            }
         }
     }
     false
+}
+
+fn subtree_has_type_import(root: Node<'_>, source: &str, expected: &str) -> bool {
+    let mut nodes = vec![root];
+    while let Some(node) = nodes.pop() {
+        if node.kind() == "import_specifier"
+            && node_has_type_modifier(node)
+            && subtree_has_identifier(node, source, expected)
+        {
+            return true;
+        }
+        for index in 0..node.named_child_count() {
+            if let Some(child) = node.named_child(index) {
+                nodes.push(child);
+            }
+        }
+    }
+    false
+}
+
+fn node_has_type_modifier(node: Node<'_>) -> bool {
+    (0..node.child_count()).any(|index| {
+        node.child(index)
+            .is_some_and(|child| matches!(child.kind(), "type" | "typeof"))
+    })
 }
 
 fn subtree_has_identifier(root: Node<'_>, source: &str, expected: &str) -> bool {

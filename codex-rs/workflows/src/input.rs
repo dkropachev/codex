@@ -55,6 +55,21 @@ pub fn build_workflow_invocation(
     })
 }
 
+/// Builds an invocation whose default working directory will be supplied by the executor.
+///
+/// `cwd` is still used to resolve `--input @file`; an explicitly supplied
+/// `workingDirectory` remains in the returned input.
+pub fn build_hosted_workflow_invocation(
+    command: &WorkflowCommand,
+    cwd: &Path,
+    args: &str,
+) -> Result<WorkflowInvocation, WorkflowInvocationError> {
+    Ok(WorkflowInvocation {
+        workflow_dir: command.workflow_dir.clone(),
+        input: hosted_workflow_invocation_input(cwd, args)?,
+    })
+}
+
 #[deprecated(note = "dispatch WorkflowInvocation through the shared workflow runner")]
 pub fn build_workflow_shell_command(
     command: &WorkflowCommand,
@@ -80,6 +95,22 @@ pub fn workflow_invocation_input(cwd: &Path, args: &str) -> Result<Value, Workfl
         WorkflowInvocationError::new("Invalid workflow arguments: unmatched quote.")
     })?;
     workflow_invocation_input_from_args(cwd, &args)
+}
+
+/// Parses hosted invocation input without injecting the host's working directory.
+///
+/// The hosted runner injects the selected executor's native working directory when the input does
+/// not already contain `workingDirectory`.
+pub fn hosted_workflow_invocation_input(
+    cwd: &Path,
+    args: &str,
+) -> Result<Value, WorkflowInvocationError> {
+    let args = shlex::split(args).ok_or_else(|| {
+        WorkflowInvocationError::new("Invalid workflow arguments: unmatched quote.")
+    })?;
+    let (mut base, flags) = parse_args(cwd, &args)?;
+    base.extend(flags);
+    Ok(Value::Object(base))
 }
 
 pub fn workflow_invocation_input_from_args(

@@ -27,6 +27,10 @@ use crate::CompletionItem;
 use crate::CompletionRequest;
 use crate::WorkflowManifest;
 
+mod process_tree;
+
+use process_tree::WorkflowProcessTree;
+
 /// JavaScript materialized into a run-private file for every workflow operation.
 ///
 /// Keeping the runner embedded lets CLI and hosted execution use exactly the
@@ -92,20 +96,26 @@ struct SyncControlReader<R> {
 
 struct WorkflowChildGuard {
     child: Child,
+    process_tree: WorkflowProcessTree,
     finished: bool,
 }
 
 impl WorkflowChildGuard {
-    fn new(child: Child) -> Self {
-        Self {
+    fn spawn(command: &mut Command) -> std::io::Result<Self> {
+        let (child, process_tree) = WorkflowProcessTree::spawn(command)?;
+        Ok(Self {
             child,
+            process_tree,
             finished: false,
-        }
+        })
     }
 
     fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
         let status = self.child.try_wait()?;
-        self.finished |= status.is_some();
+        if status.is_some() {
+            self.finished = true;
+            self.process_tree.terminate();
+        }
         Ok(status)
     }
 
@@ -123,10 +133,8 @@ impl WorkflowChildGuard {
     }
 
     fn terminate(&mut self) {
-        if self.finished {
-            return;
-        }
-        if self.child.try_wait().ok().flatten().is_none() {
+        self.process_tree.terminate();
+        if !self.finished && self.child.try_wait().ok().flatten().is_none() {
             let _ = self.child.kill();
             let _ = self.child.wait();
         }
@@ -274,21 +282,20 @@ fn run_cli_workflow_with_bun(
         .write(true)
         .open(&control_path)
         .context("failed to create workflow control channel")?;
-    let child = bun_command(bun, workflow_dir, &prepared)
+    let mut command = bun_command(bun, workflow_dir, &prepared);
+    command
         .env("CODEX_WORKFLOW_CONTROL_PATH", &control_path)
         .env("CODEX_WORKFLOW_CLI", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .with_context(|| {
-            format!(
-                "failed to run workflow package at {} with {}",
-                workflow_dir.display(),
-                bun.display()
-            )
-        })?;
-    let mut child = WorkflowChildGuard::new(child);
+        .stderr(Stdio::inherit());
+    let mut child = WorkflowChildGuard::spawn(&mut command).with_context(|| {
+        format!(
+            "failed to run workflow package at {} with {}",
+            workflow_dir.display(),
+            bun.display()
+        )
+    })?;
     let mut child_stdin = child
         .child
         .stdin
@@ -747,14 +754,15 @@ pub(crate) fn run_bounded_command(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .context("failed to start Bun workflow runner")?;
+    let mut child =
+        WorkflowChildGuard::spawn(&mut command).context("failed to start Bun workflow runner")?;
     let stdout = child
+        .child
         .stdout
         .take()
         .context("Bun workflow runner stdout was not piped")?;
     let stderr = child
+        .child
         .stderr
         .take()
         .context("Bun workflow runner stderr was not piped")?;
@@ -763,8 +771,7 @@ pub(crate) fn run_bounded_command(
     let deadline = Instant::now() + timeout;
     let status = loop {
         if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Relaxed)) {
-            let _ = child.kill();
-            let _ = child.wait();
+            child.terminate();
             bail!("workflow runner was cancelled");
         }
         if let Some(status) = child
@@ -774,8 +781,7 @@ pub(crate) fn run_bounded_command(
             break status;
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            child.terminate();
             bail!("workflow runner timed out after {} ms", timeout.as_millis());
         }
         thread::sleep(Duration::from_millis(10));

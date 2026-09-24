@@ -287,6 +287,42 @@ fn exact_workflow_id_takes_precedence_over_another_packages_alias() -> Result<()
 }
 
 #[test]
+fn workflow_fix_prefers_an_exact_id_over_another_packages_alias() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let project = TempDir::new()?;
+    enable_workflows(codex_home.path())?;
+    let root = codex_home.path().join("workflows");
+    let alias_owner = write_workflow(
+        &root,
+        "alpha",
+        "id: alpha\ncommand: code-review\nuserDescription: Alias owner\n",
+    )?;
+    write_workflow_source(&alias_owner)?;
+    let exact = write_workflow(
+        &root,
+        "code-review",
+        "id: code-review\ncommand: other\nuserDescription: Exact ID owner\n",
+    )?;
+    write_workflow_source(&exact)?;
+    let alias_metadata = fs::read_to_string(alias_owner.join("workflow.yaml"))?;
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    cmd.args(["workflow", "fix", "code-review"])
+        .assert()
+        .success()
+        .stdout(contains(
+            "Repairing workflow code-review with compatibility mode.",
+        ));
+
+    assert_eq!(
+        fs::read_to_string(alias_owner.join("workflow.yaml"))?,
+        alias_metadata
+    );
+    assert_code_review_static_metadata_without_legacy_usage(&exact)?;
+    Ok(())
+}
+
+#[test]
 fn workflow_run_unknown_command_reports_available_commands() -> Result<()> {
     let codex_home = TempDir::new()?;
     let project = TempDir::new()?;
@@ -673,6 +709,32 @@ fn workflow_validate_reports_invalid_workflow_at_cli_boundary() -> Result<()> {
         .failure()
         .stdout(contains("missing"))
         .stdout(contains("src/workflow.ts"));
+
+    Ok(())
+}
+
+#[test]
+fn workflow_validate_reports_an_ambiguous_alias() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let project = TempDir::new()?;
+    enable_workflows(codex_home.path())?;
+    let root = codex_home.path().join("workflows");
+    write_workflow(
+        &root,
+        "alpha",
+        "id: alpha\ncommand: duplicate\nuserDescription: First duplicate\n",
+    )?;
+    write_workflow(
+        &root,
+        "beta",
+        "id: beta\ncommand: duplicate\nuserDescription: Second duplicate\n",
+    )?;
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    cmd.args(["workflow", "validate", "duplicate"])
+        .assert()
+        .failure()
+        .stderr(contains("alias `duplicate` is ambiguous"));
 
     Ok(())
 }
@@ -1067,10 +1129,12 @@ fn workflow_repair_alias_repairs_workflow_without_running_workflow_runtime() -> 
     let codex_home = TempDir::new()?;
     let project = TempDir::new()?;
     enable_workflows(codex_home.path())?;
+    let workflow_yaml =
+        "id: review\ncommand: code-review\nuserDescription: Run a code review workflow.\n";
     let workflow_dir = write_workflow(
         &codex_home.path().join("workflows"),
-        "code-review",
-        "command: code-review\nuserDescription: Run a code review workflow.\n",
+        "review",
+        workflow_yaml,
     )?;
     write_workflow_source(&workflow_dir)?;
     let fake_bun = FakeBun::new(codex_home.path())?;
@@ -1081,14 +1145,16 @@ fn workflow_repair_alias_repairs_workflow_without_running_workflow_runtime() -> 
         .assert()
         .success()
         .stdout(contains(
-            "Repairing workflow code-review with compatibility mode.",
+            "Repairing workflow review with compatibility mode.",
         ))
-        .stdout(contains("Updated "))
-        .stdout(contains("with code-review workflow metadata"))
-        .stdout(contains("code-review repair check completed."));
+        .stdout(contains("No compatibility repairs were needed for review."))
+        .stdout(contains("review repair check completed."));
 
     assert!(!fake_bun.was_invoked());
-    assert_code_review_static_metadata_without_legacy_usage(&workflow_dir)?;
+    assert_eq!(
+        fs::read_to_string(workflow_dir.join("workflow.yaml"))?,
+        workflow_yaml
+    );
 
     Ok(())
 }

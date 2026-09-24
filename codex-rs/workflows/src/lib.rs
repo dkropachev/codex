@@ -1,6 +1,7 @@
 //! Canonical TypeScript workflow packages shared by the CLI, TUI, and hosted runtime.
 
 mod completion;
+mod completion_schema;
 mod discovery;
 mod input;
 mod interaction;
@@ -21,9 +22,11 @@ pub use discovery::WorkflowCommandOptionHint;
 pub use discovery::discover_workflow_commands;
 pub use input::WorkflowInvocation;
 pub use input::WorkflowInvocationError;
+pub use input::build_hosted_workflow_invocation;
 pub use input::build_workflow_invocation;
 #[allow(deprecated)]
 pub use input::build_workflow_shell_command;
+pub use input::hosted_workflow_invocation_input;
 pub use input::normalize_workflow_input;
 pub use input::normalize_workflow_input_with_working_directory;
 pub use input::workflow_invocation_input;

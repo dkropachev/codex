@@ -66,7 +66,29 @@ pub fn scaffold_workflow(root: &Path, request: &ScaffoldRequest) -> anyhow::Resu
         )?;
         Ok(target)
     }
-    #[cfg(not(all(unix, not(target_os = "redox"))))]
+    #[cfg(windows)]
+    {
+        let staging = tempfile::Builder::new()
+            .prefix(".codex-workflow-")
+            .tempdir()
+            .context("failed to stage workflow package")?;
+        write_package(staging.path(), request, &id)?;
+        initialize_git_repository(staging.path())?;
+        let _locked_parent = SecureWindowsPath::open_or_create(parent)?;
+        reject_existing_or_symlink_path(root, &target)?;
+        let staging_path = staging.keep();
+        if let Err(err) = install_staged_package(&staging_path, &target) {
+            let _ = fs::remove_dir_all(&staging_path);
+            return Err(err).with_context(|| {
+                format!(
+                    "failed to install workflow package at {}; the target may have been created concurrently",
+                    target.display()
+                )
+            });
+        }
+        Ok(target)
+    }
+    #[cfg(not(any(all(unix, not(target_os = "redox")), windows)))]
     {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create workflow parent {}", parent.display()))?;
@@ -88,6 +110,106 @@ pub fn scaffold_workflow(root: &Path, request: &ScaffoldRequest) -> anyhow::Resu
             });
         }
         Ok(target)
+    }
+}
+
+/// Holds non-delete-sharing handles for every Windows parent component while a package is
+/// installed, preventing a concurrent reparse-point swap from redirecting the final rename.
+#[cfg(windows)]
+struct SecureWindowsPath {
+    _handles: Vec<std::os::windows::io::OwnedHandle>,
+}
+
+#[cfg(windows)]
+impl SecureWindowsPath {
+    fn open_or_create(path: &Path) -> anyhow::Result<Self> {
+        use std::os::windows::ffi::OsStrExt;
+        use std::os::windows::io::FromRawHandle;
+
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION;
+        use windows_sys::Win32::Storage::FileSystem::CreateFileW;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
+        use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle;
+        use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
+
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(path)
+        };
+        let mut current = PathBuf::new();
+        let mut handles = Vec::new();
+        for component in absolute.components() {
+            match component {
+                Component::Prefix(_) | Component::RootDir => {
+                    current.push(component.as_os_str());
+                    continue;
+                }
+                Component::CurDir => continue,
+                Component::ParentDir => {
+                    bail!(
+                        "workflow parent path must not contain '..': {}",
+                        path.display()
+                    );
+                }
+                Component::Normal(component) => current.push(component),
+            }
+            match fs::create_dir(&current) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(err) => {
+                    return Err(err).with_context(|| {
+                        format!("failed to create workflow directory {}", current.display())
+                    });
+                }
+            }
+            let wide = current
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect::<Vec<_>>();
+            let raw = unsafe {
+                CreateFileW(
+                    wide.as_ptr(),
+                    FILE_READ_ATTRIBUTES,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                    0,
+                )
+            };
+            if raw == INVALID_HANDLE_VALUE {
+                return Err(std::io::Error::last_os_error()).with_context(|| {
+                    format!("failed to lock workflow directory {}", current.display())
+                });
+            }
+            let handle = unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(raw as _) };
+            let mut information = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+            if unsafe { GetFileInformationByHandle(raw, information.as_mut_ptr()) } == 0 {
+                return Err(std::io::Error::last_os_error()).with_context(|| {
+                    format!("failed to inspect workflow directory {}", current.display())
+                });
+            }
+            let attributes = unsafe { information.assume_init() }.dwFileAttributes;
+            if attributes & FILE_ATTRIBUTE_DIRECTORY == 0
+                || attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            {
+                bail!(
+                    "workflow path component {} must be a directory and not a reparse point",
+                    current.display()
+                );
+            }
+            handles.push(handle);
+        }
+        Ok(Self { _handles: handles })
     }
 }
 
@@ -330,8 +452,8 @@ fn write_file_at(
             let file = openat(
                 &directory,
                 component,
-                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW,
-                Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::WGRP | Mode::ROTH | Mode::WOTH,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW, // codespell:ignore WRONLY
+                Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::WGRP | Mode::ROTH | Mode::WOTH, // codespell:ignore WOTH
             )?;
             let mut file = fs::File::from(file);
             file.write_all(contents)?;

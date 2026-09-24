@@ -262,10 +262,7 @@ async fn bare_workflow_command_dispatches_structured_workflow_op() {
 
     let (submitted_workflow_dir, input) = next_workflow_command(&mut op_rx);
     assert_eq!(submitted_workflow_dir, workflow_dir);
-    assert_eq!(
-        input,
-        json!({ "workingDirectory": test_path_display("/tmp/project") })
-    );
+    assert_eq!(input, json!({}));
     assert_eq!(recall_latest_after_clearing(&mut chat), "/code-review");
 }
 
@@ -317,12 +314,32 @@ async fn workflow_command_with_args_dispatches_structured_input_json() {
             "output": "md",
             "includeSkippedByLimit": true,
             "allowedAreas": ["tui", "core"],
-            "workingDirectory": test_path_display("/tmp/project"),
         })
     );
     assert_eq!(
         recall_latest_after_clearing(&mut chat),
         "/code-review --action list-reports --output md --include-skipped-by-limit --allowed-areas tui --allowed-areas core"
+    );
+}
+
+#[tokio::test]
+async fn workflow_command_preserves_explicit_executor_working_directory() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    let workflow_dir = write_workflow_command(&mut chat, "code-review", "Run review.");
+    chat.sync_workflow_commands();
+
+    submit_composer_text(
+        &mut chat,
+        r#"/code-review --input '{"workingDirectory":"C:\\remote\\project"}'"#,
+    );
+
+    assert_eq!(
+        next_workflow_command(&mut op_rx),
+        (
+            workflow_dir,
+            json!({ "workingDirectory": r"C:\remote\project" }),
+        )
     );
 }
 
@@ -375,7 +392,6 @@ async fn queued_workflow_command_dispatches_after_active_turn() {
         input,
         json!({
             "action": "report",
-            "workingDirectory": test_path_display("/tmp/project"),
         })
     );
     assert!(chat.input_queue.queued_user_messages.is_empty());

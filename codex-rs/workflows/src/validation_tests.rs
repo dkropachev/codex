@@ -28,6 +28,7 @@ fn findings_are_deterministic_for_missing_and_legacy_packages() {
 }
 
 #[test]
+#[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
 fn reports_undeclared_and_non_local_dependencies() {
     let (_registry, root) = scaffold();
     let mut package_json: serde_json::Value = serde_json::from_str(
@@ -179,6 +180,23 @@ await import("node:fs");
     let nested = "export namespace Hidden {\n  export interface WorkflowInput {}\n}\n";
     let tree = parse_typescript(nested, Path::new("source.ts")).expect("parse namespace");
     assert!(!tree_exports_type(&tree, nested, "WorkflowInput"));
+    let runtime_reexport = "export { value as WorkflowInput } from './helper';";
+    let tree = parse_typescript(runtime_reexport, Path::new("source.ts"))
+        .expect("parse runtime re-export");
+    assert!(!tree_exports_type(&tree, runtime_reexport, "WorkflowInput"));
+    let type_reexport = "export type { Value as WorkflowInput } from './helper';";
+    let tree =
+        parse_typescript(type_reexport, Path::new("source.ts")).expect("parse type re-export");
+    assert!(tree_exports_type(&tree, type_reexport, "WorkflowInput"));
+    let runtime_import =
+        "import { Value as WorkflowInput } from './helper'; export { WorkflowInput };";
+    let tree =
+        parse_typescript(runtime_import, Path::new("source.ts")).expect("parse runtime import");
+    assert!(!tree_exports_type(&tree, runtime_import, "WorkflowInput"));
+    let type_import =
+        "import type { Value as WorkflowInput } from './helper'; export { WorkflowInput };";
+    let tree = parse_typescript(type_import, Path::new("source.ts")).expect("parse type import");
+    assert!(tree_exports_type(&tree, type_import, "WorkflowInput"));
 }
 
 #[cfg(unix)]
@@ -319,6 +337,32 @@ fn tracked_artifacts_are_rejected() {
             .iter()
             .any(|finding| finding.message.contains("artifacts/result.json"))
     );
+}
+
+#[test]
+fn invalid_git_layout_and_unreadable_gitignore_are_rejected() {
+    let (_registry, root) = scaffold();
+    fs::remove_dir_all(root.join(".git")).expect("remove git repository");
+    fs::create_dir(root.join(".git")).expect("create invalid git directory");
+    fs::write(
+        root.join(".gitignore"),
+        "x".repeat((super::checks::MAX_GITIGNORE_BYTES + 1) as usize),
+    )
+    .expect("write oversized gitignore");
+
+    let mut findings = BTreeSet::new();
+    super::checks::validate_gitignore(&root, &mut findings);
+    super::checks::validate_git_layout(&root, &mut findings);
+
+    assert!(findings.iter().any(|finding| {
+        finding.code == "gitignore" && finding.message.contains("65536-byte limit")
+    }));
+    assert!(findings.iter().any(|finding| {
+        finding.code == "layout"
+            && finding
+                .message
+                .contains("failed to inspect workflow git repository")
+    }));
 }
 
 #[test]

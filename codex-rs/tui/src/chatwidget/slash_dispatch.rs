@@ -15,8 +15,8 @@ use crate::bottom_pane::slash_commands::find_slash_command;
 use crate::goal_display::GOAL_USAGE;
 use crate::goal_files::GoalDraft;
 use crate::workflow_commands::WorkflowCommand;
-use crate::workflow_commands::build_workflow_invocation;
-use crate::workflow_commands::workflow_invocation_input;
+use crate::workflow_commands::build_hosted_workflow_invocation;
+use crate::workflow_commands::hosted_workflow_invocation_input;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -75,7 +75,7 @@ impl ChatWidget {
             return;
         }
         let cwd = self.workflow_invocation_cwd();
-        match build_workflow_invocation(&command, &cwd, "") {
+        match build_hosted_workflow_invocation(&command, &cwd, "") {
             Ok(invocation) => {
                 self.submit_op(AppCommand::run_workflow_command(
                     invocation.workflow_dir,
@@ -115,7 +115,7 @@ impl ChatWidget {
         }
 
         let cwd = self.workflow_invocation_cwd();
-        if let Err(err) = workflow_invocation_input(&cwd, &args) {
+        if let Err(err) = hosted_workflow_invocation_input(&cwd, &args) {
             self.add_error_message(err.message().to_string());
             self.bottom_pane.record_pending_slash_command_history();
             return;
@@ -127,7 +127,7 @@ impl ChatWidget {
             return;
         };
 
-        match build_workflow_invocation(&command, &cwd, &prepared_args) {
+        match build_hosted_workflow_invocation(&command, &cwd, &prepared_args) {
             Ok(invocation) => {
                 self.submit_op(AppCommand::run_workflow_command(
                     invocation.workflow_dir,
@@ -1216,11 +1216,11 @@ impl ChatWidget {
             }
             SlashCommandItem::Workflow(command) => {
                 let cwd = self.workflow_invocation_cwd();
-                if let Err(err) = workflow_invocation_input(&cwd, &prepared.args) {
+                if let Err(err) = hosted_workflow_invocation_input(&cwd, &prepared.args) {
                     self.add_error_message(err.message().to_string());
                     return QueueDrain::Continue;
                 }
-                match build_workflow_invocation(&command, &cwd, &prepared.args) {
+                match build_hosted_workflow_invocation(&command, &cwd, &prepared.args) {
                     Ok(invocation) => {
                         self.submit_op(AppCommand::run_workflow_command(
                             invocation.workflow_dir,
