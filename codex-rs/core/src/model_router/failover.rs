@@ -1,5 +1,6 @@
 use codex_model_router::CandidateRoute;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 
 use super::CandidateSet;
 use super::config_account_pool_default;
@@ -105,42 +106,42 @@ impl ModelRouterRouteExclusion {
 }
 
 pub(crate) fn model_router_failure_scope(err: &CodexErr) -> Option<ModelRouterFailureScope> {
-    match err {
-        CodexErr::Stream(message, _) => message_failure_scope(message),
-        CodexErr::Timeout
-        | CodexErr::RequestTimeout
-        | CodexErr::ContextWindowExceeded
-        | CodexErr::ServerOverloaded => Some(ModelRouterFailureScope::Model),
-        CodexErr::UsageLimitReached(_) | CodexErr::UsageNotIncluded | CodexErr::QuotaExceeded => {
-            Some(ModelRouterFailureScope::Account)
-        }
-        CodexErr::UnexpectedStatus(_)
-        | CodexErr::InternalServerError
-        | CodexErr::RetryLimit(_)
-        | CodexErr::ConnectionFailed(_)
-        | CodexErr::ResponseStreamFailed(_) => Some(ModelRouterFailureScope::Provider),
-        CodexErr::InvalidRequest(message) => message_failure_scope(message),
-        CodexErr::TurnAborted
-        | CodexErr::Interrupted
-        | CodexErr::EnvVar(_)
-        | CodexErr::Fatal(_)
-        | CodexErr::InvalidImageRequest()
-        | CodexErr::RefreshTokenFailed(_)
-        | CodexErr::UnsupportedOperation(_)
-        | CodexErr::Sandbox(_)
-        | CodexErr::LandlockSandboxExecutableNotProvided
-        | CodexErr::ThreadNotFound(_)
-        | CodexErr::SessionBudgetExceeded
-        | CodexErr::AgentLimitReached { .. }
-        | CodexErr::Spawn
-        | CodexErr::SessionConfiguredNotFirstEvent
-        | CodexErr::CyberPolicy { .. }
-        | CodexErr::InternalAgentDied
-        | CodexErr::Io(_)
-        | CodexErr::Json(_)
-        | CodexErr::TokioJoin(_) => None,
+    match err.details() {
+        CodexErrorDetails::Stream(message) => message_failure_scope(message),
+        CodexErrorDetails::Timeout
+        | CodexErrorDetails::RequestTimeout
+        | CodexErrorDetails::ContextWindowExceeded
+        | CodexErrorDetails::ServerOverloaded => Some(ModelRouterFailureScope::Model),
+        CodexErrorDetails::UsageLimitReached(_)
+        | CodexErrorDetails::UsageNotIncluded
+        | CodexErrorDetails::QuotaExceeded => Some(ModelRouterFailureScope::Account),
+        CodexErrorDetails::UnexpectedStatus(_)
+        | CodexErrorDetails::InternalServerError
+        | CodexErrorDetails::RetryLimit(_)
+        | CodexErrorDetails::ConnectionFailed(_)
+        | CodexErrorDetails::ResponseStreamFailed(_) => Some(ModelRouterFailureScope::Provider),
+        CodexErrorDetails::InvalidRequest(message) => message_failure_scope(message),
+        CodexErrorDetails::TurnAborted
+        | CodexErrorDetails::Interrupted
+        | CodexErrorDetails::EnvVar(_)
+        | CodexErrorDetails::Fatal(_)
+        | CodexErrorDetails::InvalidImageRequest()
+        | CodexErrorDetails::RefreshTokenFailed(_)
+        | CodexErrorDetails::UnsupportedOperation(_)
+        | CodexErrorDetails::Sandbox(_)
+        | CodexErrorDetails::LandlockSandboxExecutableNotProvided
+        | CodexErrorDetails::ThreadNotFound(_)
+        | CodexErrorDetails::SessionBudgetExceeded
+        | CodexErrorDetails::AgentLimitReached { .. }
+        | CodexErrorDetails::Spawn
+        | CodexErrorDetails::SessionConfiguredNotFirstEvent
+        | CodexErrorDetails::CyberPolicy { .. }
+        | CodexErrorDetails::InternalAgentDied
+        | CodexErrorDetails::Io(_)
+        | CodexErrorDetails::Json(_)
+        | CodexErrorDetails::TokioJoin(_) => None,
         #[cfg(target_os = "linux")]
-        CodexErr::LandlockRuleset(_) | CodexErr::LandlockPathFd(_) => None,
+        CodexErrorDetails::LandlockRuleset(_) | CodexErrorDetails::LandlockPathFd(_) => None,
     }
 }
 
@@ -310,14 +311,12 @@ mod tests {
         assert_eq!(
             model_router_failure_scope(&CodexErr::Stream(
                 "Rate limit reached for gpt-5.1. Please try again in 1s.".to_string(),
-                None,
             )),
             Some(ModelRouterFailureScope::Model)
         );
         assert_eq!(
             model_router_failure_scope(&CodexErr::Stream(
                 "network error: connection reset".to_string(),
-                None,
             )),
             Some(ModelRouterFailureScope::Provider)
         );

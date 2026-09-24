@@ -22,6 +22,7 @@ use codex_exec_server::WriteResponse;
 use codex_exec_server::WriteStatus;
 use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::test_support::PathExt;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_tokens_from_byte_count;
 use core_test_support::skip_if_no_remote_env;
@@ -114,6 +115,7 @@ async fn exec_command_with_tty(
             .open_session_with_prepared_exec_env(
                 process_id,
                 &request,
+                codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
                 tty,
                 Box::new(NoopSpawnLifecycle),
                 turn.environments
@@ -336,6 +338,7 @@ async fn write_stdin(
             yield_time_ms,
             max_output_tokens: None,
             truncation_policy: TruncationPolicy::Tokens(10_000),
+            interaction_event: None,
         })
         .await
 }
@@ -417,9 +420,11 @@ fn compaction_skips_when_truncated_raw_output_is_not_larger() {
 #[tokio::test]
 async fn accepted_rg_output_optimization_compacts_completed_exec_output() -> anyhow::Result<()> {
     let state_home = TempDir::new().expect("temp dir");
-    let state_db =
-        codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
-            .await?;
+    let state_db = codex_state::StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(state_home.path().abs()),
+        "test".to_string(),
+    )
+    .await?;
     let output = learned_rg_output(/*lines*/ 240);
     for idx in 0..3 {
         state_db
@@ -468,9 +473,11 @@ async fn accepted_rg_output_optimization_compacts_completed_exec_output() -> any
 #[tokio::test]
 async fn write_stdin_completion_uses_exec_command_output_optimization() -> anyhow::Result<()> {
     let state_home = TempDir::new().expect("temp dir");
-    let state_db =
-        codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
-            .await?;
+    let state_db = codex_state::StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(state_home.path().abs()),
+        "test".to_string(),
+    )
+    .await?;
     let output = learned_rg_output(/*lines*/ 240);
     for idx in 0..3 {
         state_db
@@ -508,9 +515,11 @@ async fn write_stdin_completion_uses_exec_command_output_optimization() -> anyho
 #[tokio::test]
 async fn accepted_source_read_dedupe_requires_recent_duplicate_read() -> anyhow::Result<()> {
     let state_home = TempDir::new().expect("temp dir");
-    let state_db =
-        codex_state::StateRuntime::init(state_home.path().to_path_buf(), "test".to_string())
-            .await?;
+    let state_db = codex_state::StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(state_home.path().abs()),
+        "test".to_string(),
+    )
+    .await?;
     let output = learned_source_read_output(/*start_line*/ 10, /*line_count*/ 250);
     let command_json = r#"{"cmd":"sed -n '10,259p' src/lib.rs"}"#;
 
@@ -1060,6 +1069,7 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
         .open_session_with_prepared_exec_env(
             /*process_id*/ 1234,
             &request,
+            codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
             /*tty*/ false,
             Box::new(NoopSpawnLifecycle),
             &environment,
@@ -1100,6 +1110,7 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
         .open_session_with_prepared_exec_env(
             /*process_id*/ 1234,
             &request,
+            codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
             /*tty*/ true,
             Box::new(NoopSpawnLifecycle),
             remote_test_env.environment(),
@@ -1158,6 +1169,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
         .open_session_with_prepared_exec_env(
             /*process_id*/ 1234,
             &request,
+            codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
             /*tty*/ true,
             Box::new(TestSpawnLifecycle {
                 inherited_fds: vec![42],

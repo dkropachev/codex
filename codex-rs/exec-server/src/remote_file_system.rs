@@ -407,6 +407,7 @@ mod tests {
                 path: absolute_test_path("remote-root"),
             },
             access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
         }]);
         let permissions =
             PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
@@ -428,6 +429,7 @@ mod tests {
                 value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
             },
             access: FileSystemAccessMode::Write,
+            missing_path_behavior: None,
         }]);
         let permissions =
             PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);

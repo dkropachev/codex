@@ -27,6 +27,7 @@ use codex_login::AuthManagerConfig;
 use codex_login::AuthRouteConfig;
 use codex_login::auth::AccountPoolManager;
 use codex_login::save_auth;
+use codex_login::test_support::transport_default_auth_route_config;
 use codex_login::token_data::IdTokenInfo;
 use codex_login::token_data::TokenData;
 use codex_protocol::auth::AuthMode;
@@ -372,7 +373,7 @@ async fn load_balance_pool(codex_home: &Path) -> Result<AccountPoolManager> {
         AuthCredentialsStoreMode::File,
         AuthKeyringBackendKind::default(),
         /*chatgpt_base_url*/ None,
-        /*auth_route_config*/ None,
+        transport_default_auth_route_config(),
     )
     .await
     .context("account pool should be enabled")
@@ -503,8 +504,8 @@ impl AuthManagerConfig for AccountPoolAuthConfig {
         "https://chatgpt.com/backend-api".to_string()
     }
 
-    fn auth_route_config(&self) -> Option<AuthRouteConfig> {
-        None
+    fn auth_route_config(&self) -> AuthRouteConfig {
+        transport_default_auth_route_config()
     }
 
     fn account_pool(&self) -> Option<AccountPoolToml> {

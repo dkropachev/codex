@@ -62,6 +62,8 @@ fn mention_items_show_plugin_owned_skill_and_app_duplicates() {
             short_description: None,
             icon_small: None,
             icon_large: None,
+            icon_small_url: None,
+            icon_large_url: None,
             brand_color: None,
             default_prompt: None,
         }),

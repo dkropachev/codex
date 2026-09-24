@@ -15,6 +15,7 @@ use codex_login::AuthRouteConfig;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::load_auth_dot_json;
 use codex_login::save_auth;
+use codex_login::test_support::transport_default_auth_route_config;
 use codex_login::token_data::IdTokenInfo;
 use codex_login::token_data::TokenData;
 use codex_protocol::auth::AuthMode;
@@ -162,8 +163,8 @@ impl AuthManagerConfig for AccountPoolTestConfig {
         self.chatgpt_base_url.clone()
     }
 
-    fn auth_route_config(&self) -> Option<AuthRouteConfig> {
-        None
+    fn auth_route_config(&self) -> AuthRouteConfig {
+        transport_default_auth_route_config()
     }
 
     fn account_pool(&self) -> Option<AccountPoolToml> {

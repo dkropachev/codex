@@ -1,3 +1,4 @@
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
@@ -27,6 +28,7 @@ use codex_tools::ToolSpec;
 use serde_json::json;
 use sha1::Digest;
 use sha1::Sha1;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
@@ -71,6 +73,7 @@ pub(crate) struct ToolRouterParams<'a> {
     pub(crate) tool_runtimes: Vec<Arc<dyn CoreToolRuntime>>,
     pub(crate) tool_suggest_candidates: Option<ToolSuggestCandidates>,
     pub(crate) extension_tool_executors: Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>>,
+    pub(crate) wait_for_environment_tool_config: Option<Arc<crate::WaitForEnvironmentToolConfig>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
 
@@ -88,11 +91,19 @@ pub(crate) struct ToolSuggestCandidates {
 
 impl ToolRouter {
     pub(crate) fn from_context(
-        step_context: &StepContext,
+        turn_context: &TurnContext,
+        environments: &TurnEnvironmentSnapshot,
+        mcp: &codex_mcp::McpBinding,
         params: ToolRouterParams<'_>,
         tool_search_handler_cache: &ToolSearchHandlerCache,
     ) -> Self {
-        build_tool_router(step_context, params, tool_search_handler_cache)
+        build_tool_router(
+            turn_context,
+            environments,
+            mcp,
+            params,
+            tool_search_handler_cache,
+        )
     }
 
     pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {
@@ -105,8 +116,12 @@ impl ToolRouter {
         }
     }
 
-    pub fn model_visible_specs(&self) -> Vec<ToolSpec> {
+    pub(crate) fn model_visible_specs(&self) -> Vec<ToolSpec> {
         self.model_visible_specs.clone()
+    }
+
+    pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {
+        self.registry.deferred_tool_namespaces()
     }
 
     #[cfg(test)]
@@ -490,6 +505,7 @@ fn tool_dialog_locator_json(
 #[instrument(level = "trace", skip_all)]
 pub(crate) fn extension_tool_executors(
     session: &Session,
+    step_store: &codex_extension_api::ExtensionData,
 ) -> Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>> {
     session
         .services
@@ -497,9 +513,10 @@ pub(crate) fn extension_tool_executors(
         .tool_contributors()
         .iter()
         .flat_map(|contributor| {
-            contributor.tools(
+            contributor.tools_for_step(
                 &session.services.session_extension_data,
                 &session.services.thread_extension_data,
+                step_store,
             )
         })
         .collect()

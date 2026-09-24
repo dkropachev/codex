@@ -352,13 +352,13 @@ fn top_request_shape_clusters(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::test_support::unique_temp_dir;
+    use crate::runtime::test_support::unique_temp_sqlite_config;
     use crate::runtime::tool_router::ToolRouterLedgerEntry;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
     async fn tune_observations_include_route_tool_outcome_and_shape_breakdowns() {
-        let runtime = StateRuntime::init(unique_temp_dir(), "test".to_string())
+        let runtime = StateRuntime::init(unique_temp_sqlite_config(), "test".to_string())
             .await
             .expect("state runtime");
         let shape = ToolRouterRequestShape {
