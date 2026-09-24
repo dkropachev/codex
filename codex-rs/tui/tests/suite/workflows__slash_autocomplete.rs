@@ -75,7 +75,7 @@ userDescription: Run a code review workflow.
     let bun_path = fake_bin.path().join("bun");
     std::fs::write(
         &bun_path,
-        r#"#!/bin/sh
+        r##"#!/bin/sh
 set -eu
 : "${CODEX_TEST_WORKFLOW_RELEASE:?}"
 : "${CODEX_TEST_WORKFLOW_FAILURE:?}"
@@ -86,8 +86,9 @@ if [ -f "$CODEX_TEST_WORKFLOW_FAILURE" ]; then
   printf '%s\n' 'workflow failed for test' >&2
   exit 42
 fi
-printf '%s\n' '# Workflow finished' '' 'Visible workflow result.'
-"#,
+printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{"v":1,"id":0,"method":"complete","params":{"markdown":"# Workflow finished\n\nVisible workflow result.\n"}}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
+IFS= read -r _completion_ack
+"##,
     )?;
     let mut permissions = std::fs::metadata(&bun_path)?.permissions();
     permissions.set_mode(0o755);
