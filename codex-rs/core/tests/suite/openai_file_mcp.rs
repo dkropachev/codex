@@ -40,7 +40,7 @@ use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-const STREAMED_FILE_SIZE: usize = 13 * 1024 * 1024;
+const STREAMED_FILE_SIZE: usize = 2 * 1024 * 1024;
 
 fn write_post_tool_use_hook(home: &Path) -> Result<()> {
     let script_path = home.join("post_tool_use_hook.py");

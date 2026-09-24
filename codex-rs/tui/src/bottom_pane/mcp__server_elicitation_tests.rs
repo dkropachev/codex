@@ -2,6 +2,9 @@ use super::*;
 use crate::app_command::AppCommand as Op;
 use crate::app_event::AppEvent;
 use crate::render::renderable::Renderable;
+use codex_config::types::KeybindingSpec;
+use codex_config::types::KeybindingsSpec;
+use codex_config::types::TuiKeymap;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::unbounded_channel;
@@ -498,6 +501,73 @@ fn horizontal_list_keys_move_between_select_fields() {
     assert_eq!(overlay.current_idx, 1);
     overlay.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
     assert_eq!(overlay.current_idx, 0);
+    overlay.list_keymap.accept.clear();
+    assert!(
+        overlay
+            .footer_tips()
+            .iter()
+            .all(|tip| !tip.text.contains("submit"))
+    );
+}
+
+#[test]
+fn text_fields_inherit_composer_chord_context_and_submit_binding() {
+    let (tx, _rx) = test_sender();
+    let thread_id = ThreadId::default();
+    let request = from_form_request(
+        thread_id,
+        form_request(
+            "Enter a name",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "title": "Name",
+                    }
+                },
+                "required": ["name"],
+            }),
+            /*meta*/ None,
+        ),
+    )
+    .expect("supported text field");
+    let mut config = TuiKeymap::default();
+    config.composer.submit = Some(KeybindingsSpec::One(KeybindingSpec(
+        "ctrl-x enter".to_string(),
+    )));
+    let keymap = RuntimeKeymap::from_config(&config).expect("valid MCP composer chord");
+    let mut overlay = McpServerElicitationOverlay::new_with_keymap(
+        request, tx, /*has_input_focus*/ true, /*enhanced_keys_supported*/ false,
+        /*disable_paste_burst*/ true, keymap,
+    );
+
+    let snapshot = render_snapshot(
+        &overlay,
+        Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 10,
+        ),
+    )
+    .lines()
+    .map(str::trim_end)
+    .collect::<Vec<_>>()
+    .join("\n");
+    insta::assert_snapshot!(
+        "mcp_server_elicitation_text_configured_key_chords",
+        snapshot
+    );
+    assert!(
+        overlay
+            .keymap_contexts()
+            .contains(crate::keymap::KeymapContext::Composer)
+    );
+    overlay.composer_submit_hint = None;
+    assert!(
+        overlay
+            .footer_tips()
+            .iter()
+            .all(|tip| !tip.text.contains("submit"))
+    );
 }
 
 #[test]

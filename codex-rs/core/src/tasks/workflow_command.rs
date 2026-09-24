@@ -13,7 +13,6 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use super::SessionTask;
-use super::SessionTaskContext;
 use super::SessionTaskResult;
 use crate::session::TurnInput;
 use crate::session::session::Session;
@@ -52,12 +51,12 @@ impl SessionTask for WorkflowCommandTask {
 
     async fn run(
         self: Arc<Self>,
-        session: Arc<SessionTaskContext>,
+        session: Arc<Session>,
         turn_context: Arc<TurnContext>,
         _input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
-        session.session.services.session_telemetry.counter(
+        session.services.session_telemetry.counter(
             "codex.task.workflow_command",
             /*inc*/ 1,
             &[],
@@ -70,15 +69,12 @@ impl SessionTask for WorkflowCommandTask {
             model_context_window: turn_context.model_context_window(),
             collaboration_mode_kind: turn_context.mode,
         });
-        session
-            .clone_session()
-            .send_event(turn_context.as_ref(), event)
-            .await;
+        session.send_event(turn_context.as_ref(), event).await;
 
         let markdown = match run_workflow_for_tui(
             &self.workflow_dir,
             &self.input,
-            session.clone_session(),
+            Arc::clone(&session),
             Arc::clone(&turn_context),
             &cancellation_token,
         )
@@ -88,7 +84,6 @@ impl SessionTask for WorkflowCommandTask {
             Ok(None) => return Ok(None),
             Err(message) => {
                 session
-                    .clone_session()
                     .send_event(
                         turn_context.as_ref(),
                         EventMsg::Error(ErrorEvent {
@@ -102,7 +97,7 @@ impl SessionTask for WorkflowCommandTask {
         };
 
         Ok(Some(
-            record_workflow_output(session.clone_session(), turn_context, markdown).await,
+            record_workflow_output(session, turn_context, markdown).await,
         ))
     }
 }

@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use codex_model_provider::create_model_provider;
 use tracing::warn;
 
 use super::TurnInput;
@@ -141,7 +142,15 @@ impl Session {
             let state = self.state.lock().await;
             state.session_configuration.clone()
         };
-        session_configuration.provider = per_turn_config.model_provider.clone();
+        let provider = if previous.provider.info() == &per_turn_config.model_provider {
+            Arc::clone(&previous.provider)
+        } else {
+            create_model_provider(
+                per_turn_config.model_provider.clone(),
+                Some(Arc::clone(&self.services.auth_manager)),
+            )
+        };
+        session_configuration.provider = Arc::clone(&provider);
         let model = per_turn_config
             .model
             .clone()
@@ -185,7 +194,7 @@ impl Session {
             self.session_id(),
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.session_telemetry,
-            per_turn_config.model_provider.clone(),
+            provider,
             &session_configuration,
             previous.multi_agent_version,
             self.services.user_shell.as_ref(),

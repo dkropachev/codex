@@ -3,6 +3,7 @@ mod baseline;
 mod branch;
 mod errors;
 mod fsmonitor;
+mod git_process;
 mod info;
 mod operations;
 mod platform;
@@ -10,6 +11,11 @@ mod pull_request;
 mod review_branch;
 mod review_scope;
 mod review_validation;
+mod status;
+
+/// Git configuration that rejects implicitly discovered bare repositories while
+/// preserving repositories selected explicitly through `GIT_DIR` or `--git-dir`.
+pub const SAFE_BARE_REPOSITORY_CONFIG: &str = "safe.bareRepository=explicit";
 
 pub use apply::ApplyGitRequest;
 pub use apply::ApplyGitResult;
@@ -39,7 +45,6 @@ pub use info::default_branch_name;
 pub use info::get_git_remote_urls;
 pub use info::get_git_remote_urls_assume_git_repo;
 pub use info::get_git_repo_root;
-pub use info::get_has_changes;
 pub use info::get_head_commit_hash;
 pub use info::git_diff_to_remote;
 pub use info::local_git_branches;
@@ -60,3 +65,4 @@ pub use review_scope::ReviewScopePullRequest;
 pub use review_scope::ReviewScopeResolution;
 pub use review_scope::resolve_review_scope;
 pub use review_validation::has_uncommitted_changes;
+pub use status::get_has_changes_in_repo;

@@ -18,6 +18,7 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::WarningEvent;
@@ -891,7 +892,7 @@ async fn resume_conversation(
         path,
         auth_manager,
         /*parent_trace*/ None,
-        /*supports_openai_form_elicitation*/ false,
+        ClientMcpExtensions::default(),
     ))
     .await
     .expect("resume conversation")

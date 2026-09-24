@@ -270,6 +270,7 @@ impl ExecBackend for FakeBackend {
                         sandbox_denied: false,
                     },
                 }),
+                sandbox_type: Some(codex_sandboxing::SandboxType::None),
             })
         })
     }
@@ -398,6 +399,7 @@ impl ExecBackend for SingleProcessBackend {
         Box::pin(async move {
             Ok(StartedExecProcess {
                 process: self.process.clone(),
+                sandbox_type: Some(codex_sandboxing::SandboxType::None),
             })
         })
     }

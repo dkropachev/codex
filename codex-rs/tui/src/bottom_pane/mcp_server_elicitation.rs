@@ -47,8 +47,11 @@ use crate::bottom_pane::selection_popup_common::menu_surface_inset;
 use crate::bottom_pane::selection_popup_common::menu_surface_padding_height;
 use crate::bottom_pane::selection_popup_common::render_menu_surface;
 use crate::bottom_pane::selection_popup_common::render_rows;
-use crate::key_hint::KeyBindingListExt;
+use crate::key_hint::ShortcutHint;
+use crate::keymap::KeymapContext;
+use crate::keymap::ListAction;
 use crate::keymap::ListKeymap;
+use crate::keymap::RuntimeKeymap;
 use crate::render::renderable::Renderable;
 use crate::text_formatting::format_json_compact;
 use crate::text_formatting::truncate_text;
@@ -711,6 +714,7 @@ pub(crate) struct McpServerElicitationOverlay {
     done: bool,
     validation_error: Option<String>,
     list_keymap: ListKeymap,
+    composer_submit_hint: Option<ShortcutHint>,
 }
 
 impl McpServerElicitationOverlay {
@@ -728,7 +732,7 @@ impl McpServerElicitationOverlay {
             has_input_focus,
             enhanced_keys_supported,
             disable_paste_burst,
-            crate::keymap::RuntimeKeymap::defaults().list,
+            RuntimeKeymap::defaults(),
         )
     }
 
@@ -738,8 +742,9 @@ impl McpServerElicitationOverlay {
         has_input_focus: bool,
         enhanced_keys_supported: bool,
         disable_paste_burst: bool,
-        list_keymap: ListKeymap,
+        keymap: RuntimeKeymap,
     ) -> Self {
+        let composer_submit_hint = keymap.primary_hint(KeymapContext::Composer, "submit");
         let mut composer = ChatComposer::new_with_config(
             has_input_focus,
             app_event_tx.clone(),
@@ -748,6 +753,7 @@ impl McpServerElicitationOverlay {
             disable_paste_burst,
             ChatComposerConfig::plain_text(),
         );
+        composer.set_keymap_bindings(&keymap);
         composer.set_footer_hint_override(Some(Vec::new()));
         let mut overlay = Self {
             app_event_tx,
@@ -758,7 +764,8 @@ impl McpServerElicitationOverlay {
             current_idx: 0,
             done: false,
             validation_error: None,
-            list_keymap,
+            list_keymap: keymap.list,
+            composer_submit_hint,
         };
         overlay.reset_for_request();
         overlay.restore_current_draft();
@@ -982,20 +989,21 @@ impl McpServerElicitationOverlay {
     fn footer_tips(&self) -> Vec<FooterTip> {
         let mut tips = Vec::new();
         let is_last_field = self.current_index().saturating_add(1) >= self.field_count();
-        if self.current_field_is_select() {
-            if self.field_count() == 1 {
-                tips.push(FooterTip::highlighted("enter to submit"));
-            } else if is_last_field {
-                tips.push(FooterTip::highlighted("enter to submit all"));
-            } else {
-                tips.push(FooterTip::new("enter to submit answer"));
-            }
-        } else if self.field_count() == 1 {
-            tips.push(FooterTip::highlighted("enter to submit"));
-        } else if is_last_field {
-            tips.push(FooterTip::highlighted("enter to submit all"));
+        let submit_hint = if self.current_field_is_select() {
+            self.list_keymap.primary_hint(ListAction::Accept)
         } else {
-            tips.push(FooterTip::new("enter to submit answer"));
+            self.composer_submit_hint
+        };
+        if let Some(submit_hint) = submit_hint.map(ShortcutHint::display_label) {
+            if self.field_count() == 1 {
+                tips.push(FooterTip::highlighted(format!("{submit_hint} to submit")));
+            } else if is_last_field {
+                tips.push(FooterTip::highlighted(format!(
+                    "{submit_hint} to submit all"
+                )));
+            } else {
+                tips.push(FooterTip::new(format!("{submit_hint} to submit answer")));
+            }
         }
         if self.field_count() > 1 {
             if self.current_field_is_select() {
@@ -1503,6 +1511,14 @@ impl Renderable for McpServerElicitationOverlay {
 }
 
 impl BottomPaneView for McpServerElicitationOverlay {
+    fn keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
+        if self.current_field_is_select() {
+            crate::keymap::KeymapContextSet::new(crate::keymap::KeymapContext::List)
+        } else {
+            self.composer.keymap_contexts()
+        }
+    }
+
     fn prefer_esc_to_handle_key_event(&self) -> bool {
         true
     }
@@ -1512,7 +1528,10 @@ impl BottomPaneView for McpServerElicitationOverlay {
             return;
         }
 
-        if matches!(key_event.code, KeyCode::Esc) {
+        if matches!(key_event.code, KeyCode::Esc)
+            || self.current_field_is_select()
+                && self.list_keymap.action_for(key_event) == Some(ListAction::Cancel)
+        {
             self.dispatch_cancel();
             self.done = true;
             return;
@@ -1559,7 +1578,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 return;
             }
             _ if self.current_field_is_select()
-                && self.list_keymap.move_left.is_pressed(key_event) =>
+                && self.list_keymap.action_for(key_event) == Some(ListAction::MoveLeft) =>
             {
                 self.move_field(/*next*/ false);
                 return;
@@ -1578,7 +1597,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 return;
             }
             _ if self.current_field_is_select()
-                && self.list_keymap.move_right.is_pressed(key_event) =>
+                && self.list_keymap.action_for(key_event) == Some(ListAction::MoveRight) =>
             {
                 self.move_field(/*next*/ true);
                 return;
@@ -1589,28 +1608,28 @@ impl BottomPaneView for McpServerElicitationOverlay {
         if self.current_field_is_select() {
             self.validation_error = None;
             let options_len = self.options_len();
-            match key_event.code {
-                KeyCode::Up | KeyCode::Char('k') => {
+            match (self.list_keymap.action_for(key_event), key_event.code) {
+                (Some(ListAction::MoveUp), _) | (_, KeyCode::Up | KeyCode::Char('k')) => {
                     if let Some(answer) = self.current_answer_mut() {
                         answer.selection.move_up_wrap(options_len);
                         answer.answer_committed = false;
                     }
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
+                (Some(ListAction::MoveDown), _) | (_, KeyCode::Down | KeyCode::Char('j')) => {
                     if let Some(answer) = self.current_answer_mut() {
                         answer.selection.move_down_wrap(options_len);
                         answer.answer_committed = false;
                     }
                 }
-                KeyCode::Backspace | KeyCode::Delete => self.clear_selection(),
-                KeyCode::Char(' ') => self.select_current_option(/*committed*/ true),
-                KeyCode::Enter => {
+                (_, KeyCode::Backspace | KeyCode::Delete) => self.clear_selection(),
+                (_, KeyCode::Char(' ')) => self.select_current_option(/*committed*/ true),
+                (Some(ListAction::Accept), _) | (_, KeyCode::Enter) => {
                     if self.selected_option_index().is_some() {
                         self.select_current_option(/*committed*/ true);
                     }
                     self.go_next_or_submit();
                 }
-                KeyCode::Char(ch) => {
+                (_, KeyCode::Char(ch)) => {
                     if let Some(option_idx) = self.option_index_for_digit(ch) {
                         if let Some(answer) = self.current_answer_mut() {
                             answer.selection.selected_idx = Some(option_idx);

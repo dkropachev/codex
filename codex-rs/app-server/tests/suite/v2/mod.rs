@@ -17,6 +17,8 @@ mod config_rpc;
 mod connection_handling_websocket;
 #[cfg(unix)]
 mod connection_handling_websocket_unix;
+#[cfg(unix)]
+mod curated_mcp_sync;
 mod current_time;
 mod dynamic_tools;
 mod environment_add;
@@ -29,6 +31,7 @@ mod executor_skills;
 mod experimental_api;
 mod experimental_feature_list;
 mod external_agent_config;
+mod external_agent_import_sync;
 mod fs;
 mod git_attribution;
 mod hooks_list;
@@ -45,12 +48,14 @@ mod mcp_tool;
 mod memory_reset;
 mod model_list;
 mod model_provider_capabilities_read;
+mod multi_agent_v2_developer_instructions;
 mod output_schema;
 mod permission_profile_list;
 mod plan_item;
 mod plugin_install;
 mod plugin_list;
 mod plugin_read;
+mod plugin_search;
 mod plugin_share;
 mod plugin_uninstall;
 mod process_exec;
@@ -68,6 +73,7 @@ mod review;
 #[cfg(unix)]
 mod review_pull_request;
 mod review_scope;
+mod rollout_migration;
 mod safety_check_downgrade;
 #[cfg(not(target_os = "windows"))]
 mod selected_capability_stack;
@@ -88,6 +94,7 @@ mod thread_name_websocket;
 mod thread_read;
 mod thread_resume;
 mod thread_rollback;
+mod thread_sections;
 mod thread_settings_update;
 mod thread_shell_command;
 mod thread_start;
@@ -98,6 +105,7 @@ mod turn_interrupt;
 mod turn_start;
 mod turn_start_zsh_fork;
 mod turn_steer;
+mod view_image;
 mod web_search;
 mod windows_sandbox_setup;
 #[cfg(unix)]

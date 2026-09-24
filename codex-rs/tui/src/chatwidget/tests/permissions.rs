@@ -406,6 +406,46 @@ async fn full_access_confirmation_popup_snapshot() {
     assert_chatwidget_snapshot!("full_access_confirmation_popup", popup);
 }
 
+#[tokio::test]
+async fn cyber_model_full_access_confirmation_popup_snapshots() {
+    for auto_review_enabled in [true, false] {
+        let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.set_feature_enabled(Feature::GuardianApproval, auto_review_enabled);
+
+        let current_model = chat.current_model().to_string();
+        let mut model = chat
+            .model_catalog
+            .try_list_models()
+            .expect("model catalog")
+            .into_iter()
+            .find(|model| model.model == current_model)
+            .expect("current model");
+        model.model_specialty = Some("cyber".to_string());
+        chat.model_catalog = Arc::new(ModelCatalog::new(vec![model]));
+
+        let preset = builtin_approval_presets()
+            .into_iter()
+            .find(|preset| preset.id == "full-access")
+            .expect("full access preset");
+        chat.open_full_access_confirmation(
+            preset, /*return_to_permissions*/ false, /*profile_selection*/ None,
+        );
+
+        let popup = render_bottom_popup(&chat, /*width*/ 80);
+        if auto_review_enabled {
+            assert_chatwidget_snapshot!(
+                "cyber_model_full_access_confirmation_popup_approve_for_me",
+                popup
+            );
+        } else {
+            assert_chatwidget_snapshot!(
+                "cyber_model_full_access_confirmation_popup_ask_for_approval",
+                popup
+            );
+        }
+    }
+}
+
 #[cfg(target_os = "windows")]
 #[tokio::test]
 async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
@@ -635,7 +675,6 @@ async fn approvals_popup_shows_disabled_presets() {
     let height = chat.desired_height(width);
     let mut terminal =
         ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, width, height));
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("render approvals popup");

@@ -101,6 +101,9 @@ pub(super) fn validate_user_input_request(
     if args.questions.is_empty() || args.questions.len() > 3 {
         return Err("requestUserInput requires one to three questions".to_string());
     }
+    if !args.is_blocking {
+        return Err("requestUserInput requires isBlocking to be true".to_string());
+    }
     if args.auto_resolution_ms.is_some() {
         return Err("requestUserInput does not support autoResolutionMs".to_string());
     }
@@ -188,7 +191,7 @@ pub fn decode_user_input_request(params: Value) -> Result<RequestUserInputArgs, 
     reject_unknown_fields(
         params,
         "requestUserInput params",
-        &["questions", "autoResolutionMs"],
+        &["questions", "isBlocking", "autoResolutionMs"],
     )?;
     if params.contains_key("autoResolutionMs") {
         return Err("requestUserInput does not support autoResolutionMs".to_string());

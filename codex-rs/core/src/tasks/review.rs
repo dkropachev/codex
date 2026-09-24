@@ -24,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::config::Constrained;
+use crate::context::ContextWindowGuidance;
 use crate::context::ContextualUserFragment;
 use crate::context::PullRequestContext;
 use crate::model_policy::ModelPolicySource;
@@ -34,7 +35,6 @@ use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 
 use super::SessionTask;
-use super::SessionTaskContext;
 use super::SessionTaskResult;
 
 #[derive(Clone, Copy)]
@@ -57,16 +57,15 @@ impl SessionTask for ReviewTask {
 
     async fn run(
         self: Arc<Self>,
-        session: Arc<SessionTaskContext>,
+        session: Arc<Session>,
         ctx: Arc<TurnContext>,
         input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
-        session.session.services.session_telemetry.counter(
-            "codex.task.review",
-            /*inc*/ 1,
-            &[],
-        );
+        session
+            .services
+            .session_telemetry
+            .counter("codex.task.review", /*inc*/ 1, &[]);
 
         let mut user_input = Vec::new();
         for item in input {
@@ -89,18 +88,18 @@ impl SessionTask for ReviewTask {
             None => None,
         };
         if !cancellation_token.is_cancelled() {
-            exit_review_mode(session.clone_session(), output.clone(), ctx.clone()).await;
+            exit_review_mode(Arc::clone(&session), output.clone(), ctx.clone()).await;
         }
         Ok(None)
     }
 
-    async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
-        exit_review_mode(session.clone_session(), /*review_output*/ None, ctx).await;
+    async fn abort(&self, session: Arc<Session>, ctx: Arc<TurnContext>) {
+        exit_review_mode(session, /*review_output*/ None, ctx).await;
     }
 }
 
 async fn start_review_conversation(
-    session: Arc<SessionTaskContext>,
+    session: Arc<Session>,
     ctx: Arc<TurnContext>,
     input: Vec<UserInput>,
     cancellation_token: CancellationToken,
@@ -117,9 +116,6 @@ async fn start_review_conversation(
     }
     let _ = sub_agent_config.features.disable(Feature::Collab);
     let _ = sub_agent_config.features.disable(Feature::MultiAgentV2);
-    // Review children must retain the exact selected-scope user prompt; token-budget compaction
-    // replaces history with world state and would otherwise drop that separate prompt.
-    let _ = sub_agent_config.features.disable(Feature::TokenBudget);
 
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
@@ -148,16 +144,44 @@ async fn start_review_conversation(
     ) {
         tracing::warn!("failed to apply review model policy: {err}");
     }
+    let model = sub_agent_config
+        .model
+        .as_deref()
+        .unwrap_or(ctx.model_info.slug.as_str());
+    let model_info = session
+        .services
+        .models_manager
+        .get_model_info(model, &sub_agent_config.to_models_manager_config())
+        .await;
+    crate::session::apply_token_budget_model_defaults(&mut sub_agent_config, &model_info);
+    let token_budget_guidance = sub_agent_config
+        .token_budget
+        .as_ref()
+        .and_then(|config| config.guidance_message.as_deref())
+        .filter(|message| !message.trim().is_empty())
+        .map(|message| ContextWindowGuidance::new(message).render());
+    // Review children must retain the exact selected-scope user prompt; token-budget compaction
+    // replaces history with world state and would otherwise drop that separate prompt.
+    let _ = sub_agent_config.features.disable(Feature::TokenBudget);
+    if let Some(guidance) = token_budget_guidance {
+        let developer_instructions = sub_agent_config
+            .developer_instructions
+            .get_or_insert_default();
+        if !developer_instructions.is_empty() {
+            developer_instructions.push_str("\n\n");
+        }
+        developer_instructions.push_str(&guidance);
+    }
     let mut thread_extension_init = ExtensionDataInit::default();
     if let Some(context) = pull_request_context {
         thread_extension_init.insert(context.as_ref().clone());
     }
     (run_codex_thread_one_shot(
         sub_agent_config,
-        session.auth_manager(),
-        session.models_manager(),
+        Arc::clone(&session.services.auth_manager),
+        Arc::clone(&session.services.models_manager),
         input,
-        session.clone_session(),
+        Arc::clone(&session),
         ctx.clone(),
         cancellation_token,
         SubAgentSource::Review,
@@ -171,7 +195,7 @@ async fn start_review_conversation(
 }
 
 async fn process_review_events(
-    session: Arc<SessionTaskContext>,
+    session: Arc<Session>,
     ctx: Arc<TurnContext>,
     receiver: async_channel::Receiver<Event>,
 ) -> Option<ReviewOutputEvent> {
@@ -180,10 +204,7 @@ async fn process_review_events(
         match event.clone().msg {
             EventMsg::AgentMessage(_) => {
                 if let Some(prev) = prev_agent_message.take() {
-                    session
-                        .clone_session()
-                        .send_event(ctx.as_ref(), prev.msg)
-                        .await;
+                    session.send_event(ctx.as_ref(), prev.msg).await;
                 }
                 prev_agent_message = Some(event);
             }
@@ -208,10 +229,7 @@ async fn process_review_events(
                 return None;
             }
             other => {
-                session
-                    .clone_session()
-                    .send_event(ctx.as_ref(), other)
-                    .await;
+                session.send_event(ctx.as_ref(), other).await;
             }
         }
     }

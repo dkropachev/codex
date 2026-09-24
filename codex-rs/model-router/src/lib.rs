@@ -376,6 +376,7 @@ pub fn estimate_task_usage(prompt_bytes: usize, task_class: RouterTaskClass) -> 
         output_tokens,
         reasoning_output_tokens: 0,
         total_tokens: input_tokens.saturating_add(output_tokens),
+        codex_rollout_budget_units: None,
     }
 }
 
@@ -484,6 +485,7 @@ mod tests {
             output_tokens: 200_000,
             reasoning_output_tokens: 50_000,
             total_tokens: 1_700_000,
+            codex_rollout_budget_units: None,
         };
         let price = TokenPrice {
             input_per_million: 2.0,

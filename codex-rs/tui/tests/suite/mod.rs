@@ -1,6 +1,8 @@
 // Aggregates all former standalone integration tests as modules.
 #[path = "account_pool__live.rs"]
 mod account_pool_live;
+#[cfg(unix)]
+mod focus_palette;
 #[path = "mcp__live.rs"]
 mod mcp_live;
 #[path = "plugins__live.rs"]

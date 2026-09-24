@@ -8,7 +8,9 @@ use super::NetworkPolicyAmendment;
 use super::RequestPermissionProfile;
 use super::UserInput;
 use super::shared::v2_enum_from_core;
-use crate::protocol::item_builders::command_actions_for_path_uri;
+use crate::JsonSchema;
+use crate::TS;
+use crate::protocol::item_builders::CommandExecutionPresentation;
 use crate::protocol::item_builders::convert_patch_changes;
 use crate::protocol::item_builders::review_finding_count;
 use crate::protocol::item_builders::review_output_text;
@@ -42,10 +44,8 @@ use codex_protocol::protocol::GuardianUserAuthorization as CoreGuardianUserAutho
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SubAgentActivityKind as CoreSubAgentActivityKind;
-use codex_shell_command::parse_command::shlex_join;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
-use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -53,7 +53,6 @@ use serde_with::serde_as;
 use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
-use ts_rs::TS;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -123,7 +122,7 @@ pub enum CommandAction {
     Read {
         command: String,
         name: String,
-        path: AbsolutePathBuf,
+        path: LegacyAppPathString,
     },
     ListFiles {
         command: String,
@@ -187,7 +186,7 @@ impl CommandAction {
             } => CoreParsedCommand::Read {
                 cmd,
                 name,
-                path: path.into_path_buf(),
+                path: PathBuf::from(path.into_string()),
             },
             CommandAction::ListFiles { command: cmd, path } => {
                 CoreParsedCommand::ListFiles { cmd, path }
@@ -206,7 +205,7 @@ impl CommandAction {
             CoreParsedCommand::Read { cmd, name, path } => CommandAction::Read {
                 command: cmd,
                 name,
-                path: cwd.join(path),
+                path: cwd.join(path).into(),
             },
             CoreParsedCommand::ListFiles { cmd, path } => {
                 CommandAction::ListFiles { command: cmd, path }
@@ -318,6 +317,7 @@ pub enum ThreadItem {
         /// Deprecated: use `appContext.resourceUri` instead.
         mcp_app_resource_uri: Option<String>,
         plugin_id: Option<String>,
+        read_only_hint: Option<bool>,
         result: Option<Box<McpToolCallResult>>,
         error: Option<McpToolCallError>,
         /// The duration of the MCP tool call in milliseconds.
@@ -843,24 +843,31 @@ impl From<CoreTurnItem> for ThreadItem {
                 summary: reasoning.summary_text,
                 content: reasoning.raw_content,
             },
-            CoreTurnItem::CommandExecution(command) => ThreadItem::CommandExecution {
-                id: command.id,
-                plugin_id: command.plugin_id,
-                script_path: command.script_path,
-                command: shlex_join(&command.command),
-                cwd: command.cwd.clone().into(),
-                process_id: command.process_id,
-                source: command.source.into(),
-                status: command.status.into(),
-                command_actions: command_actions_for_path_uri(&command.parsed_cmd, &command.cwd),
-                aggregated_output: command
-                    .aggregated_output
-                    .filter(|output| !output.is_empty()),
-                exit_code: command.exit_code,
-                duration_ms: command
-                    .duration
-                    .and_then(|duration| i64::try_from(duration.as_millis()).ok()),
-            },
+            CoreTurnItem::CommandExecution(command) => {
+                let presentation = CommandExecutionPresentation::from_raw(
+                    &command.command,
+                    &command.parsed_cmd,
+                    &command.cwd,
+                );
+                ThreadItem::CommandExecution {
+                    id: command.id,
+                    plugin_id: command.plugin_id,
+                    script_path: command.script_path,
+                    command: presentation.command,
+                    cwd: command.cwd.clone().into(),
+                    process_id: command.process_id,
+                    source: command.source.into(),
+                    status: command.status.into(),
+                    command_actions: presentation.command_actions,
+                    aggregated_output: command
+                        .aggregated_output
+                        .filter(|output| !output.is_empty()),
+                    exit_code: command.exit_code,
+                    duration_ms: command
+                        .duration
+                        .and_then(|duration| i64::try_from(duration.as_millis()).ok()),
+                }
+            }
             CoreTurnItem::DynamicToolCall(call) => ThreadItem::DynamicToolCall {
                 id: call.id,
                 namespace: call.namespace,
@@ -924,6 +931,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     status: image.status,
                     revised_prompt: image.revised_prompt,
                     result: image.result,
+                    transparent_background: None,
                     saved_path: image.saved_path,
                 })
             }
@@ -965,6 +973,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     }),
                     mcp_app_resource_uri: mcp.mcp_app_resource_uri,
                     plugin_id: mcp.plugin_id,
+                    read_only_hint: mcp.read_only_hint,
                     result: mcp.result.map(McpToolCallResult::from).map(Box::new),
                     error: mcp.error.map(McpToolCallError::from),
                     duration_ms,
@@ -1626,7 +1635,7 @@ pub struct ToolRequestUserInputQuestion {
     pub options: Option<Vec<ToolRequestUserInputOption>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 /// EXPERIMENTAL. Params sent with a request_user_input event.
@@ -1635,9 +1644,41 @@ pub struct ToolRequestUserInputParams {
     pub turn_id: String,
     pub item_id: String,
     pub questions: Vec<ToolRequestUserInputQuestion>,
+    pub is_blocking: bool,
+    /// @deprecated Use `isBlocking` to decide whether the request should block.
     #[serde(default)]
     #[ts(type = "number | null")]
     pub auto_resolution_ms: Option<u64>,
+}
+
+impl<'de> Deserialize<'de> for ToolRequestUserInputParams {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct WireToolRequestUserInputParams {
+            thread_id: String,
+            turn_id: String,
+            item_id: String,
+            questions: Vec<ToolRequestUserInputQuestion>,
+            is_blocking: Option<bool>,
+            auto_resolution_ms: Option<u64>,
+        }
+
+        let wire = WireToolRequestUserInputParams::deserialize(deserializer)?;
+        Ok(Self {
+            thread_id: wire.thread_id,
+            turn_id: wire.turn_id,
+            item_id: wire.item_id,
+            questions: wire.questions,
+            is_blocking: wire
+                .is_blocking
+                .unwrap_or(wire.auto_resolution_ms.is_none()),
+            auto_resolution_ms: wire.auto_resolution_ms,
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
