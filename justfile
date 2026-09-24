@@ -85,6 +85,10 @@ test *args:
 test *args:
     $env:RUST_MIN_STACK = "{{ rust_min_stack }}"; $env:NEXTEST_PROFILE = "local"; cargo nextest run --no-fail-fast @($args | Select-Object -Skip 1)
 
+# Exercise the embedded TypeScript workflow runner. Requires `bun` on PATH.
+workflow-runtime-test:
+    just test -p codex-core --lib bun_runner_serializes_concurrent_user_input_requests --run-ignored all
+
 # Run from the repository root so scripts that resolve paths from `cwd` see
 # the same layout they use in GitHub Actions.
 [no-cd]

@@ -764,8 +764,16 @@ and the request returns immediately with `{}`. Clients should keep their normal 
 visible for the complete lifecycle:
 
 - `turn/started`
+- zero or more `item/tool/requestUserInput` server requests while the workflow is waiting for
+  deterministic user input; clients must answer each with `ToolRequestUserInputResponse` before the
+  workflow can continue
 - `item/started` and `item/completed` for the formatted assistant message
 - `turn/completed`
+
+Workflow input requests are serialized, so at most one is outstanding for the turn. Resuming the
+live thread replays an unresolved request with the same request ID and payload; resolved requests
+are not replayed. Interrupting the turn resolves any pending server request, terminates the workflow
+process, and completes the turn as interrupted without recording partial workflow output.
 
 ```json
 { "method": "thread/workflowCommand", "id": 27, "params": {

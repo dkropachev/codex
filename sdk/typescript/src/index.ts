@@ -38,3 +38,11 @@ export type {
   WebSearchMode,
 } from "./threadOptions";
 export type { TurnOptions } from "./turnOptions";
+export type {
+  WorkflowContext,
+  WorkflowUserInputAnswer,
+  WorkflowUserInputOption,
+  WorkflowUserInputQuestion,
+  WorkflowUserInputRequest,
+  WorkflowUserInputResponse,
+} from "./workflowContext";

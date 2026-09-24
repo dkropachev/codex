@@ -137,6 +137,15 @@ openssl-sys = { workspace = true, features = ["vendored"] }
 [target.'cfg(unix)'.dependencies]
 codex-shell-escalation = { workspace = true }
 
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.52"
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+]
+
 [dev-dependencies]
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }

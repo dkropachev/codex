@@ -2767,6 +2767,7 @@ dependencies = [
  "walkdir",
  "which 8.0.0",
  "whoami 1.6.1",
+ "windows-sys 0.52.0",
  "wiremock",
  "zstd",
 ]
