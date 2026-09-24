@@ -1,9 +1,6 @@
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use codex_async_utils::CancelErr;
-use codex_async_utils::OrCancelExt;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
@@ -11,7 +8,6 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
 use serde_json::Value;
-use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
 use super::SessionTask;
@@ -22,39 +18,12 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 
+mod runtime;
+
+use runtime::run_workflow_for_tui;
+
 const WORKFLOW_OUTPUT_MAX_BYTES: usize = 40 * 1024;
 const WORKFLOW_ERROR_MAX_BYTES: usize = 4 * 1024;
-
-const WORKFLOW_TUI_RUNNER: &str = r#"
-const path = await import("node:path");
-const { pathToFileURL } = await import("node:url");
-
-const rawInput = process.argv[1] ?? "{}";
-const input = JSON.parse(rawInput);
-const workflowModule = await import(pathToFileURL(path.join(process.cwd(), "src/workflow.ts")).href);
-const workflow = workflowModule.default ?? workflowModule;
-if (!workflow || typeof workflow.run !== "function" || typeof workflow.format !== "function") {
-  throw new Error("Workflow must export run() and format().");
-}
-
-const context = { progress: () => {} };
-if (input && typeof input === "object" && typeof input.workingDirectory === "string") {
-  context.workingDirectory = input.workingDirectory;
-  context.cwd = input.workingDirectory;
-  context.currentWorkingDirectory = input.workingDirectory;
-  context.repoRoot = input.workingDirectory;
-}
-
-const result = await workflow.run(context, input);
-const formatted = await workflow.format(result, { format: "tui.markdown.v1" });
-if (!formatted || typeof formatted.markdown !== "string") {
-  throw new Error("Workflow formatter did not return markdown for tui.markdown.v1.");
-}
-process.stdout.write(formatted.markdown);
-if (!formatted.markdown.endsWith("\n")) {
-  process.stdout.write("\n");
-}
-"#;
 
 #[derive(Clone)]
 pub(crate) struct WorkflowCommandTask {
@@ -108,6 +77,8 @@ impl SessionTask for WorkflowCommandTask {
         let markdown = match run_workflow_for_tui(
             &self.workflow_dir,
             &self.input,
+            session.clone_session(),
+            Arc::clone(&turn_context),
             &cancellation_token,
         )
         .await
@@ -157,54 +128,6 @@ pub(crate) async fn record_workflow_output(
         .await;
     session.ensure_rollout_materialized().await;
     markdown
-}
-
-async fn run_workflow_for_tui(
-    workflow_dir: &Path,
-    input: &Value,
-    cancellation_token: &CancellationToken,
-) -> Result<Option<String>, String> {
-    let input_json = serde_json::to_string(input)
-        .map_err(|err| format!("failed to serialize workflow input: {err}"))?;
-    let mut command = Command::new("bun");
-    command
-        .current_dir(workflow_dir)
-        .arg("--eval")
-        .arg(WORKFLOW_TUI_RUNNER)
-        .arg("--")
-        .arg(input_json)
-        .kill_on_drop(true);
-
-    let output = match command.output().or_cancel(cancellation_token).await {
-        Ok(Ok(output)) => output,
-        Ok(Err(err)) => {
-            return Err(format!("failed to start workflow command: {err}"));
-        }
-        Err(CancelErr::Cancelled) => return Ok(None),
-    };
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let details = if !stderr.trim().is_empty() {
-            stderr.as_ref()
-        } else {
-            stdout.as_ref()
-        };
-        let details = truncate_error_output(details);
-        return Err(format!(
-            "workflow command failed with status {}: {}",
-            output.status.code().map_or_else(
-                || "terminated by signal".to_string(),
-                |code| code.to_string()
-            ),
-            details.trim()
-        ));
-    }
-
-    String::from_utf8(output.stdout)
-        .map(Some)
-        .map_err(|err| format!("workflow output was not valid UTF-8: {err}"))
 }
 
 fn truncate_workflow_output(mut text: String) -> String {

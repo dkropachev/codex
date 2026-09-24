@@ -15,14 +15,19 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadWorkflowCommandParams;
 use codex_app_server_protocol::ThreadWorkflowCommandResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnInterruptParams;
+use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
@@ -31,15 +36,22 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_protocol::models::MessagePhase;
 use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
+use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::path::PathBuf;
+use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const WORKFLOW_MARKDOWN: &str = "# Workflow E2E\n\nmarker=workflow-e2e\n";
+const WORKFLOW_COMPLETE_FRAME: &str = r##"{"v":1,"id":0,"method":"complete","params":{"markdown":"# Workflow E2E\n\nmarker=workflow-e2e\n"}}"##;
+const WORKFLOW_USER_INPUT_MARKDOWN_PREFIX: &str = "# Workflow User Input E2E\n\nresponse=";
+const WORKFLOW_USER_INPUT_FRAME: &str = r#"{"v":1,"id":1,"method":"requestUserInput","params":{"questions":[{"id":"deploy_target","header":"Target","question":"Where should the workflow deploy?","isOther":false,"isSecret":false,"options":[{"label":"Staging","description":"Deploy to the staging environment."},{"label":"Production","description":"Deploy to the production environment."}]},{"id":"release_note","header":"Note","question":"What should the release note say?","isOther":false,"isSecret":false,"options":null}]}}"#;
+const WORKFLOW_USER_INPUT_FRAME_2: &str = r#"{"v":1,"id":2,"method":"requestUserInput","params":{"questions":[{"id":"confirm","header":"Confirm","question":"Continue with this deployment?","isOther":false,"isSecret":false,"options":[{"label":"Yes","description":"Continue."},{"label":"No","description":"Stop."}]}]}}"#;
 
 #[tokio::test]
 async fn thread_workflow_command_records_assistant_output_and_next_turn_context() -> Result<()> {
@@ -129,15 +141,8 @@ async fn thread_workflow_command_records_assistant_output_and_next_turn_context(
     let completed = wait_for_agent_message_completed(&mut mcp, WORKFLOW_MARKDOWN).await?;
     assert_agent_message(&completed.item, WORKFLOW_MARKDOWN);
 
-    let workflow_turn_completed: TurnCompletedNotification = serde_json::from_value(
-        timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("turn/completed"),
-        )
-        .await??
-        .params
-        .context("missing workflow turn/completed params")?,
-    )?;
+    let workflow_turn_completed: TurnCompletedNotification =
+        read_notification(&mut mcp, "turn/completed").await?;
     assert_eq!(workflow_turn_completed.thread_id, thread.id);
     assert_eq!(workflow_turn_completed.turn.id, workflow_turn_id);
 
@@ -197,6 +202,234 @@ async fn thread_workflow_command_records_assistant_output_and_next_turn_context(
     assert!(request_body.contains("follow up after workflow"));
     assert!(request_body.contains("# Workflow E2E"));
     assert!(request_body.contains("marker=workflow-e2e"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_workflow_command_round_trips_choice_and_freeform_user_input() -> Result<()> {
+    skip_if_remote!(
+        Ok(()),
+        "`thread/workflowCommand` runs on the app-server local environment"
+    );
+    let mut fixture = start_user_input_workflow().await?;
+
+    let request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        fixture.mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let original_request = request.clone();
+    let ServerRequest::ToolRequestUserInput {
+        request_id: _,
+        params,
+    } = request
+    else {
+        panic!("expected workflow request_user_input request, got {request:?}");
+    };
+    assert_eq!(
+        serde_json::to_value(params)?,
+        expected_workflow_user_input_params(
+            &fixture.thread_id,
+            &fixture.turn_id,
+            /*item_id*/ 1,
+            WORKFLOW_USER_INPUT_FRAME,
+        )?
+    );
+
+    let ThreadResumeResponse { thread, .. } =
+        resume_thread(&mut fixture.mcp, &fixture.thread_id).await?;
+    assert_eq!(thread.id, fixture.thread_id);
+    assert!(
+        thread
+            .turns
+            .iter()
+            .any(|turn| turn.id == fixture.turn_id && turn.status == TurnStatus::InProgress)
+    );
+
+    let replayed_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        fixture.mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    assert_eq!(replayed_request, original_request);
+    let ServerRequest::ToolRequestUserInput { request_id, .. } = replayed_request else {
+        panic!("expected replayed workflow request_user_input request");
+    };
+
+    let response_value = json!({
+        "answers": {
+            "deploy_target": { "answers": ["Staging"] },
+            "release_note": { "answers": ["user_note: Ship after smoke tests."] },
+        }
+    });
+    let resolved_request_id = request_id.clone();
+    fixture
+        .mcp
+        .send_response(request_id, response_value.clone())
+        .await?;
+    let resolved: ServerRequestResolvedNotification =
+        read_notification(&mut fixture.mcp, "serverRequest/resolved").await?;
+    assert_eq!(resolved.thread_id, fixture.thread_id);
+    assert_eq!(resolved.request_id, resolved_request_id);
+
+    let request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        fixture.mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let second_original_request = request.clone();
+    let ServerRequest::ToolRequestUserInput {
+        request_id: _,
+        params,
+    } = request
+    else {
+        panic!("expected second workflow request_user_input request, got {request:?}");
+    };
+    assert_eq!(
+        serde_json::to_value(params)?,
+        expected_workflow_user_input_params(
+            &fixture.thread_id,
+            &fixture.turn_id,
+            /*item_id*/ 2,
+            WORKFLOW_USER_INPUT_FRAME_2,
+        )?
+    );
+
+    let ThreadResumeResponse { thread, .. } =
+        resume_thread(&mut fixture.mcp, &fixture.thread_id).await?;
+    assert!(
+        thread
+            .turns
+            .iter()
+            .any(|turn| turn.id == fixture.turn_id && turn.status == TurnStatus::InProgress)
+    );
+    let replayed_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        fixture.mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    assert_eq!(replayed_request, second_original_request);
+    let ServerRequest::ToolRequestUserInput { request_id, .. } = replayed_request else {
+        panic!("expected replayed second workflow request_user_input request");
+    };
+
+    let second_response = json!({ "answers": { "confirm": { "answers": ["Yes"] } } });
+    let resolved_request_id = request_id.clone();
+    fixture
+        .mcp
+        .send_response(request_id, second_response.clone())
+        .await?;
+    let resolved: ServerRequestResolvedNotification =
+        read_notification(&mut fixture.mcp, "serverRequest/resolved").await?;
+    assert_eq!(resolved.request_id, resolved_request_id);
+
+    let started: ItemStartedNotification =
+        read_notification(&mut fixture.mcp, "item/started").await?;
+    let workflow_markdown = agent_message_text(&started.item)
+        .context("workflow output should be an agent message")?
+        .to_string();
+    let response_frame = workflow_markdown
+        .strip_prefix(WORKFLOW_USER_INPUT_MARKDOWN_PREFIX)
+        .and_then(|text| text.strip_suffix('\n'))
+        .context("workflow output should contain the exact response frame")?;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(response_frame)?,
+        json!([
+            { "v": 1, "id": 1, "result": response_value },
+            { "v": 1, "id": 2, "result": second_response },
+        ])
+    );
+
+    let completed = wait_for_agent_message_completed(&mut fixture.mcp, &workflow_markdown).await?;
+    assert_agent_message(&completed.item, &workflow_markdown);
+    let workflow_turn_completed: TurnCompletedNotification =
+        read_notification(&mut fixture.mcp, "turn/completed").await?;
+    assert_eq!(workflow_turn_completed.thread_id, fixture.thread_id);
+    assert_eq!(workflow_turn_completed.turn.id, fixture.turn_id);
+    assert_eq!(workflow_turn_completed.turn.status, TurnStatus::Completed);
+    assert_child_process_exited(&fixture.child_pid_path).await?;
+
+    let ThreadResumeResponse { thread, .. } =
+        resume_thread(&mut fixture.mcp, &fixture.thread_id).await?;
+    assert_eq!(thread.id, fixture.thread_id);
+    assert!(
+        timeout(
+            Duration::from_millis(/*millis*/ 100),
+            fixture.mcp.read_stream_until_request_message(),
+        )
+        .await
+        .is_err(),
+        "resolved workflow input requests must not replay"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_workflow_command_interrupt_clears_pending_user_input() -> Result<()> {
+    skip_if_remote!(
+        Ok(()),
+        "`thread/workflowCommand` runs on the app-server local environment"
+    );
+    let mut fixture = start_user_input_workflow().await?;
+
+    let request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        fixture.mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::ToolRequestUserInput { request_id, params } = request else {
+        panic!("expected workflow request_user_input request, got {request:?}");
+    };
+    assert_eq!(
+        serde_json::to_value(params)?,
+        expected_workflow_user_input_params(
+            &fixture.thread_id,
+            &fixture.turn_id,
+            /*item_id*/ 1,
+            WORKFLOW_USER_INPUT_FRAME,
+        )?
+    );
+
+    let interrupt_id = fixture
+        .mcp
+        .send_turn_interrupt_request(TurnInterruptParams {
+            thread_id: fixture.thread_id.clone(),
+            turn_id: fixture.turn_id.clone(),
+        })
+        .await?;
+    let interrupt_resp = read_response(&mut fixture.mcp, interrupt_id).await?;
+    let _: TurnInterruptResponse = to_response(interrupt_resp)?;
+    let resolved: ServerRequestResolvedNotification =
+        read_notification(&mut fixture.mcp, "serverRequest/resolved").await?;
+    assert_eq!(resolved.thread_id, fixture.thread_id);
+    assert_eq!(resolved.request_id, request_id);
+
+    let workflow_turn_completed: TurnCompletedNotification =
+        read_notification(&mut fixture.mcp, "turn/completed").await?;
+    assert_eq!(workflow_turn_completed.thread_id, fixture.thread_id);
+    assert_eq!(workflow_turn_completed.turn.id, fixture.turn_id);
+    assert_eq!(workflow_turn_completed.turn.status, TurnStatus::Interrupted);
+    assert_child_process_exited(&fixture.child_pid_path).await?;
+
+    let read_id = fixture
+        .mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: fixture.thread_id.clone(),
+            include_turns: true,
+        })
+        .await?;
+    let read_resp = read_response(&mut fixture.mcp, read_id).await?;
+    let ThreadReadResponse { thread, .. } = to_response::<ThreadReadResponse>(read_resp)?;
+    assert!(
+        thread
+            .turns
+            .iter()
+            .flat_map(|turn| &turn.items)
+            .all(|item| !matches!(item, ThreadItem::AgentMessage { .. })),
+        "interrupted workflow should not persist partial assistant output"
+    );
 
     Ok(())
 }
@@ -309,18 +542,143 @@ async fn thread_workflow_command_rejects_active_turn() -> Result<()> {
         })?,
     )
     .await?;
-    let completed: TurnCompletedNotification = serde_json::from_value(
-        timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("turn/completed"),
-        )
-        .await??
-        .params
-        .context("missing turn/completed params")?,
-    )?;
+    let completed: TurnCompletedNotification =
+        read_notification(&mut mcp, "turn/completed").await?;
     assert_eq!(completed.turn.id, turn.id);
 
     Ok(())
+}
+
+struct RunningUserInputWorkflow {
+    _temp_dir: TempDir,
+    _server: wiremock::MockServer,
+    mcp: TestAppServer,
+    thread_id: String,
+    turn_id: String,
+    child_pid_path: PathBuf,
+}
+
+async fn start_user_input_workflow() -> Result<RunningUserInputWorkflow> {
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let workflow_dir = tmp.path().join("workflow");
+    std::fs::create_dir(&workflow_dir)?;
+    let child_pid_path = workflow_dir.join("child.pid");
+    let fake_bin = tmp.path().join("fake_bin");
+    std::fs::create_dir(&fake_bin)?;
+    write_fake_bun(fake_bin.as_path())?;
+    let path_value = path_with_prepended_dir(fake_bin.as_path())?;
+
+    let server = create_mock_responses_server_sequence(Vec::new()).await;
+    write_mock_responses_config_toml(
+        codex_home.as_path(),
+        &server.uri(),
+        &BTreeMap::default(),
+        i64::MAX,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "Summarize the conversation.",
+    )?;
+    let env = [("PATH", Some(path_value.as_str()))];
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.as_path())
+        .with_env_overrides(&env)
+        .build()
+        .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let start_resp = read_response(&mut mcp, start_id).await?;
+    let ThreadStartResponse { thread, .. } = to_response(start_resp)?;
+    let workflow_id = mcp
+        .send_thread_workflow_command_request(ThreadWorkflowCommandParams {
+            thread_id: thread.id.clone(),
+            workflow_dir: workflow_dir.to_string_lossy().to_string(),
+            input: json!({ "marker": "workflow-user-input" }),
+        })
+        .await?;
+    let workflow_resp = read_response(&mut mcp, workflow_id).await?;
+    let _: ThreadWorkflowCommandResponse = to_response(workflow_resp)?;
+    let started: TurnStartedNotification = read_notification(&mut mcp, "turn/started").await?;
+    assert_eq!(started.thread_id, thread.id);
+    assert_eq!(started.turn.status, TurnStatus::InProgress);
+
+    Ok(RunningUserInputWorkflow {
+        _temp_dir: tmp,
+        _server: server,
+        mcp,
+        thread_id: thread.id,
+        turn_id: started.turn.id,
+        child_pid_path,
+    })
+}
+
+fn expected_workflow_user_input_params(
+    thread_id: &str,
+    turn_id: &str,
+    item_id: u64,
+    frame: &str,
+) -> Result<serde_json::Value> {
+    let frame: serde_json::Value = serde_json::from_str(frame)?;
+    Ok(json!({
+        "threadId": thread_id,
+        "turnId": turn_id,
+        "itemId": format!("workflow-user-input-{turn_id}-{item_id}"),
+        "questions": frame["params"]["questions"],
+        "autoResolutionMs": null,
+    }))
+}
+
+async fn read_response(mcp: &mut TestAppServer, id: i64) -> Result<JSONRPCResponse> {
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(id)),
+    )
+    .await?
+}
+
+async fn resume_thread(mcp: &mut TestAppServer, thread_id: &str) -> Result<ThreadResumeResponse> {
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread_id.to_string(),
+            ..Default::default()
+        })
+        .await?;
+    to_response(read_response(mcp, resume_id).await?)
+}
+
+async fn read_notification<T: DeserializeOwned>(
+    mcp: &mut TestAppServer,
+    method: &str,
+) -> Result<T> {
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message(method),
+    )
+    .await??;
+    Ok(serde_json::from_value(
+        notification.params.context("missing notification params")?,
+    )?)
+}
+
+async fn assert_child_process_exited(pid_path: &Path) -> Result<()> {
+    let pid = std::fs::read_to_string(pid_path)?;
+    for _ in 0..50 {
+        if !std::process::Command::new("kill")
+            .args(["-0", pid.trim()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()?
+            .success()
+        {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(/*millis*/ 20)).await;
+    }
+    anyhow::bail!("workflow child process {pid} survived workflow termination")
 }
 
 async fn wait_for_agent_message_started(
@@ -381,7 +739,7 @@ fn write_fake_bun(fake_bin: &Path) -> Result<()> {
     std::fs::write(
         &bun_path,
         format!(
-            r#"#!/bin/sh
+            r##"#!/bin/sh
 set -eu
 if [ "${{1:-}}" != "--eval" ]; then
   echo "missing --eval" >&2
@@ -399,15 +757,27 @@ if [ "${{3:-}}" != "--" ]; then
   exit 66
 fi
 case "${{4:-}}" in
-  *'"marker":"workflow-e2e"'*) ;;
+  *'"marker":"workflow-e2e"'*)
+    printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{WORKFLOW_COMPLETE_FRAME}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
+    IFS= read -r _completion_ack
+    ;;
+  *'"marker":"workflow-user-input"'*)
+    (while :; do printf 'worker noise\n' >&2; sleep 0.01; done) &
+    printf '%s\n' "$!" > child.pid
+    printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{WORKFLOW_USER_INPUT_FRAME}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
+    IFS= read -r first_response
+    printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{WORKFLOW_USER_INPUT_FRAME_2}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
+    IFS= read -r second_response
+    responses=$(printf '[%s,%s]' "$first_response" "$second_response" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    printf '\036CODEX_WORKFLOW_CONTROL {{"v":1,"id":0,"method":"complete","params":{{"markdown":"# Workflow User Input E2E\\n\\nresponse=%s\\n"}}}}\n' "$responses" >> "$CODEX_WORKFLOW_CONTROL_PATH"
+    IFS= read -r _completion_ack
+    ;;
   *)
     echo "workflow input missing marker" >&2
     exit 67
     ;;
 esac
-cat <<'EOF'
-{WORKFLOW_MARKDOWN}EOF
-"#
+"##
         ),
     )?;
     let mut permissions = std::fs::metadata(&bun_path)?.permissions();
