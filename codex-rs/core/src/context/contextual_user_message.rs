@@ -10,7 +10,6 @@ use super::LegacyModelMismatchWarning;
 use super::LegacyUnifiedExecProcessLimitWarning;
 use super::PullRequestContext;
 use super::RecommendedPluginsInstructions;
-use super::SkillInstructions;
 use super::SubagentNotification;
 use super::TurnAborted;
 use super::UserInstructions;
@@ -21,7 +20,7 @@ const CONTEXTUAL_USER_FRAGMENT_MATCHERS: &[fn(&str) -> bool] = &[
     UserInstructions::matches_text,
     EnvironmentsState::matches_text,
     AdditionalContextUserFragment::matches_text,
-    SkillInstructions::matches_text,
+    codex_skills_extension::is_skill_prompt_fragment,
     UserShellCommand::matches_text,
     TurnAborted::matches_text,
     SubagentNotification::matches_text,

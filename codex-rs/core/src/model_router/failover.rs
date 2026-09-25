@@ -136,6 +136,7 @@ pub(crate) fn model_router_failure_scope(err: &CodexErr) -> Option<ModelRouterFa
         | CodexErrorDetails::Spawn
         | CodexErrorDetails::SessionConfiguredNotFirstEvent
         | CodexErrorDetails::CyberPolicy { .. }
+        | CodexErrorDetails::MisalignmentPolicyViolation { .. }
         | CodexErrorDetails::InternalAgentDied
         | CodexErrorDetails::ToolCollision(_)
         | CodexErrorDetails::Io(_)

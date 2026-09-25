@@ -44,10 +44,12 @@ use tracing::warn;
 
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::ShellType;
 use crate::tools::network_approval::DeferredNetworkApproval;
+use codex_core_plugins::PluginMetricsSidecar;
 
 mod async_watcher;
 mod errors;
@@ -83,15 +85,15 @@ const SOURCE_READ_DEDUPE_SUGGESTION_KEY: &str = "exec.source-read-dedupe-v1";
 
 pub(crate) struct UnifiedExecContext {
     pub session: Arc<Session>,
-    pub turn: Arc<TurnContext>,
+    pub step_context: Arc<StepContext>,
     pub call_id: String,
 }
 
 impl UnifiedExecContext {
-    pub fn new(session: Arc<Session>, turn: Arc<TurnContext>, call_id: String) -> Self {
+    pub fn new(session: Arc<Session>, step_context: Arc<StepContext>, call_id: String) -> Self {
         Self {
             session,
-            turn,
+            step_context,
             call_id,
         }
     }
@@ -183,6 +185,7 @@ impl Default for UnifiedExecProcessManager {
 
 struct ProcessEntry {
     process: Arc<UnifiedExecProcess>,
+    plugin_metrics_sidecar: Option<SharedPluginMetricsSidecar>,
     call_id: String,
     process_id: i32,
     cwd: PathUri,
@@ -196,6 +199,17 @@ struct ProcessEntry {
     tool_router_output_optimization_enabled: bool,
     model_slug: String,
     model_provider: String,
+}
+
+type SharedPluginMetricsSidecar = Arc<std::sync::Mutex<Option<PluginMetricsSidecar>>>;
+
+fn take_plugin_metrics_sidecar(
+    sidecar: &SharedPluginMetricsSidecar,
+) -> Option<PluginMetricsSidecar> {
+    sidecar
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
 }
 
 pub(crate) fn clamp_yield_time(yield_time_ms: u64) -> u64 {
@@ -279,6 +293,7 @@ pub(crate) async fn compact_exec_output_with_policy(
 pub(crate) struct ExecOutputCompactionTurnRequest<'a> {
     pub(crate) session: &'a Session,
     pub(crate) turn: &'a TurnContext,
+    pub(crate) model_slug: &'a str,
     pub(crate) tool_name: &'a str,
     pub(crate) call_id: &'a str,
     pub(crate) command: &'a [String],
@@ -293,6 +308,7 @@ pub(crate) async fn compact_exec_output_for_turn(
     let ExecOutputCompactionTurnRequest {
         session,
         turn,
+        model_slug,
         tool_name,
         call_id,
         command,
@@ -314,7 +330,7 @@ pub(crate) async fn compact_exec_output_for_turn(
     compact_exec_output_with_policy(
         ExecOutputCompactionPolicy {
             state_db: state_db.as_deref(),
-            model_slug: turn.model_info.slug.as_str(),
+            model_slug,
             model_provider: turn.config.model_provider_id.as_str(),
             tool_name,
             tool_router_output_optimization_enabled: turn

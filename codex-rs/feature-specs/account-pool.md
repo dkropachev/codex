@@ -449,7 +449,7 @@ reporting, rate-limit status reads, and non-mutating status refresh behavior.
 - Account read reports active members: codex-rs/app-server/tests/suite/v2/account_pool__app_server_account.rs:get_account_with_chatgpt_pool
 - Account read reports unavailable members: codex-rs/app-server/tests/suite/v2/account_pool__app_server_account.rs:get_account_with_chatgpt_pool_reports_unavailable_members
 - Rate-limit status reads are non-mutating: codex-rs/app-server/tests/suite/v2/account_pool__app_server_account.rs:get_account_rate_limits_read_does_not_activate_chatgpt_pool_member
-- Token usage status reads are non-mutating: codex-rs/app-server/tests/suite/v2/account_pool__app_server_account.rs:get_account_token_usage_read_does_not_activate_chatgpt_pool_member
+- Token usage status reads are non-mutating and omit thread usage without an active thread: codex-rs/app-server/tests/suite/v2/account_pool__app_server_account.rs:get_account_token_usage_read_does_not_activate_chatgpt_pool_member
 
 ### cli (main CLI command behavior)
 

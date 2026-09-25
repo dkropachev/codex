@@ -108,7 +108,12 @@ fn access_token_expired(auth: &CodexAuth) -> bool {
 }
 
 async fn refresh_account_pools(config: &Config, pool_id: Option<&str>) -> ! {
-    let manager = AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
+    let manager = AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false)
+        .await
+        .unwrap_or_else(|err| {
+            eprintln!("Failed to initialize authentication: {err}");
+            std::process::exit(1);
+        });
     let Some(report) = manager.refresh_account_pool_usage_report(pool_id).await else {
         eprintln!("No account pools configured");
         std::process::exit(1);

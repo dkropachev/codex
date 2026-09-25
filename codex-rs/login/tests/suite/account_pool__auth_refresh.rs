@@ -104,7 +104,7 @@ async fn refresh_token_uses_active_account_pool_member() -> Result<()> {
         },
     };
     let auth_manager =
-        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await?;
     auth_manager.auth().await.context("pool auth should load")?;
 
     auth_manager

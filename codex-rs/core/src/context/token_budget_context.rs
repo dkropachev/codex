@@ -1,4 +1,6 @@
 use super::ContextualUserFragment;
+use super::world_state::PreviousSectionState;
+use super::world_state::WorldStateSection;
 use codex_features::TokenBudgetMode;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -46,6 +48,10 @@ impl ContextualUserFragment for TokenBudgetContext {
         "developer"
     }
 
+    fn requires_separate_message(&self) -> bool {
+        true
+    }
+
     fn markers(&self) -> (&'static str, &'static str) {
         Self::type_markers()
     }
@@ -73,6 +79,26 @@ impl ContextualUserFragment for TokenBudgetContext {
             lines.push(mcp_result.clone());
         }
         format!("\n{}\n", lines.join("\n"))
+    }
+}
+
+impl WorldStateSection for TokenBudgetContext {
+    const ID: &'static str = "context_window";
+    type Snapshot = String;
+
+    fn snapshot(&self) -> Self::Snapshot {
+        match self.mode {
+            TokenBudgetMode::Thread => format!("thread:{}", self.thread_id),
+            TokenBudgetMode::Name => self.agent_path.to_string(),
+        }
+    }
+
+    fn render_diff(
+        &self,
+        previous: PreviousSectionState<'_, Self::Snapshot>,
+    ) -> Option<Box<dyn ContextualUserFragment>> {
+        matches!(previous, PreviousSectionState::Known(identity) if identity != &self.snapshot())
+            .then(|| Box::new(self.clone()) as Box<dyn ContextualUserFragment>)
     }
 }
 

@@ -5,11 +5,16 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core::TurnInputRequest;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
+use codex_utils_output_truncation::approx_token_count;
 use core_test_support::TempDirExt;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
@@ -106,14 +111,10 @@ async fn tool_call_output_configured_limit_chars_type() -> Result<()> {
     );
 
     assert!(
-        (400000..=401000).contains(&output.len()),
-        "we should be almost 100k tokens"
+        output.contains("tokens truncated"),
+        "shell output should contain a context-limit marker: {output}"
     );
-
-    assert!(
-        !output.contains("tokens truncated"),
-        "shell output should not contain tokens truncated marker: {output}"
-    );
+    assert!(approx_token_count(&output) <= 10_000);
 
     Ok(())
 }
@@ -267,7 +268,7 @@ Output:
 4
 5
 6
-.*…137224 tokens truncated.*
+.*…\d+ tokens truncated.*
 99999
 100000
 $"#;
@@ -524,30 +525,27 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
 
     fixture
         .codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "call the rmcp image tool".into(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_selections(fixture.cwd.abs())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile: Some(permission_profile),
-                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
-                    mode: codex_protocol::config_types::ModeKind::Default,
-                    settings: codex_protocol::config_types::Settings {
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    settings: Settings {
                         model: session_model,
                         reasoning_effort: None,
                         developer_instructions: None,
                     },
                 }),
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await?;
 
     // Wait for completion to ensure the outbound request is captured.
@@ -733,9 +731,9 @@ async fn shell_command_output_not_truncated_with_custom_limit() -> Result<()> {
     Ok(())
 }
 
-// MCP server output should also remain intact when the config increases the token limit.
+// MCP server output honors a larger configured limit up to the per-item context cap.
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
+async fn mcp_tool_call_output_custom_limit_respects_context_cap() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -822,15 +820,11 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
         .function_call_output_text(call_id)
         .context("function_call_output present for rmcp call")?;
 
-    assert_eq!(
-        output.len(),
-        80065,
-        "MCP output should retain its serialized length plus wall-time header"
-    );
     assert!(
-        !output.contains("truncated"),
-        "output should not include truncation markers when limit is raised: {output}"
+        output.contains("tokens truncated"),
+        "output should be capped even when the configured limit is larger: {output}"
     );
+    assert!(approx_token_count(&output) <= 10_000);
 
     Ok(())
 }

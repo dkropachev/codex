@@ -46,6 +46,10 @@ impl ContextualUserFragment for PullRequestContext {
         "user"
     }
 
+    fn requires_separate_message(&self) -> bool {
+        true
+    }
+
     fn markers(&self) -> (&'static str, &'static str) {
         Self::type_markers()
     }
