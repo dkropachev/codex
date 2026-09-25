@@ -41,7 +41,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::LazyLock;
 
-const MAX_MODEL_CONTEXT_ITEM_TOKENS: usize = 10_000;
+pub(crate) const MAX_MODEL_CONTEXT_ITEM_TOKENS: usize = 10_000;
 const MAX_MODEL_CONTEXT_OUTPUT_PAYLOAD_TOKENS: usize = 9_800;
 const MAX_MODEL_CONTEXT_CALL_ID_BYTES: usize = 1_024;
 const MAX_OUTPUT_CONTENT_ITEMS_TO_SCAN: usize = 1_024;

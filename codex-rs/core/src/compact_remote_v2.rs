@@ -16,6 +16,7 @@ use crate::compact_model_fallback::should_retry_with_current_model;
 use crate::compact_remote::should_keep_compacted_history_item;
 use crate::compact_remote_history::HistoryItemGroup;
 use crate::compact_remote_history::history_item_groups;
+use crate::context_manager::MAX_MODEL_CONTEXT_ITEM_TOKENS;
 use crate::context_manager::estimate_item_token_count;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
@@ -610,7 +611,10 @@ fn truncate_retained_messages(
             content_tokens.max(1)
         };
         let token_count = source_tokens.saturating_add(notice_tokens);
-        if token_count <= remaining {
+        let exceeds_item_budget = charge_images
+            && usize::try_from(estimate_item_token_count(&group.source.item)).unwrap_or(usize::MAX)
+                > MAX_MODEL_CONTEXT_ITEM_TOKENS;
+        if token_count <= remaining && !exceeds_item_budget {
             if let Some(notice) = group.attached_notice {
                 truncated_reversed.push(notice);
             }
@@ -622,6 +626,11 @@ fn truncate_retained_messages(
                 available_tokens.saturating_sub(source_tokens.saturating_sub(content_tokens))
             } else {
                 available_tokens
+            };
+            let content_budget = if charge_images {
+                content_budget.min(MAX_MODEL_CONTEXT_ITEM_TOKENS)
+            } else {
+                content_budget
             };
             let image_count = retained_input_image_count(&group.source.item);
             if charge_images && image_count > 0 {
@@ -658,7 +667,31 @@ fn truncate_retained_messages(
                     truncated_item = adjusted;
                 }
             }
-            if let Some(notice) = group.attached_notice {
+            if charge_images {
+                let item_tokens = usize::try_from(estimate_item_token_count(&truncated_item.item))
+                    .unwrap_or(usize::MAX);
+                if item_tokens > MAX_MODEL_CONTEXT_ITEM_TOKENS {
+                    let retained_content_tokens = message_content_token_count(&truncated_item.item);
+                    let adjusted_budget = retained_content_tokens
+                        .saturating_sub(item_tokens - MAX_MODEL_CONTEXT_ITEM_TOKENS)
+                        .saturating_sub(1);
+                    let Some(adjusted) =
+                        images::truncate_message_to_token_budget(truncated_item, adjusted_budget)
+                    else {
+                        continue;
+                    };
+                    if usize::try_from(estimate_item_token_count(&adjusted.item))
+                        .unwrap_or(usize::MAX)
+                        > MAX_MODEL_CONTEXT_ITEM_TOKENS
+                    {
+                        continue;
+                    }
+                    truncated_item = adjusted;
+                }
+            }
+            let retained_all_images =
+                retained_input_image_count(&truncated_item.item) == image_count;
+            if retained_all_images && let Some(notice) = group.attached_notice {
                 truncated_reversed.push(notice);
             }
             truncated_reversed.push(truncated_item);

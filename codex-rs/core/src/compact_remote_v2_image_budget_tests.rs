@@ -1,4 +1,8 @@
 use super::*;
+use crate::context::ContextualUserFragment;
+use crate::context::ImageResizeNotice;
+use crate::context::ImageResizeNoticeSource;
+use crate::context::ResizedImage;
 use codex_protocol::models::image_close_tag_text;
 use codex_protocol::models::local_image_open_tag_text_with_path;
 use pretty_assertions::assert_eq;
@@ -35,6 +39,20 @@ fn trim(items: Vec<ResponseItem>, max_tokens: usize) -> Vec<ResponseItem> {
     .into_iter()
     .map(ResponseItemEnvelope::into_item)
     .collect()
+}
+
+fn resize_notice(image_count: usize) -> ResponseItem {
+    ContextualUserFragment::into(ImageResizeNotice::new(
+        ImageResizeNoticeSource::UserMessage,
+        vec![ResizedImage {
+            image_number: 1,
+            image_count,
+            source_width: 3200,
+            source_height: 3200,
+            prepared_width: 2048,
+            prepared_height: 2048,
+        }],
+    ))
 }
 
 #[test]
@@ -86,6 +104,42 @@ fn later_image_parts_preserve_labels_and_audio() {
         *content = parts[start..].to_vec();
         assert_eq!(trim(vec![source.clone()], max_tokens), vec![expected]);
     }
+}
+
+#[test]
+fn retained_image_message_respects_context_item_limit() {
+    let source = message(vec![image(); 6]);
+    let expected = message(vec![image(); 5]);
+
+    let retained = trim(vec![source], RETAINED_MESSAGE_TOKEN_BUDGET);
+
+    assert_eq!(retained, vec![expected]);
+    assert!(
+        estimate_item_token_count(&retained[0])
+            <= i64::try_from(MAX_MODEL_CONTEXT_ITEM_TOKENS).unwrap_or(i64::MAX)
+    );
+}
+
+#[test]
+fn image_notice_is_retained_only_when_all_source_images_survive() {
+    let source = message(vec![image(), image(), text("keep")]);
+    let notice = resize_notice(/*image_count*/ 2);
+    let retained_source = message(vec![image(), text("keep")]);
+    let boundary_budget = message_text_token_count(&notice).max(1)
+        + images::content_item_token_count(&image())
+        + images::content_item_token_count(&text("keep"));
+
+    assert_eq!(
+        trim(vec![source.clone(), notice.clone()], boundary_budget),
+        vec![retained_source]
+    );
+    assert_eq!(
+        trim(
+            vec![source.clone(), notice.clone()],
+            RETAINED_MESSAGE_TOKEN_BUDGET
+        ),
+        vec![source, notice]
+    );
 }
 
 #[test]
