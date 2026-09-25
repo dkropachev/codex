@@ -246,6 +246,8 @@ pub(crate) mod helpers;
 mod history_replay;
 #[path = "tests/mcp_startup.rs"]
 mod mcp_startup;
+#[path = "tests/misalignment_policy_tests.rs"]
+mod misalignment_policy;
 mod permissions;
 mod plan_mode;
 #[path = "tests/plugin_catalog_tests.rs"]

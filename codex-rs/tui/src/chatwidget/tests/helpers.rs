@@ -44,6 +44,7 @@ pub(super) fn normalize_snapshot_paths(text: impl Into<String>) -> String {
             text = text.replace(&platform_path, unix_path);
         }
     }
+    text = text.replace("/tmp/project\\", "/tmp/project/");
 
     let platform_test_cwd = test_path_display("/tmp/project");
     if platform_test_cwd == "/tmp/project" {
@@ -784,6 +785,7 @@ pub(super) fn replay_agent_message(
             text: text.into(),
             phase: Some(MessagePhase::FinalAnswer),
             memory_citation: None,
+            delivery: None,
         },
         "turn-1".to_string(),
         replay_kind,
@@ -936,6 +938,7 @@ pub(super) fn complete_assistant_message(
                 text: text.to_string(),
                 phase,
                 memory_citation: None,
+                delivery: None,
             },
         }),
         /*replay_kind*/ None,

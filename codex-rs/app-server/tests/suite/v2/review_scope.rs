@@ -27,6 +27,7 @@ use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcessEvent;
 use codex_exec_server::ProcessId;
+use codex_exec_server::WriteFileOptions;
 use core_test_support::skip_if_target_windows;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -89,6 +90,7 @@ PATH = "review-test-bin:/usr/local/bin:/usr/bin:/bin"
         .write_file(
             &selected_cwd.join("base.txt")?,
             b"base\n".to_vec(),
+            WriteFileOptions::default(),
             /*sandbox*/ None,
         )
         .await?;
@@ -105,6 +107,7 @@ PATH = "review-test-bin:/usr/local/bin:/usr/bin:/bin"
         .write_file(
             &selected_cwd.join("feature.txt")?,
             b"feature\n".to_vec(),
+            WriteFileOptions::default(),
             /*sandbox*/ None,
         )
         .await?;
@@ -137,7 +140,10 @@ PATH = "review-test-bin:/usr/local/bin:/usr/bin:/bin"
     file_system
         .create_directory(
             &fake_bin,
-            CreateDirectoryOptions { recursive: true },
+            CreateDirectoryOptions {
+                recursive: true,
+                follow_symlinks: true,
+            },
             /*sandbox*/ None,
         )
         .await?;
@@ -159,7 +165,12 @@ fi
 "#,
     );
     file_system
-        .write_file(&fake_gh, fake_gh_script.into_bytes(), /*sandbox*/ None)
+        .write_file(
+            &fake_gh,
+            fake_gh_script.into_bytes(),
+            WriteFileOptions::default(),
+            /*sandbox*/ None,
+        )
         .await?;
     run_selected(&mcp, &["chmod", "+x", "review-test-bin/gh"]).await?;
 

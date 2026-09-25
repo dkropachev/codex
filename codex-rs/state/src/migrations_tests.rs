@@ -115,6 +115,8 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
         vec![
             (55, "rollout migration state".to_string()),
             (56, "thread section appearance".to_string()),
+            (57, "projects".to_string()),
+            (58, "threads section empty preview indexes".to_string()),
         ]
     );
 
@@ -157,6 +159,14 @@ SELECT
         SELECT 1 FROM pragma_table_info('threads')
         WHERE name = 'section_position'
     ) AS has_section_position,
+    EXISTS(
+        SELECT 1 FROM sqlite_master
+        WHERE type = 'table' AND name = 'projects'
+    ) AS has_projects,
+    EXISTS(
+        SELECT 1 FROM pragma_table_info('threads')
+        WHERE name = 'project_id'
+    ) AS has_project_id,
     (
         SELECT COUNT(*) FROM sqlite_master
         WHERE type = 'table' AND name IN ('agent_jobs', 'agent_job_items')
@@ -177,9 +187,11 @@ SELECT
             schema.get::<i64, _>("has_thread_sections"),
             schema.get::<i64, _>("has_thread_section_id"),
             schema.get::<i64, _>("has_section_position"),
+            schema.get::<i64, _>("has_projects"),
+            schema.get::<i64, _>("has_project_id"),
             schema.get::<i64, _>("agent_job_table_count"),
         ),
-        (1, 1, 1, 1, 1, 1, 1, 1, 1, 0)
+        (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0)
     );
 
     pool.close().await;

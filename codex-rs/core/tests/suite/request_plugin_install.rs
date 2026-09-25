@@ -118,7 +118,7 @@ fn configure_apps_without_search_tool(config: &mut Config, apps_base_url: &str) 
 
 async fn mount_recommendations(server: &wiremock::MockServer, response: ResponseTemplate) {
     Mock::given(method("GET"))
-        .and(path("/ps/plugins/suggested"))
+        .and(path("/ps/plugins/suggested/codex"))
         .and(query_param("scope", "GLOBAL"))
         .respond_with(response)
         .mount(server)
@@ -208,7 +208,7 @@ async fn start_gated_step_preparation(test: &TestCodex, server: &MockServer) -> 
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|request| request.url.path() == "/ps/plugins/suggested")
+        .filter(|request| request.url.path() == "/ps/plugins/suggested/codex")
         .count();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
@@ -232,7 +232,7 @@ async fn start_gated_step_preparation(test: &TestCodex, server: &MockServer) -> 
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let mcp_started = fs
-                .read_file_text(&pid_file, /*sandbox*/ None)
+                .read_file_text(&pid_file, Default::default(), /*sandbox*/ None)
                 .await
                 .is_ok_and(|pid| !pid.trim().is_empty());
             let recommendation_count = server
@@ -240,7 +240,7 @@ async fn start_gated_step_preparation(test: &TestCodex, server: &MockServer) -> 
                 .await
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|request| request.url.path() == "/ps/plugins/suggested")
+                .filter(|request| request.url.path() == "/ps/plugins/suggested/codex")
                 .count();
             if mcp_started && recommendation_count > prior_recommendation_count {
                 break;
@@ -311,20 +311,34 @@ async fn resolve_install_elicitation(
 
 async fn mount_remote_calendar_recommendation(server: &wiremock::MockServer) {
     Mock::given(method("GET"))
-        .and(path("/ps/plugins/suggested"))
+        .and(path("/ps/plugins/suggested/codex"))
         .and(query_param("scope", "GLOBAL"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "enabled": true,
             "plugins": [{
                 "id": REMOTE_CALENDAR_PLUGIN_ID,
                 "name": "calendar",
-                "status": "ENABLED",
-                "installation_policy": "AVAILABLE",
-                "release": {
-                    "display_name": "Calendar",
-                    "app_ids": [CALENDAR_CONNECTOR_ID]
-                }
+                "display_name": "Calendar"
             }]
+        })))
+        .expect(1)
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/ps/plugins/{REMOTE_CALENDAR_PLUGIN_ID}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": REMOTE_CALENDAR_PLUGIN_ID,
+            "name": "calendar",
+            "scope": "GLOBAL",
+            "status": "ENABLED",
+            "installation_policy": "AVAILABLE",
+            "authentication_policy": "ON_USE",
+            "release": {
+                "display_name": "Calendar",
+                "description": "Manage calendar events.",
+                "app_ids": [CALENDAR_CONNECTOR_ID],
+                "interface": {}
+            }
         })))
         .expect(1)
         .mount(server)
@@ -387,9 +401,7 @@ async fn mcp_discovery_overlaps_endpoint_plugin_recommendations() -> Result<()> 
             "plugins": [{
                 "id": "plugin_github",
                 "name": "github",
-                "status": "ENABLED",
-                "installation_policy": "AVAILABLE",
-                "release": {"display_name": "GitHub"}
+                "display_name": "GitHub"
             }]
         })),
     )
@@ -411,7 +423,12 @@ async fn mcp_discovery_overlaps_endpoint_plugin_recommendations() -> Result<()> 
         "sampling should wait for the complete MCP catalog"
     );
     test.fs()
-        .write_file(&barrier, b"ready".to_vec(), /*sandbox*/ None)
+        .write_file(
+            &barrier,
+            b"ready".to_vec(),
+            Default::default(),
+            /*sandbox*/ None,
+        )
         .await?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -476,7 +493,12 @@ async fn interrupting_concurrent_step_preparation_prevents_sampling() -> Result<
     );
 
     test.fs()
-        .write_file(&barrier, b"ready".to_vec(), /*sandbox*/ None)
+        .write_file(
+            &barrier,
+            b"ready".to_vec(),
+            Default::default(),
+            /*sandbox*/ None,
+        )
         .await?;
     test.codex.shutdown_and_wait().await?;
     assert!(
@@ -670,16 +692,12 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
                 {
                     "id": "plugin_google_calendar",
                     "name": "google-calendar",
-                    "status": "ENABLED",
-                    "installation_policy": "AVAILABLE",
-                    "release": {"display_name": "Google Calendar"}
+                    "display_name": "Google Calendar"
                 },
                 {
                     "id": "plugin_github",
                     "name": "github",
-                    "status": "ENABLED",
-                    "installation_policy": "AVAILABLE",
-                    "release": {"display_name": "GitHub"}
+                    "display_name": "GitHub"
                 }
             ]
         })),
@@ -739,8 +757,7 @@ async fn endpoint_mode_injects_candidates_hides_list_and_rejects_invented_ids() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn endpoint_recommendation_adds_install_identity_only_to_elicitation_metadata() -> Result<()>
-{
+async fn endpoint_recommendation_hydrates_install_identity_after_selection() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     run_remote_plugin_install_metadata_case().await
@@ -759,16 +776,30 @@ async fn run_remote_plugin_install_metadata_case() -> Result<()> {
             "plugins": [{
                 "id": REMOTE_PLUGIN_ID,
                 "name": "github",
-                "status": "ENABLED",
-                "installation_policy": "AVAILABLE",
-                "release": {
-                    "display_name": "GitHub",
-                    "app_ids": [APP_CONNECTOR_ID]
-                }
+                "display_name": "GitHub"
             }]
         })),
     )
     .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/ps/plugins/{REMOTE_PLUGIN_ID}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": REMOTE_PLUGIN_ID,
+            "name": "github",
+            "scope": "GLOBAL",
+            "status": "ENABLED",
+            "installation_policy": "AVAILABLE",
+            "authentication_policy": "ON_USE",
+            "release": {
+                "display_name": "GitHub",
+                "description": "Work with GitHub repositories.",
+                "app_ids": [APP_CONNECTOR_ID],
+                "interface": {}
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
     let call_id = "install-github";
     let mock = mount_sse_sequence(
         &server,
@@ -813,6 +844,82 @@ async fn run_remote_plugin_install_metadata_case() -> Result<()> {
         assert!(!body.contains(REMOTE_PLUGIN_ID));
         assert!(!body.contains(APP_CONNECTOR_ID));
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn endpoint_recommendation_skips_unavailable_plugin_elicitation() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    const REMOTE_PLUGIN_ID: &str = "plugin_connector_github";
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    mount_recommendations(
+        &server,
+        ResponseTemplate::new(200).set_body_json(json!({
+            "enabled": true,
+            "plugins": [{
+                "id": REMOTE_PLUGIN_ID,
+                "name": "github",
+                "display_name": "GitHub"
+            }]
+        })),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/ps/plugins/{REMOTE_PLUGIN_ID}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": REMOTE_PLUGIN_ID,
+            "name": "github",
+            "scope": "GLOBAL",
+            "status": "DISABLED_BY_ADMIN",
+            "installation_policy": "AVAILABLE",
+            "authentication_policy": "ON_USE",
+            "release": {
+                "display_name": "GitHub",
+                "description": "Work with GitHub repositories.",
+                "app_ids": ["connector_github"],
+                "interface": {}
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let call_id = "install-unavailable-github";
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    REQUEST_PLUGIN_INSTALL_TOOL_NAME,
+                    &serde_json::to_string(&json!({
+                        "plugin_id": "github@openai-curated-remote",
+                        "suggest_reason": "Use GitHub for this request"
+                    }))?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let test = build_test(&server, &apps_server).await?;
+
+    test.submit_turn("use GitHub").await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].function_call_output_text(call_id).as_deref(),
+        Some("The recommended plugins for this turn are no longer available.")
+    );
     Ok(())
 }
 
@@ -951,7 +1058,7 @@ async fn endpoint_mode_with_no_eligible_candidates_exposes_no_suggestion_tools()
             "plugins": [{
                 "id": "plugin_google_calendar",
                 "name": "google-calendar",
-                "release": {"display_name": "Google Calendar"}
+                "display_name": "Google Calendar"
             }]
         })),
     )

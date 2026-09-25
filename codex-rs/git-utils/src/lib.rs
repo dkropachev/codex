@@ -12,6 +12,7 @@ mod review_branch;
 mod review_scope;
 mod review_validation;
 mod status;
+mod trust;
 
 /// Git configuration that rejects implicitly discovered bare repositories while
 /// preserving repositories selected explicitly through `GIT_DIR` or `--git-dir`.
@@ -49,7 +50,6 @@ pub use info::get_head_commit_hash;
 pub use info::git_diff_to_remote;
 pub use info::local_git_branches;
 pub use info::recent_commits;
-pub use info::resolve_root_git_project_for_trust;
 pub use platform::create_symlink;
 pub use pull_request::PullRequestMetadata;
 pub use pull_request::ResolvedPullRequestReview;
@@ -66,3 +66,4 @@ pub use review_scope::ReviewScopeResolution;
 pub use review_scope::resolve_review_scope;
 pub use review_validation::has_uncommitted_changes;
 pub use status::get_has_changes_in_repo;
+pub use trust::resolve_root_git_project_for_trust;
