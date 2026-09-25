@@ -1,5 +1,8 @@
 use core_test_support::test_codex::local_selections;
 use std::fs;
+use std::hash::DefaultHasher;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::path::Path;
 
 use anyhow::Context;
@@ -1287,6 +1290,294 @@ async fn remote_manual_compact_chatgpt_auth_reuses_service_tier_and_prompt_cache
         "After five varied ChatGPT-auth turns, remote manual compaction reuses service_tier and prompt_cache_key while omitting responses-only fields.",
     )
     .await?;
+
+    Ok(())
+}
+
+#[test_case(None; "default_preserves_images")]
+#[test_case(Some(false); "disabled_preserves_images")]
+#[test_case(Some(true); "enabled_trims_images")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_charges_retained_images_to_token_budget(
+    image_budget_enabled: Option<bool>,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_auto_env_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(move |config| {
+                let _ = config.features.enable(Feature::RemoteCompactionV2);
+                let _ = config.features.enable(Feature::ImageResizeNotice);
+                if let Some(enabled) = image_budget_enabled {
+                    let _ = config
+                        .features
+                        .set_enabled(Feature::CompactionImageBudget, enabled);
+                }
+            }),
+    )
+    .await?;
+    let codex = &harness.test().codex;
+    // Each high-detail image has an estimated cost of about 1,844 tokens. The
+    // 2100px-wide source is resized to ensure a real resize notice is emitted.
+    let image_inputs = (1..=8)
+        .map(|number| {
+            let image = image::ImageBuffer::from_pixel(
+                /*width*/ 2100,
+                /*height*/ 300,
+                image::Luma([number as u8]),
+            );
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            image.write_to(&mut bytes, image::ImageFormat::Png)?;
+            Ok(UserInput::Image {
+                image_url: format!(
+                    "data:image/png;base64,{}",
+                    BASE64_STANDARD.encode(bytes.get_ref())
+                ),
+                detail: Some(codex_protocol::models::ImageDetail::High),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut input = image_inputs[..7].to_vec();
+    input.push(UserInput::Text {
+        text: "Compare these images".to_string(),
+        text_elements: Vec::new(),
+    });
+    let initial_mock = mount_sse_once(
+        harness.server(),
+        sse(vec![
+            responses::ev_assistant_message("initial", "done"),
+            responses::ev_completed("initial"),
+        ]),
+    )
+    .await;
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(input))
+        .await?;
+    wait_for_turn_complete(codex).await;
+    let initial_request = initial_mock.single_request();
+    let prepared_images = initial_request.message_input_image_urls("user");
+    assert_eq!(prepared_images.len(), 7);
+    let initial_resize_notice = initial_request
+        .message_input_texts("developer")
+        .into_iter()
+        .find(|text| text.contains("<image_resize_notice>"))
+        .expect("resized initial images should emit a notice");
+
+    let mut appended_prepared_image = None;
+    for cycle in 1..=2 {
+        let compact_mock = mount_sse_once(
+            harness.server(),
+            sse(vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": { "type": "compaction", "encrypted_content": "IMAGE_BUDGET_SUMMARY" },
+                }),
+                responses::ev_completed("compact-images"),
+            ]),
+        )
+        .await;
+        codex.submit(Op::Compact).await?;
+        wait_for_turn_complete(codex).await;
+        let compact_request = compact_mock.single_request();
+        assert_eq!(compact_request.path(), "/v1/responses");
+        assert_eq!(
+            compact_request.inputs_of_type("compaction_trigger").len(),
+            1
+        );
+
+        let follow_up_mock = mount_sse_once(
+            harness.server(),
+            sse(vec![
+                responses::ev_assistant_message("after", "done"),
+                responses::ev_completed("after"),
+            ]),
+        )
+        .await;
+        codex
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "after compact".to_string(),
+                text_elements: Vec::new(),
+            }]))
+            .await?;
+        wait_for_turn_complete(codex).await;
+        let follow_up = follow_up_mock.single_request();
+        assert_eq!(
+            follow_up.inputs_of_type("compaction")[0]["encrypted_content"],
+            "IMAGE_BUDGET_SUMMARY"
+        );
+        let mut expected_images = if image_budget_enabled == Some(true) {
+            // A retained ResponseItem is capped at 10,000 estimated tokens, so
+            // the original seven-image message keeps its newest five images.
+            prepared_images[2..].to_vec()
+        } else {
+            prepared_images.clone()
+        };
+        if cycle == 2 {
+            expected_images.push(
+                appended_prepared_image
+                    .clone()
+                    .expect("the appended image should be prepared during the first cycle"),
+            );
+        }
+        let actual_images = follow_up.message_input_image_urls("user");
+        let image_fingerprints = |images: &[String]| {
+            images
+                .iter()
+                .map(|image| {
+                    let mut hasher = DefaultHasher::new();
+                    image.hash(&mut hasher);
+                    hasher.finish()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            image_fingerprints(&actual_images),
+            image_fingerprints(&expected_images)
+        );
+        assert_eq!(
+            follow_up
+                .message_input_texts("developer")
+                .contains(&initial_resize_notice),
+            image_budget_enabled != Some(true),
+            "the original resize notice should remain only when all of its images remain"
+        );
+        assert!(
+            follow_up
+                .message_input_texts("user")
+                .iter()
+                .any(|text| text == "Compare these images")
+        );
+
+        if cycle == 1 {
+            let append_mock = mount_sse_once(
+                harness.server(),
+                sse(vec![
+                    responses::ev_assistant_message("append", "done"),
+                    responses::ev_completed("append"),
+                ]),
+            )
+            .await;
+            codex
+                .start_or_steer_turn(TurnInputRequest::user_input(vec![image_inputs[7].clone()]))
+                .await?;
+            wait_for_turn_complete(codex).await;
+            let append_request = append_mock.single_request();
+            appended_prepared_image = append_request
+                .message_input_image_urls("user")
+                .into_iter()
+                .last();
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_enforces_aggregate_image_budget_across_messages() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_auto_env_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                let _ = config.features.enable(Feature::RemoteCompactionV2);
+                let _ = config.features.enable(Feature::CompactionImageBudget);
+            }),
+    )
+    .await?;
+    let image_urls = (1..=8)
+        .map(|number| {
+            let image = image::ImageBuffer::from_pixel(
+                /*width*/ 1,
+                /*height*/ 1,
+                image::Luma([number as u8]),
+            );
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            image.write_to(&mut bytes, image::ImageFormat::Png)?;
+            Ok(format!(
+                "data:image/png;base64,{}",
+                BASE64_STANDARD.encode(bytes.get_ref())
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let initial_history = image_urls
+        .iter()
+        .map(|image_url| {
+            RolloutItem::ResponseItem(
+                ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: (0..5)
+                        .map(|_| ContentItem::InputImage {
+                            image_url: image_url.clone(),
+                            detail: Some(codex_protocol::models::ImageDetail::High),
+                        })
+                        .collect(),
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                }
+                .into(),
+            )
+        })
+        .collect();
+    let codex = harness
+        .test()
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            initial_history: InitialHistory::Forked(initial_history),
+            ..StartThreadOptions::new(harness.test().config.clone())
+        })
+        .await?
+        .thread;
+
+    let compact_mock = mount_sse_once(
+        harness.server(),
+        sse(vec![
+            json!({
+                "type": "response.output_item.done",
+                "item": { "type": "compaction", "encrypted_content": "AGGREGATE_IMAGE_SUMMARY" },
+            }),
+            responses::ev_completed("compact-images"),
+        ]),
+    )
+    .await;
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+    let compact_images = compact_mock
+        .single_request()
+        .message_input_image_urls("user");
+    assert_eq!(compact_images.len(), 40);
+    let prepared_images = compact_images
+        .chunks_exact(5)
+        .map(|images| images[0].clone())
+        .collect::<Vec<_>>();
+
+    let follow_up_mock = mount_sse_once(
+        harness.server(),
+        sse(vec![
+            responses::ev_assistant_message("after", "done"),
+            responses::ev_completed("after"),
+        ]),
+    )
+    .await;
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "after aggregate image compact".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    let mut expected_images = vec![prepared_images[1].clone(); 4];
+    for image_url in &prepared_images[2..] {
+        expected_images.extend(std::iter::repeat_n(image_url.clone(), 5));
+    }
+    assert_eq!(
+        follow_up_mock
+            .single_request()
+            .message_input_image_urls("user"),
+        expected_images
+    );
 
     Ok(())
 }

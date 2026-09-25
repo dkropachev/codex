@@ -41,7 +41,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::LazyLock;
 
-const MAX_MODEL_CONTEXT_ITEM_TOKENS: usize = 10_000;
+pub(crate) const MAX_MODEL_CONTEXT_ITEM_TOKENS: usize = 10_000;
 const MAX_MODEL_CONTEXT_OUTPUT_PAYLOAD_TOKENS: usize = 9_800;
 const MAX_MODEL_CONTEXT_CALL_ID_BYTES: usize = 1_024;
 const MAX_OUTPUT_CONTENT_ITEMS_TO_SCAN: usize = 1_024;
@@ -952,6 +952,16 @@ fn estimate_original_image_bytes(image_url: &str) -> Option<i64> {
     })
 }
 
+/// Shared image estimate, excluding the data URL prefix and message framing.
+pub(crate) fn estimate_image_bytes(image_url: &str, detail: Option<ImageDetail>) -> i64 {
+    match detail {
+        Some(ImageDetail::Original) => {
+            estimate_original_image_bytes(image_url).unwrap_or(RESIZED_IMAGE_BYTES_ESTIMATE)
+        }
+        _ => RESIZED_IMAGE_BYTES_ESTIMATE,
+    }
+}
+
 /// Scans one response item for discount-eligible inline image data URLs and
 /// returns:
 /// - total base64 payload bytes to subtract from raw serialized size
@@ -964,12 +974,8 @@ fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
         if let Some(payload_len) = parse_base64_image_data_url(image_url).map(str::len) {
             payload_bytes =
                 payload_bytes.saturating_add(i64::try_from(payload_len).unwrap_or(i64::MAX));
-            replacement_bytes = replacement_bytes.saturating_add(match detail {
-                Some(ImageDetail::Original) => {
-                    estimate_original_image_bytes(image_url).unwrap_or(RESIZED_IMAGE_BYTES_ESTIMATE)
-                }
-                _ => RESIZED_IMAGE_BYTES_ESTIMATE,
-            });
+            replacement_bytes =
+                replacement_bytes.saturating_add(estimate_image_bytes(image_url, detail));
         }
     };
 
