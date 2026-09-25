@@ -392,11 +392,10 @@ def codex_rust_crate(
             crate_name = binary.replace("-", "_"),
             crate_root = main,
             deps = all_crate_deps() + maybe_deps + deps_extra,
-            compile_data = compile_data,
             edition = crate_edition,
             # Keep per-binary Cargo link behavior scoped to the matching
             # generated rust_binary instead of leaking it to sibling binaries.
-            compile_data = binary_compile_data_extra.get(binary, []),
+            compile_data = compile_data + binary_compile_data_extra.get(binary, []),
             rustc_flags = rustc_flags_extra + binary_rustc_flags_extra.get(binary, []) + WINDOWS_RUSTC_LINK_FLAGS,
             # rules_rust substitutes workspace status values only for stamped
             # actions, so pass the existing key through to final binaries.
