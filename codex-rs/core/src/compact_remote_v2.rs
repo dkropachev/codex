@@ -614,6 +614,7 @@ fn truncate_retained_messages(
         let exceeds_item_budget = charge_images
             && usize::try_from(estimate_item_token_count(&group.source.item)).unwrap_or(usize::MAX)
                 > MAX_MODEL_CONTEXT_ITEM_TOKENS;
+        let at_history_boundary = token_count > remaining;
         if token_count <= remaining && !exceeds_item_budget {
             if let Some(notice) = group.attached_notice {
                 truncated_reversed.push(notice);
@@ -633,7 +634,7 @@ fn truncate_retained_messages(
                 content_budget
             };
             let image_count = retained_input_image_count(&group.source.item);
-            if charge_images && image_count > 0 {
+            if at_history_boundary && charge_images && image_count > 0 {
                 // An oversized image can leave no boundary content. Do not backfill
                 // the remaining budget with older messages in that case.
                 remaining = 0;
@@ -691,11 +692,29 @@ fn truncate_retained_messages(
             }
             let retained_all_images =
                 retained_input_image_count(&truncated_item.item) == image_count;
-            if retained_all_images && let Some(notice) = group.attached_notice {
+            let retain_notice = retained_all_images && group.attached_notice.is_some();
+            let retained_source_tokens = if client_developer {
+                usize::try_from(estimate_item_token_count(&truncated_item.item))
+                    .unwrap_or(usize::MAX)
+            } else if charge_images {
+                message_content_token_count(&truncated_item.item).max(1)
+            } else {
+                message_text_token_count(&truncated_item.item).max(1)
+            };
+            let retained_tokens = retained_source_tokens.saturating_add(if retain_notice {
+                notice_tokens
+            } else {
+                0
+            });
+            if retain_notice && let Some(notice) = group.attached_notice {
                 truncated_reversed.push(notice);
             }
             truncated_reversed.push(truncated_item);
-            remaining = 0;
+            if at_history_boundary {
+                remaining = 0;
+            } else {
+                remaining = remaining.saturating_sub(retained_tokens);
+            }
         } else if charge_images && retained_input_image_count(&group.source.item) > 0 {
             remaining = 0;
         }

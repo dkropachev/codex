@@ -1473,6 +1473,116 @@ async fn remote_compact_v2_charges_retained_images_to_token_budget(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_enforces_aggregate_image_budget_across_messages() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_auto_env_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                let _ = config.features.enable(Feature::RemoteCompactionV2);
+                let _ = config.features.enable(Feature::CompactionImageBudget);
+            }),
+    )
+    .await?;
+    let image_urls = (1..=8)
+        .map(|number| {
+            let image = image::ImageBuffer::from_pixel(
+                /*width*/ 1,
+                /*height*/ 1,
+                image::Luma([number as u8]),
+            );
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            image.write_to(&mut bytes, image::ImageFormat::Png)?;
+            Ok(format!(
+                "data:image/png;base64,{}",
+                BASE64_STANDARD.encode(bytes.get_ref())
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let initial_history = image_urls
+        .iter()
+        .map(|image_url| {
+            RolloutItem::ResponseItem(
+                ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: (0..5)
+                        .map(|_| ContentItem::InputImage {
+                            image_url: image_url.clone(),
+                            detail: Some(codex_protocol::models::ImageDetail::High),
+                        })
+                        .collect(),
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                }
+                .into(),
+            )
+        })
+        .collect();
+    let codex = harness
+        .test()
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            initial_history: InitialHistory::Forked(initial_history),
+            ..StartThreadOptions::new(harness.test().config.clone())
+        })
+        .await?
+        .thread;
+
+    let compact_mock = mount_sse_once(
+        harness.server(),
+        sse(vec![
+            json!({
+                "type": "response.output_item.done",
+                "item": { "type": "compaction", "encrypted_content": "AGGREGATE_IMAGE_SUMMARY" },
+            }),
+            responses::ev_completed("compact-images"),
+        ]),
+    )
+    .await;
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+    let compact_images = compact_mock
+        .single_request()
+        .message_input_image_urls("user");
+    assert_eq!(compact_images.len(), 40);
+    let prepared_images = compact_images
+        .chunks_exact(5)
+        .map(|images| images[0].clone())
+        .collect::<Vec<_>>();
+
+    let follow_up_mock = mount_sse_once(
+        harness.server(),
+        sse(vec![
+            responses::ev_assistant_message("after", "done"),
+            responses::ev_completed("after"),
+        ]),
+    )
+    .await;
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "after aggregate image compact".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    let mut expected_images = vec![prepared_images[1].clone(); 4];
+    for image_url in &prepared_images[2..] {
+        expected_images.extend(std::iter::repeat_n(image_url.clone(), 5));
+    }
+    assert_eq!(
+        follow_up_mock
+            .single_request()
+            .message_input_image_urls("user"),
+        expected_images
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

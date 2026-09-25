@@ -108,14 +108,15 @@ fn later_image_parts_preserve_labels_and_audio() {
 
 #[test]
 fn retained_image_message_respects_context_item_limit() {
+    let older = message(vec![text("older")]);
     let source = message(vec![image(); 6]);
     let expected = message(vec![image(); 5]);
 
-    let retained = trim(vec![source], RETAINED_MESSAGE_TOKEN_BUDGET);
+    let retained = trim(vec![older.clone(), source], RETAINED_MESSAGE_TOKEN_BUDGET);
 
-    assert_eq!(retained, vec![expected]);
+    assert_eq!(retained, vec![older, expected]);
     assert!(
-        estimate_item_token_count(&retained[0])
+        estimate_item_token_count(&retained[1])
             <= i64::try_from(MAX_MODEL_CONTEXT_ITEM_TOKENS).unwrap_or(i64::MAX)
     );
 }
