@@ -128,7 +128,7 @@ fn login_with_api_key_overwrites_existing_auth_json() {
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn login_with_access_token_writes_agent_identity_jwt() {
     let dir = tempdir().unwrap();
     let auth_path = dir.path().join("auth.json");
@@ -199,7 +199,7 @@ async fn login_with_access_token_rejects_agent_identity_workspace_mismatch() {
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn agent_identity_jwt_uses_explicit_staging_endpoint_overrides() -> anyhow::Result<()> {
     let jwks_server = MockServer::start().await;
     let authapi_server = MockServer::start().await;
@@ -241,7 +241,7 @@ async fn agent_identity_jwt_uses_explicit_staging_endpoint_overrides() -> anyhow
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn agent_identity_jwt_supports_existing_staging_launcher() -> anyhow::Result<()> {
     let jwks_server = MockServer::start().await;
     let authapi_server = MockServer::start().await;
@@ -283,7 +283,7 @@ async fn agent_identity_jwt_supports_existing_staging_launcher() -> anyhow::Resu
 }
 
 #[test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 fn agent_identity_authapi_override_preserves_chatgpt_environment_validation() {
     let _authapi_guard = EnvVarGuard::set(
         "CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL",
@@ -304,7 +304,7 @@ fn agent_identity_authapi_override_preserves_chatgpt_environment_validation() {
 }
 
 #[test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 fn agent_identity_custom_jwks_base_requires_explicit_authapi_override() {
     let _authapi_guard = EnvVarGuard::remove("CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL");
     let jwks_base_url = "https://jwks.example/api/codex";
@@ -320,7 +320,7 @@ fn agent_identity_custom_jwks_base_requires_explicit_authapi_override() {
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn agent_identity_jwks_override_preserves_chatgpt_environment_validation() {
     let record = agent_identity_record(WORKSPACE_ID_ALLOWED);
     let jwt =
@@ -920,7 +920,7 @@ async fn chatgpt_auth_non_retryable_registration_error_is_hard_failure() -> anyh
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn agent_identity_jwt_task_registration_retry_exhaustion_is_strict() -> anyhow::Result<()> {
     let record = agent_identity_record(WORKSPACE_ID_ALLOWED);
     let agent_identity =
@@ -958,7 +958,7 @@ async fn agent_identity_jwt_task_registration_retry_exhaustion_is_strict() -> an
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn login_with_access_token_rejects_unsigned_jwt() {
     let dir = tempdir().unwrap();
     let record = agent_identity_record(WORKSPACE_ID_ALLOWED);
@@ -1845,7 +1845,7 @@ fn auth_config_from_preserves_all_fields() {
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn shared_from_config_prefers_workload_identity_to_explicit_access_token() {
     let codex_home = tempdir().expect("tempdir");
     let config = test_auth_manager_config(codex_home.path());
@@ -1865,7 +1865,7 @@ async fn shared_from_config_prefers_workload_identity_to_explicit_access_token()
 }
 
 #[tokio::test]
-#[serial(codex_auth_env)]
+#[serial(auth_env)]
 async fn external_auth_suppresses_configured_account_pool_routing() {
     let codex_home = tempdir().expect("tempdir");
     let mut config = test_auth_manager_config(codex_home.path());

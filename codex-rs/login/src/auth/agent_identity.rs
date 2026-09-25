@@ -457,7 +457,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial(codex_auth_env)]
+    #[serial(auth_env)]
     async fn from_jwt_registers_task() -> anyhow::Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
