@@ -47,12 +47,12 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
         .await
         .expect("sqlite database should open");
 
-    migrator_through(/*version*/ 52)
+    migrator_through(/*version*/ 54)
         .run(&pool)
         .await
         .expect("released fork migrations should apply");
     let released_history = sqlx::query(
-        "SELECT version, description, checksum FROM _sqlx_migrations WHERE version <= 52 ORDER BY version",
+        "SELECT version, description, checksum FROM _sqlx_migrations WHERE version <= 54 ORDER BY version",
     )
     .fetch_all(&pool)
     .await
@@ -71,7 +71,7 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
             .iter()
             .map(|(version, _, _)| *version)
             .collect::<Vec<_>>(),
-        (1_i64..=52).collect::<Vec<_>>()
+        (1_i64..=54).collect::<Vec<_>>()
     );
 
     STATE_MIGRATOR
@@ -80,7 +80,7 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
         .expect("current migrations should upgrade the released fork database");
 
     let preserved_history = sqlx::query(
-        "SELECT version, description, checksum FROM _sqlx_migrations WHERE version <= 52 ORDER BY version",
+        "SELECT version, description, checksum FROM _sqlx_migrations WHERE version <= 54 ORDER BY version",
     )
     .fetch_all(&pool)
     .await
@@ -97,7 +97,7 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
     assert_eq!(preserved_history, released_history);
 
     let added_migrations = sqlx::query(
-        "SELECT version, description FROM _sqlx_migrations WHERE version >= 53 ORDER BY version",
+        "SELECT version, description FROM _sqlx_migrations WHERE version >= 55 ORDER BY version",
     )
     .fetch_all(&pool)
     .await
@@ -113,8 +113,8 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
     assert_eq!(
         added_migrations,
         vec![
-            (53, "threads section".to_string()),
-            (54, "threads section order".to_string()),
+            (55, "rollout migration state".to_string()),
+            (56, "thread section appearance".to_string()),
         ]
     );
 
@@ -329,16 +329,18 @@ INSERT INTO threads (
         .expect("legacy thread insert should succeed");
     }
 
-    let registered_sections =
-        sqlx::query_as::<_, (String, String)>("SELECT id, name FROM thread_sections ORDER BY id")
-            .fetch_all(&pool)
-            .await
-            .expect("independent thread sections should load");
+    let registered_sections = sqlx::query_as::<_, (String, String, Option<String>)>(
+        "SELECT id, name, appearance FROM thread_sections ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("independent thread sections should load");
     assert_eq!(
         registered_sections,
         vec![(
             PINNED_THREAD_SECTION_ID.to_string(),
             PINNED_THREAD_SECTION_NAME.to_string(),
+            None,
         )]
     );
 

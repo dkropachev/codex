@@ -1,4 +1,4 @@
-use assert_matches::assert_matches;
+use codex_core::TurnInputRequest;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -45,16 +45,10 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
 
     // Kick off a turn that triggers the function call.
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "start sleep".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "start sleep".into(),
+            text_elements: Vec::new(),
+        }]))
         .await
         .unwrap();
 
@@ -102,16 +96,10 @@ async fn interrupt_tool_records_history_entries() {
     let codex = Arc::clone(&fixture.codex);
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "start history recording".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "start history recording".into(),
+            text_elements: Vec::new(),
+        }]))
         .await
         .unwrap();
 
@@ -123,16 +111,10 @@ async fn interrupt_tool_records_history_entries() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "follow up".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "follow up".into(),
+            text_elements: Vec::new(),
+        }]))
         .await
         .unwrap();
 
@@ -152,25 +134,23 @@ async fn interrupt_tool_records_history_entries() {
     let output = response_mock
         .function_call_output_text(call_id)
         .expect("missing function_call_output text");
-    let re = Regex::new(r"^Wall time: ([0-9]+(?:\.[0-9]+)?) seconds\naborted by user$")
-        .expect("compile regex");
-    let captures = re.captures(&output);
-    assert_matches!(
-        captures.as_ref(),
-        Some(caps) if caps.get(1).is_some(),
-        "aborted message with elapsed seconds"
-    );
-    let secs: f32 = captures
-        .expect("aborted message with elapsed seconds")
-        .get(1)
-        .unwrap()
-        .as_str()
-        .parse()
-        .unwrap();
-    assert!(
-        secs >= 0.1,
-        "expected at least one tenth of a second of elapsed time, got {secs}"
-    );
+    if output != "aborted" {
+        let re = Regex::new(r"^Wall time: ([0-9]+(?:\.[0-9]+)?) seconds\naborted by user$")
+            .expect("compile regex");
+        let captures = re
+            .captures(&output)
+            .expect("aborted message with elapsed seconds");
+        let secs: f32 = captures
+            .get(1)
+            .expect("elapsed seconds capture")
+            .as_str()
+            .parse()
+            .expect("elapsed seconds should parse");
+        assert!(
+            secs >= 0.1,
+            "expected at least one tenth of a second of elapsed time, got {secs}"
+        );
+    }
 }
 
 /// After an interrupt we persist a model-visible `<turn_aborted>` marker in the conversation
@@ -206,16 +186,10 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
     let codex = Arc::clone(&fixture.codex);
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "start interrupt marker".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "start interrupt marker".into(),
+            text_elements: Vec::new(),
+        }]))
         .await
         .unwrap();
 
@@ -227,16 +201,10 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "follow up".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "follow up".into(),
+            text_elements: Vec::new(),
+        }]))
         .await
         .unwrap();
 

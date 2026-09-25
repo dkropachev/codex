@@ -46,7 +46,7 @@ struct DirectToolDiagnostics {
 
 struct DirectToolDiagnosticsInput<'a> {
     session: &'a Session,
-    turn: &'a TurnContext,
+    step_context: &'a StepContext,
     call_id: &'a str,
     tool_name: &'a ToolName,
     payload: &'a ToolPayload,
@@ -93,7 +93,7 @@ pub(crate) fn tool_log_payload<'a>(
 
 pub struct ToolRouter {
     registry: ToolRegistry,
-    model_visible_specs: Vec<ToolSpec>,
+    model_visible_specs: Arc<[ToolSpec]>,
     toolset_hash: String,
     visible_router_schema_tokens: i64,
 }
@@ -133,12 +133,12 @@ impl ToolRouter {
             registry,
             toolset_hash: toolset_hash(toolset_json.as_bytes()),
             visible_router_schema_tokens: estimate_text_tokens(toolset_json.as_str()),
-            model_visible_specs,
+            model_visible_specs: model_visible_specs.into(),
         }
     }
 
-    pub(crate) fn model_visible_specs(&self) -> Vec<ToolSpec> {
-        self.model_visible_specs.clone()
+    pub(crate) fn model_visible_specs(&self) -> Arc<[ToolSpec]> {
+        Arc::clone(&self.model_visible_specs)
     }
 
     pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {
@@ -328,7 +328,7 @@ impl ToolRouter {
 
         let diagnostics_input = DirectToolDiagnosticsInput {
             session: &session_for_diagnostics,
-            turn: &step_context_for_diagnostics.turn,
+            step_context: &step_context_for_diagnostics,
             call_id: &call_id_for_diagnostics,
             tool_name: &tool_name_for_diagnostics,
             payload: &payload_for_diagnostics,
@@ -348,13 +348,14 @@ impl ToolRouter {
     ) -> Option<DirectToolDiagnostics> {
         let DirectToolDiagnosticsInput {
             session,
-            turn,
+            step_context,
             call_id,
             tool_name,
             payload,
             source,
             result,
         } = input;
+        let turn = &step_context.turn;
         if !turn.config.features.get().enabled(Feature::ToolRouter) {
             return None;
         }
@@ -390,7 +391,7 @@ impl ToolRouter {
             thread_id: session.thread_id.to_string(),
             turn_id: turn.sub_id.clone(),
             call_id: call_id.to_string(),
-            model_slug: turn.model_info.slug.clone(),
+            model_slug: step_context.model_info.slug.clone(),
             model_provider: turn.config.model_provider_id.clone(),
             toolset_hash: self.toolset_hash.clone(),
             router_schema_version: TOOL_ROUTER_SCHEMA_VERSION,

@@ -7,7 +7,7 @@ import type { HookHandlerType } from "./HookHandlerType";
 import type { HookSource } from "./HookSource";
 import type { HookTrustStatus } from "./HookTrustStatus";
 
-export type HookMetadata = { key: string, eventName: HookEventName, handlerType: HookHandlerType, matcher: string | null, command: string | null, timeoutSec: bigint, statusMessage: string | null,
+export type HookMetadata = { key: string, eventName: HookEventName, handlerType: HookHandlerType, command: string | null, async: boolean, server: string | null, tool: string | null, matcher: string | null, timeoutSec: bigint, statusMessage: string | null,
 /**
  * Configured `additionalContext` spill threshold.
  * `null` uses 2,500 tokens; `0` disables spilling.

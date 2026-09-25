@@ -25,7 +25,6 @@ impl Session {
         let history = self.clone_history().await;
         let history_bytes = history
             .raw_items()
-            .iter()
             .filter_map(|item| serde_json::to_vec(item).ok())
             .map(|item| item.len())
             .sum::<usize>();

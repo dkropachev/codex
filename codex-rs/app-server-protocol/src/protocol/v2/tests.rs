@@ -367,6 +367,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             section: Some(ThreadSection {
                 id: "01984de2-8f74-7c91-a3b2-5c5e937cf318".to_string(),
                 name: "Pinned".to_string(),
+                appearance: None,
             }),
             section_entered_at: Some(1),
             history_mode: Default::default(),
@@ -414,6 +415,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
         json!({
             "id": "01984de2-8f74-7c91-a3b2-5c5e937cf318",
             "name": "Pinned",
+            "appearance": null,
         })
     );
     assert_eq!(value["thread"]["sectionEnteredAt"], json!(1));
@@ -608,6 +610,13 @@ fn thread_list_params_accepts_section_id_filter() {
 
 #[test]
 fn thread_section_list_params_and_response_round_trip() {
+    let legacy = serde_json::from_value::<ThreadSection>(json!({
+        "id": "legacy",
+        "name": "Legacy",
+    }))
+    .expect("legacy sections without appearance should deserialize");
+    assert_eq!(legacy.appearance, None);
+
     let params = serde_json::from_value::<ThreadSectionListParams>(json!({
         "cursor": "section-cursor",
         "limit": 25,
@@ -625,6 +634,7 @@ fn thread_section_list_params_and_response_round_trip() {
         data: vec![ThreadSection {
             id: "01984de2-8f74-7c91-a3b2-5c5e937cf318".to_string(),
             name: "Pinned".to_string(),
+            appearance: None,
         }],
         next_cursor: None,
     };
@@ -635,6 +645,7 @@ fn thread_section_list_params_and_response_round_trip() {
             "data": [{
                 "id": "01984de2-8f74-7c91-a3b2-5c5e937cf318",
                 "name": "Pinned",
+                "appearance": null,
             }],
             "nextCursor": null,
         })
@@ -644,6 +655,21 @@ fn thread_section_list_params_and_response_round_trip() {
             .expect("section list should deserialize"),
         response
     );
+}
+
+#[test]
+fn thread_section_updates_distinguish_omitted_and_cleared_appearance() {
+    for (value, appearance) in [
+        (json!({ "sectionId": "section", "name": "Work" }), None),
+        (
+            json!({ "sectionId": "section", "name": "Work", "appearance": null }),
+            Some(None),
+        ),
+    ] {
+        let params = serde_json::from_value::<ThreadSectionUpdateParams>(value)
+            .expect("section update should deserialize");
+        assert_eq!(params.appearance, appearance);
+    }
 }
 
 #[test]
@@ -2142,6 +2168,7 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             hooks: None,
             enforce_residency: None,
             network: None,
+            auto_review: None,
             models: None,
             sqlite_home: None,
             log_dir: None,
@@ -2576,6 +2603,7 @@ fn mcp_server_status_serializes_absent_server_info_as_null() {
     let response = ListMcpServerStatusResponse {
         data: vec![McpServerStatus {
             name: "not-ready".to_string(),
+            plugin_id: None,
             server_info: None,
             tools: HashMap::new(),
             resources: Vec::new(),
@@ -2590,6 +2618,7 @@ fn mcp_server_status_serializes_absent_server_info_as_null() {
         json!({
             "data": [{
                 "name": "not-ready",
+                "pluginId": null,
                 "serverInfo": null,
                 "tools": {},
                 "resources": [],
@@ -2661,6 +2690,7 @@ fn mcp_server_status_serializes_absent_server_info_metadata_as_null() {
     let response = ListMcpServerStatusResponse {
         data: vec![McpServerStatus {
             name: "initialized".to_string(),
+            plugin_id: Some("lookup@test".to_string()),
             server_info: Some(McpServerInfo {
                 name: "lookup-server".to_string(),
                 title: None,
@@ -2682,6 +2712,7 @@ fn mcp_server_status_serializes_absent_server_info_metadata_as_null() {
         json!({
             "data": [{
                 "name": "initialized",
+                "pluginId": "lookup@test",
                 "serverInfo": {
                     "name": "lookup-server",
                     "title": null,
@@ -3521,6 +3552,45 @@ fn user_input_into_core_preserves_media_fields() {
 }
 
 #[test]
+fn hook_handler_metadata_only_exposes_async_for_commands() {
+    assert_eq!(
+        serde_json::to_value(HookHandlerMetadata::Command {
+            command: "echo hello".to_string(),
+            r#async: true,
+        })
+        .unwrap(),
+        json!({
+            "handlerType": "command",
+            "command": "echo hello",
+            "async": true,
+        }),
+    );
+    assert_eq!(
+        serde_json::from_value::<HookHandlerMetadata>(json!({
+            "handlerType": "command",
+            "command": "echo hello",
+        }))
+        .unwrap(),
+        HookHandlerMetadata::Command {
+            command: "echo hello".to_string(),
+            r#async: false,
+        },
+    );
+    assert_eq!(
+        serde_json::to_value(HookHandlerMetadata::McpTool {
+            server: "security".to_string(),
+            tool: "scan".to_string(),
+        })
+        .unwrap(),
+        json!({
+            "handlerType": "mcpTool",
+            "server": "security",
+            "tool": "scan",
+        }),
+    );
+}
+
+#[test]
 fn skills_list_params_serialization_uses_force_reload() {
     assert_eq!(
         serde_json::to_value(SkillsListParams {
@@ -3912,12 +3982,14 @@ fn plugin_install_params_serialization_omits_force_remote_sync() {
         serde_json::to_value(PluginInstallParams {
             marketplace_path: Some(marketplace_path.clone()),
             remote_marketplace_name: None,
+            install_attempt_id: Some("94c79f7b-cceb-4415-9a3e-b51b2f718d43".to_string()),
             plugin_name: "gmail".to_string(),
         })
         .unwrap(),
         json!({
             "marketplacePath": marketplace_path_json,
             "remoteMarketplaceName": null,
+            "installAttemptId": "94c79f7b-cceb-4415-9a3e-b51b2f718d43",
             "pluginName": "gmail",
         }),
     );
@@ -3932,6 +4004,7 @@ fn plugin_install_params_serialization_omits_force_remote_sync() {
         PluginInstallParams {
             marketplace_path: Some(marketplace_path),
             remote_marketplace_name: None,
+            install_attempt_id: None,
             plugin_name: "gmail".to_string(),
         },
     );
@@ -3946,6 +4019,7 @@ fn plugin_install_params_serialization_omits_force_remote_sync() {
         PluginInstallParams {
             marketplace_path: None,
             remote_marketplace_name: Some("openai-curated-remote".to_string()),
+            install_attempt_id: None,
             plugin_name: "gmail".to_string(),
         },
     );

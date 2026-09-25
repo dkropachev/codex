@@ -1,8 +1,8 @@
 use crate::runtime::StateRuntime;
 use chrono::Utc;
-use codex_model_router::RouterRequestKind;
-use codex_model_router::RouterSavings;
-use codex_model_router::summarize_savings;
+use codex_protocol::model_router::RouterRequestKind;
+use codex_protocol::model_router::RouterSavings;
+use codex_protocol::model_router::summarize_savings;
 use codex_protocol::protocol::TokenUsage;
 use serde::Deserialize;
 use serde::Serialize;
@@ -1168,7 +1168,6 @@ fn model_router_usage_totals_from_groups(
 
 #[cfg(test)]
 mod tests {
-    use codex_model_router::RouterSavings;
     use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use sqlx::Row;

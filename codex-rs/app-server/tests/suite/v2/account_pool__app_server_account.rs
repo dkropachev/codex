@@ -540,6 +540,7 @@ accounts = ["work-pro", "personal-pro"]
                 start_date: "2026-05-29".to_string(),
                 tokens: 10,
             }]),
+            thread_usage: None,
         }
     );
 

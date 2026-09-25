@@ -8,6 +8,7 @@ use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::ExitedReviewModeItem;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
@@ -33,6 +34,7 @@ use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
+use codex_thread_store::PersistContext;
 
 use super::SessionTask;
 use super::SessionTaskResult;
@@ -119,6 +121,7 @@ async fn start_review_conversation(
 
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
+    sub_agent_config.base_instructions_provenance = Some(BaseInstructionsProvenance::Custom);
     sub_agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
 
     let model = config
@@ -324,5 +327,7 @@ pub(crate) async fn exit_review_mode(
     // Review turns can run before any regular user turn, so explicitly
     // materialize rollout persistence. Do this after emitting review output so
     // file creation + git metadata collection cannot delay client-facing items.
-    session.ensure_rollout_materialized().await;
+    session
+        .ensure_rollout_materialized(PersistContext::Standard)
+        .await;
 }

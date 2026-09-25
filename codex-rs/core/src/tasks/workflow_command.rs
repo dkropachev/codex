@@ -7,6 +7,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_thread_store::PersistContext;
 use codex_workflows::runner::MAX_RUNNER_ERROR_BYTES;
 use codex_workflows::runner::WORKFLOW_OUTPUT_MAX_BYTES;
 use serde_json::Value;
@@ -122,7 +123,9 @@ pub(crate) async fn record_workflow_output(
             },
         )
         .await;
-    session.ensure_rollout_materialized().await;
+    session
+        .ensure_rollout_materialized(PersistContext::Standard)
+        .await;
     markdown
 }
 

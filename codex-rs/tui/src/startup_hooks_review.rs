@@ -101,6 +101,7 @@ async fn run_startup_hooks_review_app(
     let mut chord_matcher = crate::keymap::KeyChordMatcher::default();
     draw_view(tui, &view)?;
 
+    tui.discard_pending_input_before_interactive_screen()?;
     let tui_events = tui.event_stream();
     tokio::pin!(tui_events);
 
@@ -320,9 +321,12 @@ mod tests {
             key: key.to_string(),
             event_name: HookEventName::PreToolUse,
             handler_type: HookHandlerType::Command,
+            command: Some("/tmp/hook.sh".to_string()),
+            r#async: false,
+            server: None,
+            tool: None,
             is_managed: false,
             matcher: Some("Bash".to_string()),
-            command: Some("/tmp/hook.sh".to_string()),
             timeout_sec: 30,
             status_message: None,
             additional_context_limit: None,

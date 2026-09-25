@@ -96,7 +96,7 @@ async fn configured_keyring_backend_loads_pool_member_auth() -> Result<()> {
         keyring_backend_kind,
     };
     let auth_manager =
-        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await?;
 
     let auth = auth_manager
         .auth_cached()

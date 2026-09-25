@@ -57,17 +57,17 @@ pub(super) async fn run_remote_compact_attempt(
     }
     let trace_input_history = compaction_trace
         .is_enabled()
-        .then(|| history.raw_items().to_vec());
+        .then(|| history.raw_items().cloned().collect());
     let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
     let tool_router = &step_context.tool_router;
     let prompt = Prompt {
         input: prompt_input,
         tools: tool_router.model_visible_specs(),
-        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
+        parallel_tool_calls: true,
         base_instructions,
         output_schema: None,
         output_schema_strict: true,
-        verbosity: turn_context.effective_model_verbosity(),
+        verbosity: turn_context.effective_model_verbosity(&step_context.model_info),
     };
     let window_id = sess.current_window_id().await;
     let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(

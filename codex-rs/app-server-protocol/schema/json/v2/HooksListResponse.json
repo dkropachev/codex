@@ -39,6 +39,7 @@
     "HookHandlerType": {
       "enum": [
         "command",
+        "mcpTool",
         "prompt",
         "agent"
       ],
@@ -54,6 +55,9 @@
             "integer",
             "null"
           ]
+        },
+        "async": {
+          "type": "boolean"
         },
         "command": {
           "type": [
@@ -95,6 +99,12 @@
             "null"
           ]
         },
+        "server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "source": {
           "$ref": "#/definitions/HookSource"
         },
@@ -112,11 +122,18 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "tool": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "trustStatus": {
           "$ref": "#/definitions/HookTrustStatus"
         }
       },
       "required": [
+        "async",
         "currentHash",
         "displayOrder",
         "enabled",

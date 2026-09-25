@@ -1,4 +1,5 @@
 use codex_app_server_protocol::HookEventName;
+use codex_app_server_protocol::HookHandlerType;
 use codex_app_server_protocol::HookMetadata;
 use codex_app_server_protocol::HookSource;
 use codex_app_server_protocol::HookTrustStatus;
@@ -486,12 +487,40 @@ impl HooksBrowserView {
             width,
             /*max_lines*/ None,
         ));
-        lines.extend(detail_wrapped_lines(
-            "Command",
-            hook.command.as_deref().unwrap_or("-"),
-            width,
-            Some(MAX_COMMAND_DETAIL_LINES),
-        ));
+        match hook.handler_type {
+            HookHandlerType::Command => {
+                lines.extend(detail_wrapped_lines(
+                    "Command",
+                    hook.command.as_deref().unwrap_or_default(),
+                    width,
+                    Some(MAX_COMMAND_DETAIL_LINES),
+                ));
+                lines.push(detail_line(
+                    "Mode",
+                    if hook.r#async { "Async" } else { "Sync" },
+                ));
+            }
+            HookHandlerType::McpTool => {
+                lines.extend(detail_wrapped_lines(
+                    "MCP Server",
+                    hook.server.as_deref().unwrap_or_default(),
+                    width,
+                    /*max_lines*/ None,
+                ));
+                lines.extend(detail_wrapped_lines(
+                    "MCP Tool",
+                    hook.tool.as_deref().unwrap_or_default(),
+                    width,
+                    /*max_lines*/ None,
+                ));
+            }
+            HookHandlerType::Prompt => {
+                lines.push(detail_line("Handler", "Prompt"));
+            }
+            HookHandlerType::Agent => {
+                lines.push(detail_line("Handler", "Agent"));
+            }
+        }
         lines.push(detail_line("Timeout", &format!("{}s", hook.timeout_sec)));
         if let Some(limit) = hook.additional_context_limit {
             let value = if limit == 0 {
@@ -833,13 +862,18 @@ fn detail_wrapped_lines(
     width: usize,
     max_lines: Option<usize>,
 ) -> Vec<Line<'static>> {
-    let prefix = format!("{label:<10}");
+    let label_width = label.width().saturating_add(1).max(10);
+    let prefix = format!("{label:<label_width$}");
     let available = width.saturating_sub(prefix.width()).max(1);
     let mut wrapped = textwrap::wrap(value, available).into_iter();
     let first = wrapped.next().unwrap_or_default().into_owned();
     let mut lines = vec![Line::from(vec![prefix.into(), first.dim()])];
-    lines
-        .extend(wrapped.map(|line| Line::from(vec!["          ".into(), line.into_owned().dim()])));
+    lines.extend(wrapped.map(|line| {
+        Line::from(vec![
+            " ".repeat(label_width).into(),
+            line.into_owned().dim(),
+        ])
+    }));
     let Some(max_lines) = max_lines else {
         return lines;
     };
@@ -883,7 +917,6 @@ mod tests {
     use crate::test_support::test_path_display;
     use codex_app_server_protocol::HookErrorInfo;
     use codex_app_server_protocol::HookEventName;
-    use codex_app_server_protocol::HookHandlerType;
     use codex_app_server_protocol::HookMetadata;
     use codex_app_server_protocol::HookSource;
     use codex_app_server_protocol::HookTrustStatus;
@@ -947,9 +980,12 @@ mod tests {
             key: key.to_string(),
             event_name,
             handler_type: HookHandlerType::Command,
+            command: Some(command.to_string()),
+            r#async: false,
+            server: None,
+            tool: None,
             is_managed,
             matcher: Some("Bash".to_string()),
-            command: Some(command.to_string()),
             timeout_sec: 30,
             status_message: None,
             additional_context_limit: None,
@@ -1100,6 +1136,38 @@ mod tests {
     }
 
     #[test]
+    fn renders_mcp_tool_handler_with_server_and_tool_details() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let mut configured_hook = hook(
+            "plugin:security-scanner",
+            HookEventName::PreToolUse,
+            HookSource::Plugin,
+            Some("security-tools@openai-curated"),
+            "",
+            /*enabled*/ true,
+            /*is_managed*/ false,
+            /*display_order*/ 0,
+        );
+        configured_hook.handler_type = HookHandlerType::McpTool;
+        configured_hook.command = None;
+        configured_hook.server = Some("scanner".to_string());
+        configured_hook.tool = Some("scan_file".to_string());
+        let mut view = HooksBrowserView::new(
+            vec![configured_hook],
+            Vec::new(),
+            Vec::new(),
+            AppEventSender::new(tx_raw),
+        );
+
+        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        assert_snapshot!(
+            "hooks_browser_mcp_tool_handler",
+            render_lines(&view, /*width*/ 112)
+        );
+    }
+
+    #[test]
     fn renders_handler_additional_context_limit() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let mut configured_hook = hook(
@@ -1142,6 +1210,7 @@ mod tests {
             /*display_order*/ 0,
         );
         untrusted_hook.trust_status = HookTrustStatus::Untrusted;
+        untrusted_hook.r#async = true;
         let mut view = HooksBrowserView::new(
             vec![untrusted_hook],
             Vec::new(),

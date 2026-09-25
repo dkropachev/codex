@@ -12,6 +12,7 @@ http = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls"] }
 tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
+tracing = { workspace = true }
 
 [dev-dependencies]
 codex-utils-cargo-bin = { workspace = true }
