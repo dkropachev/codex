@@ -101,7 +101,6 @@ fn command_response(response_id: &str, call_id: &str, command_tool: CommandTool)
         "prefix_rule": ["git", "version"],
     });
     args[command_key] = json!(TEST_COMMAND);
-
     Ok(sse(vec![
         ev_response_created(response_id),
         ev_function_call(call_id, tool_name, &serde_json::to_string(&args)?),

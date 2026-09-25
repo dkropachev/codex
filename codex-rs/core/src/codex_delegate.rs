@@ -122,6 +122,7 @@ pub(crate) async fn run_codex_thread_interactive(
         environment_selections: parent_environments.to_selections(),
         thread_extension_init,
         client_mcp_extensions: parent_session.services.client_mcp_extensions.clone(),
+        reserved_thread_id: None,
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         thread_store: Arc::clone(&parent_session.services.thread_store),
         attestation_provider: parent_session.services.attestation_provider.clone(),

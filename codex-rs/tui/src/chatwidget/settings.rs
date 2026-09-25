@@ -247,9 +247,7 @@ impl ChatWidget {
         self.has_codex_backend_auth = has_codex_backend_auth;
         self.bottom_pane
             .set_connectors_enabled(self.connectors_enabled());
-        if self.thread_id.is_some() {
-            self.prefetch_connectors();
-        }
+        self.refresh_connector_mentions(/*force_refresh*/ false);
         self.bottom_pane
             .set_token_activity_command_enabled(has_codex_backend_auth);
         self.refresh_status_surfaces();
@@ -542,7 +540,7 @@ impl ChatWidget {
             self.sync_workflow_commands();
             self.invalidate_connector_scope();
             self.refresh_skills_for_current_cwd(/*force_reload*/ true);
-            self.prefetch_connectors();
+            self.refresh_connector_mentions(/*force_refresh*/ false);
         }
         self.refresh_plugin_mentions();
         self.request_redraw();

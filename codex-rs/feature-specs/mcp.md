@@ -195,7 +195,8 @@ approval behavior, and MCP-compatible tool result serialization.
 
 #### Test cases
 
-- Codex-as-MCP-server tool and warning correlation behavior is covered: codex-rs/mcp-server/tests/suite/mcp__codex_tool.rs:test_codex_tool_forwards_skills_extension_warnings,test_codex_tool_passes_base_instructions,test_patch_approval_triggers_elicitation,test_shell_command_approval_triggers_elicitation
+- Codex-as-MCP-server approval elicitation behavior is covered: codex-rs/mcp-server/tests/suite/mcp__codex_tool.rs:test_patch_approval_triggers_elicitation,test_shell_command_approval_triggers_elicitation
+- Codex-as-MCP-server tool and warning correlation behavior is covered: codex-rs/mcp-server/tests/suite/mcp__codex_tool.rs:test_codex_tool_forwards_skills_extension_warnings,test_codex_tool_passes_base_instructions
 
 ### rmcp-client (MCP client transport and resource behavior)
 

@@ -133,6 +133,7 @@ mod rollout_list_find;
 mod safety_buffering;
 mod safety_check_downgrade;
 mod search_tool;
+mod send_user_message_async;
 mod shell_command;
 mod shell_serialization;
 mod shell_snapshot;
@@ -169,3 +170,4 @@ mod windows_sandbox;
 #[path = "workflows__agent_roles.rs"]
 mod workflows_agent_roles;
 mod workspace_roots;
+mod worktree_trust;
