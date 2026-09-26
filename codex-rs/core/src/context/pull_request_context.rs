@@ -1,4 +1,5 @@
 use codex_git_utils::PullRequestMetadata;
+use codex_protocol::models::ContentItemKind;
 use codex_utils_string::take_bytes_at_char_boundary;
 
 use super::ContextualUserFragment;
@@ -42,6 +43,10 @@ impl PullRequestContext {
 }
 
 impl ContextualUserFragment for PullRequestContext {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("review.pull_request_context".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "user"
     }

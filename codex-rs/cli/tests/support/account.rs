@@ -93,6 +93,7 @@ fn write_chatgpt_auth_with_expiration(
         agent_identity: None,
         personal_access_token: None,
         bedrock_api_key: None,
+        bedrock_access_keys: None,
     };
     save_auth(
         account_home,

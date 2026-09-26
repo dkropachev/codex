@@ -469,6 +469,7 @@ fn write_chatgpt_auth_to_store(
             agent_identity: None,
             personal_access_token: None,
             bedrock_api_key: None,
+            bedrock_access_keys: None,
         },
         auth_credentials_store_mode,
         keyring_backend_kind,

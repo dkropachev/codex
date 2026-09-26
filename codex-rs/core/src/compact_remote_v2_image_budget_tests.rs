@@ -3,6 +3,8 @@ use crate::context::ContextualUserFragment;
 use crate::context::ImageResizeNotice;
 use crate::context::ImageResizeNoticeSource;
 use crate::context::ResizedImage;
+use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::image_close_tag_text;
 use codex_protocol::models::local_image_open_tag_text_with_path;
 use pretty_assertions::assert_eq;
@@ -15,6 +17,23 @@ fn message(content: Vec<ContentItem>) -> ResponseItem {
         phase: None,
         internal_chat_message_metadata_passthrough: None,
     }
+}
+
+fn unknown_annotated_message(content: Vec<ContentItem>) -> ResponseItem {
+    let content_item_kinds = vec![ContentItemKind("unknown".to_string()); content.len()];
+    let mut message = message(content);
+    let ResponseItem::Message {
+        internal_chat_message_metadata_passthrough,
+        ..
+    } = &mut message
+    else {
+        unreachable!()
+    };
+    *internal_chat_message_metadata_passthrough = Some(InternalChatMessageMetadataPassthrough {
+        content_item_kinds: Some(content_item_kinds),
+        ..Default::default()
+    });
+    message
 }
 
 fn image() -> ContentItem {
@@ -77,7 +96,7 @@ fn image_only_boundary_is_atomic_and_does_not_backfill_older_messages() {
 }
 
 #[test]
-fn later_image_parts_preserve_labels_and_audio() {
+fn later_image_parts_preserve_labels_audio_and_annotations() {
     let parts = vec![
         text("earlier text"),
         text(&local_image_open_tag_text_with_path(
@@ -91,17 +110,41 @@ fn later_image_parts_preserve_labels_and_audio() {
             audio_url: "data:audio/wav;base64,abc".to_string(),
         },
     ];
-    let source = message(parts.clone());
+    let kinds = (0..parts.len())
+        .map(|i| ContentItemKind(format!("part.{i}")))
+        .collect::<Vec<_>>();
+    let mut source = message(parts.clone());
+    let ResponseItem::Message {
+        internal_chat_message_metadata_passthrough,
+        ..
+    } = &mut source
+    else {
+        unreachable!()
+    };
+    *internal_chat_message_metadata_passthrough = Some(InternalChatMessageMetadataPassthrough {
+        turn_id: Some("turn-1".to_string()),
+        content_item_kinds: Some(kinds.clone()),
+        ..Default::default()
+    });
     let image_tokens = parts[1..4]
         .iter()
         .map(images::content_item_token_count)
         .sum::<usize>();
     for (max_tokens, start) in [(image_tokens, 4), (image_tokens + 1, 1)] {
         let mut expected = source.clone();
-        let ResponseItem::Message { content, .. } = &mut expected else {
+        let ResponseItem::Message {
+            content,
+            internal_chat_message_metadata_passthrough,
+            ..
+        } = &mut expected
+        else {
             unreachable!()
         };
         *content = parts[start..].to_vec();
+        internal_chat_message_metadata_passthrough
+            .as_mut()
+            .unwrap()
+            .content_item_kinds = Some(kinds[start..].to_vec());
         assert_eq!(trim(vec![source.clone()], max_tokens), vec![expected]);
     }
 }
@@ -110,7 +153,7 @@ fn later_image_parts_preserve_labels_and_audio() {
 fn retained_image_message_respects_context_item_limit() {
     let older = message(vec![text("older")]);
     let source = message(vec![image(); 6]);
-    let expected = message(vec![image(); 5]);
+    let expected = unknown_annotated_message(vec![image(); 5]);
 
     let retained = trim(vec![older.clone(), source], RETAINED_MESSAGE_TOKEN_BUDGET);
 
@@ -125,7 +168,7 @@ fn retained_image_message_respects_context_item_limit() {
 fn image_notice_is_retained_only_when_all_source_images_survive() {
     let source = message(vec![image(), image(), text("keep")]);
     let notice = resize_notice(/*image_count*/ 2);
-    let retained_source = message(vec![image(), text("keep")]);
+    let retained_source = unknown_annotated_message(vec![image(), text("keep")]);
     let boundary_budget = message_text_token_count(&notice).max(1)
         + images::content_item_token_count(&image())
         + images::content_item_token_count(&text("keep"));

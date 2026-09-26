@@ -81,6 +81,7 @@ impl ReviewCommandRunner for ExecutorReviewCommandRunner {
                 argv: command.argv().to_vec(),
                 cwd: command.cwd().clone(),
                 env_policy: Some(self.env_policy.clone()),
+                shell_snapshot: None,
                 env: command.env_vars().clone(),
                 tty: false,
                 pipe_stdin: false,

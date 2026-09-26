@@ -1,4 +1,5 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItemKind;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 
@@ -34,6 +35,10 @@ fn bounded_role_text(text: String) -> String {
 }
 
 impl ContextualUserFragment for MultiAgentRoleInstructions {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("multi_agent.role_instructions".to_string())
+    }
+
     fn role(&self) -> &'static str {
         "developer"
     }

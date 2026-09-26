@@ -13,13 +13,19 @@ pub(super) fn has_explicit_settings(config: &Config) -> bool {
         .get("features")
         .and_then(|features| features.get("token_budget"))
         .and_then(|token_budget| token_budget.as_table())
-        .is_some_and(|settings| settings.keys().any(|key| key != "enabled" && key != "mode"))
+        .is_some_and(|settings| {
+            settings.keys().any(|key| {
+                !matches!(
+                    key.as_str(),
+                    "enabled" | "mode" | "use_history_notes_extension"
+                )
+            })
+        })
         || config.token_budget.as_ref().is_some_and(|token_budget| {
-            token_budget
-                != &TokenBudgetConfig {
-                    mode: token_budget.mode,
-                    ..TokenBudgetConfig::default()
-                }
+            let mut settings = token_budget.clone();
+            settings.mode = TokenBudgetConfig::default().mode;
+            settings.use_history_notes_extension = false;
+            settings != TokenBudgetConfig::default()
         })
 }
 
@@ -42,6 +48,10 @@ pub(crate) fn apply_model_defaults(config: &mut Config, model_info: &ModelInfo) 
             .as_ref()
             .map(|token_budget| token_budget.mode)
             .unwrap_or_default(),
+        use_history_notes_extension: config
+            .token_budget
+            .as_ref()
+            .is_some_and(|token_budget| token_budget.use_history_notes_extension),
         reminder_threshold_tokens: Some(model_defaults.reminder_threshold_tokens),
         reminder_message_template: model_defaults.reminder_message_template.clone(),
         guidance_message: Some(model_defaults.guidance_message.clone()),

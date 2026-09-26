@@ -72,6 +72,7 @@ fn mention_items_show_plugin_owned_skill_and_app_duplicates() {
         path: skill_path.clone(),
         scope: crate::test_support::skill_scope_repo(),
         enabled: true,
+        plugin_id: Some("google-calendar@debug".to_string()),
     }]));
     composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
         config_name: "google-calendar@debug".to_string(),
