@@ -22,8 +22,8 @@ use codex_utils_path_uri::PathUri;
 use core_test_support::create_directory_symlink;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_exec_command_call;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::ev_shell_command_call;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -163,6 +163,7 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
         }),
         "expected skill instructions in user input, got {user_texts:?}"
     );
+    assert!(request.has_content_kinds(&["skills.selected_skill_instructions"]));
 
     Ok(())
 }
@@ -209,7 +210,7 @@ async fn pr_babysitting_skill_drives_monitoring_lifecycle() -> Result<()> {
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_shell_command_call(
+                ev_exec_command_call(
                     "wait-generation",
                     r#"printf '%s' '{"reason":"generation_changed"}'"#,
                 ),
@@ -217,7 +218,7 @@ async fn pr_babysitting_skill_drives_monitoring_lifecycle() -> Result<()> {
             ]),
             sse(vec![
                 ev_response_created("resp-2"),
-                ev_shell_command_call(
+                ev_exec_command_call(
                     "watch-green",
                     r#"printf '%s' '{"actions":["ready_to_merge"],"state":"OPEN"}'"#,
                 ),
@@ -225,7 +226,7 @@ async fn pr_babysitting_skill_drives_monitoring_lifecycle() -> Result<()> {
             ]),
             sse(vec![
                 ev_response_created("resp-3"),
-                ev_shell_command_call("wait-closed", r#"printf '%s' '{"reason":"pr_closed"}'"#),
+                ev_exec_command_call("wait-closed", r#"printf '%s' '{"reason":"pr_closed"}'"#),
                 ev_completed("resp-3"),
             ]),
             sse(vec![

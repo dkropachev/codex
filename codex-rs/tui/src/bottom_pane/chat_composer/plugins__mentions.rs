@@ -72,6 +72,7 @@ fn mention_items_show_plugin_owned_skill_and_app_duplicates() {
         path: skill_path.clone(),
         scope: crate::test_support::skill_scope_repo(),
         enabled: true,
+        plugin_id: Some("google-calendar@debug".to_string()),
     }]));
     composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
         config_name: "google-calendar@debug".to_string(),
@@ -117,6 +118,105 @@ fn mention_items_show_plugin_owned_skill_and_app_duplicates() {
     );
     assert_eq!(mentions[2].category_tag, Some("[App]".to_string()));
     assert_eq!(mentions[2].path, Some("app://google_calendar".to_string()));
+}
+
+#[test]
+fn mention_items_keep_direct_skills_and_apps_with_unified_mentions() {
+    let skill_path = test_path_buf("/tmp/repo/google-calendar/SKILL.md").abs();
+    let (tx, _rx) = unbounded_channel::<AppEvent>();
+    let sender = AppEventSender::new(tx);
+    let mut composer = ChatComposer::new(
+        /*has_input_focus*/ true,
+        sender,
+        /*enhanced_keys_supported*/ false,
+        "Ask Codex to do anything".to_string(),
+        /*disable_paste_burst*/ false,
+    );
+    composer.set_connectors_enabled(/*enabled*/ true);
+    composer.set_text_content("$goog".to_string(), Vec::new(), Vec::new());
+    composer.set_skill_mentions(Some(vec![SkillMetadata {
+        name: "google-calendar:availability".to_string(),
+        description: "Find availability and plan event changes".to_string(),
+        short_description: None,
+        interface: Some(SkillInterface {
+            display_name: Some("Google Calendar".to_string()),
+            short_description: None,
+            icon_small: None,
+            icon_large: None,
+            icon_small_url: None,
+            icon_large_url: None,
+            brand_color: None,
+            default_prompt: None,
+        }),
+        dependencies: None,
+        path: skill_path.clone(),
+        scope: crate::test_support::skill_scope_repo(),
+        enabled: true,
+        plugin_id: Some("google-calendar@debug".to_string()),
+    }]));
+    composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+        config_name: "google-calendar@debug".to_string(),
+        display_name: "Google Calendar".to_string(),
+        plugin_namespace: None,
+        description: Some(
+            "Connect Google Calendar for scheduling, availability, and event management."
+                .to_string(),
+        ),
+        has_skills: true,
+        mcp_server_names: vec!["google-calendar".to_string()],
+        app_connector_ids: vec![AppConnectorId("google_calendar".to_string())],
+    }]));
+    composer.set_connector_mentions(Some(ConnectorsSnapshot {
+        connectors: vec![AppInfo {
+            id: "google_calendar".to_string(),
+            name: "Google Calendar".to_string(),
+            description: Some("Look up events and availability".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            icon_assets: None,
+            icon_dark_assets: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://example.test/google-calendar".to_string()),
+            is_accessible: true,
+            is_enabled: true,
+            plugin_display_names: vec!["Google Calendar".to_string()],
+        }],
+    }));
+
+    let mentions = composer.mention_items();
+    assert_eq!(mentions.len(), 3);
+    assert_eq!(mentions[0].category_tag, Some("[Skill]".to_string()));
+    assert_eq!(mentions[0].path, Some(skill_path.display().to_string()));
+    assert_eq!(mentions[0].display_name, "Google Calendar".to_string());
+    assert_eq!(mentions[1].category_tag, Some("[Plugin]".to_string()));
+    assert_eq!(
+        mentions[1].path,
+        Some("plugin://google-calendar@debug".to_string())
+    );
+    assert_eq!(mentions[2].category_tag, Some("[App]".to_string()));
+    assert_eq!(mentions[2].path, Some("app://google_calendar".to_string()));
+
+    composer.set_mentions_v2_enabled(/*enabled*/ true);
+    assert_eq!(
+        composer
+            .mention_items()
+            .into_iter()
+            .map(|mention| (mention.insert_text, mention.path))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "$google-calendar:availability".to_string(),
+                Some(skill_path.display().to_string()),
+            ),
+            (
+                "$google-calendar".to_string(),
+                Some("app://google_calendar".to_string()),
+            ),
+        ],
+    );
 }
 
 #[test]

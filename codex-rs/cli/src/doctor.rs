@@ -1416,6 +1416,7 @@ fn stored_auth_mode(auth: &codex_login::AuthDotJson) -> &'static str {
         AuthMode::AgentIdentity => "agent_identity",
         AuthMode::PersonalAccessToken => "personal_access_token",
         AuthMode::BedrockApiKey => "bedrock_api_key",
+        AuthMode::BedrockAccessKeys => "bedrock_access_keys",
     }
 }
 
@@ -1427,6 +1428,8 @@ fn stored_auth_mode_value(auth: &AuthDotJson) -> AuthMode {
         AuthMode::PersonalAccessToken
     } else if auth.bedrock_api_key.is_some() {
         AuthMode::BedrockApiKey
+    } else if auth.bedrock_access_keys.is_some() {
+        AuthMode::BedrockAccessKeys
     } else if auth.openai_api_key.is_some() {
         AuthMode::ApiKey
     } else {
@@ -1509,6 +1512,17 @@ fn stored_auth_issues(
                 issues.push("Bedrock API key auth is missing a Bedrock API key");
             }
         }
+        AuthMode::BedrockAccessKeys => match auth.bedrock_access_keys.as_ref() {
+            Some(access_keys) => {
+                if access_keys.access_key_id.trim().is_empty() {
+                    issues.push("Bedrock access key auth is missing an access key ID");
+                }
+                if access_keys.secret_access_key.trim().is_empty() {
+                    issues.push("Bedrock access key auth is missing a secret access key");
+                }
+            }
+            None => issues.push("Bedrock access key auth is missing AWS access keys"),
+        },
     }
     issues
 }
@@ -2496,6 +2510,7 @@ fn auth_mode_name(auth: &CodexAuth) -> &'static str {
         AuthMode::AgentIdentity => "agent_identity",
         AuthMode::PersonalAccessToken => "personal_access_token",
         AuthMode::BedrockApiKey => "bedrock_api_key",
+        AuthMode::BedrockAccessKeys => "bedrock_access_keys",
     }
 }
 
@@ -2579,6 +2594,12 @@ impl ProviderAuthReachabilityMode {
 }
 
 fn provider_reachability_plan(config: &Config) -> ReachabilityPlan {
+    let query_params = config.model_provider.query_params.as_ref().map(|params| {
+        params
+            .iter()
+            .map(|(name, value)| (name.clone(), value.as_str().to_owned()))
+            .collect::<HashMap<_, _>>()
+    });
     let stored_auth = load_auth_dot_json(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
@@ -2598,7 +2619,7 @@ fn provider_reachability_plan(config: &Config) -> ReachabilityPlan {
         &config.model_provider_id,
         &config.model_provider.name,
         config.model_provider.base_url.as_deref(),
-        config.model_provider.query_params.as_ref(),
+        query_params.as_ref(),
         config.model_provider.is_amazon_bedrock(),
         &config.chatgpt_base_url,
     );
@@ -2639,7 +2660,9 @@ fn provider_auth_reachability_mode_from_auth(
         return ProviderAuthReachabilityMode::Chatgpt;
     }
     match stored_auth.map(stored_auth_mode_value) {
-        Some(AuthMode::ApiKey | AuthMode::BedrockApiKey) => ProviderAuthReachabilityMode::ApiKey,
+        Some(AuthMode::ApiKey | AuthMode::BedrockApiKey | AuthMode::BedrockAccessKeys) => {
+            ProviderAuthReachabilityMode::ApiKey
+        }
         Some(
             AuthMode::Chatgpt
             | AuthMode::ChatgptAuthTokens
@@ -3561,6 +3584,7 @@ mod tests {
             agent_identity: None,
             personal_access_token: None,
             bedrock_api_key: None,
+            bedrock_access_keys: None,
         };
 
         assert_eq!(
@@ -3580,6 +3604,7 @@ mod tests {
             agent_identity: None,
             personal_access_token: None,
             bedrock_api_key: None,
+            bedrock_access_keys: None,
         };
 
         assert_eq!(
@@ -3601,6 +3626,7 @@ mod tests {
             agent_identity: None,
             personal_access_token: Some("at-test".to_string()),
             bedrock_api_key: None,
+            bedrock_access_keys: None,
         };
 
         assert_eq!(stored_auth_mode(&auth), "personal_access_token");
@@ -3624,6 +3650,7 @@ mod tests {
             agent_identity: None,
             personal_access_token: None,
             bedrock_api_key: None,
+            bedrock_access_keys: None,
         };
 
         assert_eq!(

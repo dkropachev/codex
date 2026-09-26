@@ -9,6 +9,8 @@ use crate::event_mapping::is_contextual_user_message_content;
 use crate::session::turn_context::TurnContext;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_context_fragments::set_annotated_content;
+use codex_context_fragments::to_annotated_content;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
@@ -74,9 +76,14 @@ pub(crate) struct ContextManager {
 
 struct SharedConversationHistory {
     items: Arc<Vec<ResponseItemEnvelope>>,
+    history_version: u64,
 }
 
 impl ConversationHistorySnapshot for SharedConversationHistory {
+    fn history_version(&self) -> u64 {
+        self.history_version
+    }
+
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
         Box::new(
             self.items
@@ -110,6 +117,7 @@ impl ContextManager {
     pub(crate) fn conversation_history_snapshot(&self) -> Arc<dyn ConversationHistorySnapshot> {
         Arc::new(SharedConversationHistory {
             items: Arc::clone(&self.items),
+            history_version: self.history_version,
         })
     }
 
@@ -381,17 +389,19 @@ impl ContextManager {
         {
             retained_items.retain_mut(|item| {
                 if item.turn_id() == Some(first_turn_id)
-                    && let ResponseItem::Message { role, content, .. } = &mut item.item
-                    && role == "developer"
+                    && matches!(&item.item, ResponseItem::Message { role, .. } if role == "developer")
                 {
+                    let Some(mut content) = to_annotated_content(&mut item.item) else {
+                        return false;
+                    };
                     content.retain(|content| {
                         !matches!(
-                            content,
+                            content.content(),
                             ContentItem::InputText { text }
                                 if ModelSwitchInstructions::matches_text(text)
                         )
                     });
-                    !content.is_empty()
+                    !content.is_empty() && set_annotated_content(&mut item.item, content).is_some()
                 } else {
                     true
                 }
@@ -481,7 +491,7 @@ impl ContextManager {
 
     /// This function enforces a couple of invariants on the in-memory history:
     /// 1. every call (function/custom) has a corresponding output entry
-    /// 2. every output has a corresponding call entry
+    /// 2. every output has a corresponding call entry or names an external tool event
     /// 3. unsupported image and audio content is stripped from messages and tool outputs
     fn normalize_history(&mut self, input_modalities: &[InputModality]) {
         let items = Arc::make_mut(&mut self.items);
@@ -489,7 +499,7 @@ impl ContextManager {
         // all function/tool calls must have a corresponding output
         normalize::ensure_call_outputs_present(items);
 
-        // all outputs must have a corresponding function/tool call
+        // Paired outputs must have a corresponding call; named external outputs stand alone.
         normalize::remove_orphan_outputs(items);
 
         // strip images when model does not support them
@@ -513,11 +523,15 @@ impl ContextManager {
             ResponseItem::FunctionCallOutput {
                 id,
                 call_id,
+                name,
+                namespace,
                 output,
                 internal_chat_message_metadata_passthrough: metadata,
             } => bound_model_context_output_item(ResponseItem::FunctionCallOutput {
                 id: id.clone(),
                 call_id: call_id.clone(),
+                name: name.clone(),
+                namespace: namespace.clone(),
                 output: truncate_function_output_payload(output, policy_with_serialization_budget),
                 internal_chat_message_metadata_passthrough: metadata.clone(),
             }),
@@ -741,8 +755,11 @@ fn bound_model_context_call_id(item: &mut ResponseItem) {
             call_id: Some(call_id),
             ..
         }
+        | ResponseItem::FunctionCallOutput {
+            call_id: Some(call_id),
+            ..
+        }
         | ResponseItem::FunctionCall { call_id, .. }
-        | ResponseItem::FunctionCallOutput { call_id, .. }
         | ResponseItem::CustomToolCall { call_id, .. }
         | ResponseItem::CustomToolCallOutput { call_id, .. } => call_id,
         _ => return,

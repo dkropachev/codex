@@ -78,6 +78,7 @@ async fn refresh_token_uses_active_account_pool_member() -> Result<()> {
         agent_identity: None,
         personal_access_token: None,
         bedrock_api_key: None,
+        bedrock_access_keys: None,
     };
     save_auth(
         &account_home,

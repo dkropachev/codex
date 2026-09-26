@@ -1,9 +1,9 @@
 use anyhow::Context;
 use anyhow::Result;
 use app_test_support::TestAppServer;
+use app_test_support::create_exec_command_sse_response;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
-use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::AskForApproval;
@@ -642,16 +642,7 @@ async fn thread_workflow_command_rejects_active_turn() -> Result<()> {
     let workflow_dir = scaffold_test_workflow(tmp.path())?;
 
     let responses = vec![
-        create_shell_command_sse_response(
-            vec![
-                "python3".to_string(),
-                "-c".to_string(),
-                "print(42)".to_string(),
-            ],
-            /*workdir*/ None,
-            Some(5000),
-            "call-approve",
-        )?,
+        create_exec_command_sse_response("call-approve")?,
         create_final_assistant_message_sse_response("done after decline")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;

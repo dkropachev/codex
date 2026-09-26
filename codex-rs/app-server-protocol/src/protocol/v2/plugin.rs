@@ -437,6 +437,8 @@ pub struct SkillMetadata {
     pub path: AbsolutePathBuf,
     pub scope: SkillScope,
     pub enabled: bool,
+    /// Owning plugin ID, matching `PluginSummary.id`, when known.
+    pub plugin_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -947,6 +949,7 @@ impl From<CoreSkillMetadata> for SkillMetadata {
             path: value.path,
             scope: value.scope.into(),
             enabled: true,
+            plugin_id: None,
         }
     }
 }

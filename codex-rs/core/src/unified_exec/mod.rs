@@ -40,6 +40,7 @@ use codex_utils_path_uri::PathUri;
 use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::sandboxing::SandboxPermissions;
@@ -57,6 +58,7 @@ mod head_tail_buffer;
 mod process;
 mod process_manager;
 mod process_state;
+mod shell_snapshot;
 
 pub(crate) fn set_deterministic_process_ids_for_tests(enabled: bool) {
     process_manager::set_deterministic_process_ids_for_tests(enabled);
@@ -86,14 +88,21 @@ const SOURCE_READ_DEDUPE_SUGGESTION_KEY: &str = "exec.source-read-dedupe-v1";
 pub(crate) struct UnifiedExecContext {
     pub session: Arc<Session>,
     pub step_context: Arc<StepContext>,
+    pub cancellation_token: CancellationToken,
     pub call_id: String,
 }
 
 impl UnifiedExecContext {
-    pub fn new(session: Arc<Session>, step_context: Arc<StepContext>, call_id: String) -> Self {
+    pub fn new(
+        session: Arc<Session>,
+        step_context: Arc<StepContext>,
+        cancellation_token: CancellationToken,
+        call_id: String,
+    ) -> Self {
         Self {
             session,
             step_context,
+            cancellation_token,
             call_id,
         }
     }

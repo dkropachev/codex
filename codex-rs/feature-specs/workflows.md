@@ -213,7 +213,7 @@ request and terminates the workflow without partial output.
 - Workflow command RPC records assistant output and next-turn context: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_records_assistant_output_and_next_turn_context
 - A fresh canonical scaffold runs through the real hosted Bun path unchanged: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_runs_fresh_scaffold_with_real_bun
 - Hosted schema, malformed-export, and legacy migration failures produce failed turns without formatted output: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_reports_canonical_and_legacy_contract_failures
-- Workflow command RPC rejects execution during an active turn: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_rejects_active_turn
+- Workflow command RPC rejects execution during an active unified-exec turn: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_rejects_active_turn
 - Hosted workflow commands receive correlated single-choice and free-text answers across sequential requests, replay pending input on live resume, and do not replay resolved input: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_round_trips_choice_and_freeform_user_input
 - Interrupting a workflow clears its pending input request and produces no partial result: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_interrupt_clears_pending_user_input
 
