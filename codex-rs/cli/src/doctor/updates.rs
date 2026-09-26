@@ -1,10 +1,7 @@
 //! Diagnoses whether Codex update paths target the running installation.
 //!
-//! Update diagnostics combine cached version metadata, install-channel hints,
-//! and bounded latest-version probes. For npm-managed launches, this module also
-//! verifies that npm install -g would update the package root that launched the
-//! current process, which catches PATH and prefix mismatches before the user runs
-//! an update command.
+//! Update diagnostics combine cached version metadata, managed-standalone
+//! eligibility, and a bounded latest-version probe against the fork.
 
 use std::path::Path;
 #[cfg(target_os = "macos")]
@@ -18,7 +15,7 @@ use codex_http_client::ClientRouteClass;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use codex_http_client::RouteAwareClientPool;
 use codex_install_context::InstallContext;
-use codex_install_context::InstallMethod;
+use codex_install_context::StandalonePlatform;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use http::Method;
 use serde::Deserialize;
@@ -29,20 +26,16 @@ use super::CheckStatus;
 use super::DoctorCheck;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use super::DoctorIssue;
-use super::NpmRootCheck;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use super::desktop::platform::InstalledApp;
 use super::doctor_install_context;
-use super::doctor_managed_by_npm;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use super::network;
-use super::npm_global_root_check;
 use super::run_command;
 
 const VERSION_FILE_NAME: &str = "version.json";
 const GITHUB_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/dkropachev/codex/releases/latest";
-const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 const DESKTOP_UPDATE_URL: &str = "https://persistent.oaistatic.com/codex-app-prod/appcast-x64.xml";
 #[cfg(all(target_os = "macos", not(target_arch = "x86_64")))]
@@ -72,48 +65,15 @@ pub(super) fn updates_check(config: &Config) -> DoctorCheck {
     push_cached_version_details(&mut details, &version_file);
 
     let mut status = CheckStatus::Ok;
-    let mut summary = "update configuration is locally consistent".to_string();
-    let mut remediation = None;
-
-    if doctor_managed_by_npm(current_exe.as_deref()) {
-        match npm_global_root_check() {
-            NpmRootCheck::Match { package_root } => {
-                details.push(format!("npm update target: {}", package_root.display()));
-            }
-            NpmRootCheck::Mismatch {
-                running_package_root,
-                npm_package_root,
-            } => {
-                status = CheckStatus::Fail;
-                summary = "update would target a different npm install".to_string();
-                details.push(format!(
-                    "running package root: {}",
-                    running_package_root.display()
-                ));
-                details.push(format!("npm package root: {}", npm_package_root.display()));
-                remediation = Some(format!(
-                    "Fix PATH or npm prefix so the running package root ({}) matches the npm global package root ({}).",
-                    running_package_root.display(),
-                    npm_package_root.display()
-                ));
-            }
-            NpmRootCheck::MissingPackageRoot => {
-                status = status.max(CheckStatus::Warning);
-                summary = "npm update target could not be proven".to_string();
-                remediation = Some(
-                    "Reinstall or update Codex so the JS shim provides CODEX_MANAGED_PACKAGE_ROOT."
-                        .to_string(),
-                );
-            }
-            NpmRootCheck::NpmUnavailable(error) => {
-                status = status.max(CheckStatus::Warning);
-                summary = "npm update target could not be inspected".to_string();
-                details.push(format!("npm root -g failed: {error}"));
-            }
+    let summary = match install_context.managed_fork_standalone_platform() {
+        Some(StandalonePlatform::Unix) => "managed fork self-update is available",
+        Some(StandalonePlatform::Windows) | None if cfg!(windows) => {
+            "fork self-update is unsupported on Windows"
         }
-    }
+        Some(StandalonePlatform::Windows) | None => "manual fork bootstrap is required for updates",
+    };
 
-    match fetch_latest_version(&install_context) {
+    match fetch_latest_version() {
         Ok(latest_version) => {
             details.push(format!("latest version: {latest_version}"));
             if is_newer(&latest_version, env!("CARGO_PKG_VERSION")) == Some(true) {
@@ -128,11 +88,7 @@ pub(super) fn updates_check(config: &Config) -> DoctorCheck {
         }
     }
 
-    let mut check = DoctorCheck::new("updates.status", "updates", status, summary).details(details);
-    if let Some(remediation) = remediation {
-        check = check.remediation(remediation);
-    }
-    check
+    DoctorCheck::new("updates.status", "updates", status, summary).details(details)
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -430,28 +386,18 @@ fn push_cached_version_details(details: &mut Vec<String>, version_file: &Path) {
 }
 
 fn update_action_label(context: &InstallContext) -> &'static str {
-    match &context.method {
-        InstallMethod::Npm => "npm install -g @openai/codex",
-        InstallMethod::Bun => "bun install -g @openai/codex",
-        InstallMethod::Pnpm => "pnpm add -g @openai/codex",
-        InstallMethod::Brew => "brew upgrade --cask codex",
-        InstallMethod::Standalone { .. } => "standalone installer",
-        InstallMethod::Other => "manual or unknown",
+    match context.managed_fork_standalone_platform() {
+        Some(StandalonePlatform::Unix) => "managed fork standalone installer",
+        Some(StandalonePlatform::Windows) | None if cfg!(windows) => {
+            "manual fork installer: https://github.com/dkropachev/codex/releases/latest/download/install.sh"
+        }
+        Some(StandalonePlatform::Windows) | None => {
+            "manual fork bootstrap: curl -fsSL https://github.com/dkropachev/codex/releases/latest/download/install.sh | sh"
+        }
     }
 }
 
-fn fetch_latest_version(context: &InstallContext) -> Result<String, String> {
-    match &context.method {
-        InstallMethod::Brew => fetch_homebrew_cask_version(),
-        InstallMethod::Npm
-        | InstallMethod::Bun
-        | InstallMethod::Pnpm
-        | InstallMethod::Standalone { .. }
-        | InstallMethod::Other => fetch_latest_github_release_version(),
-    }
-}
-
-fn fetch_latest_github_release_version() -> Result<String, String> {
+fn fetch_latest_version() -> Result<String, String> {
     #[derive(Deserialize)]
     struct ReleaseInfo {
         tag_name: String,
@@ -462,15 +408,6 @@ fn fetch_latest_github_release_version() -> Result<String, String> {
         .strip_prefix("rust-v")
         .map(str::to_string)
         .ok_or_else(|| format!("failed to parse latest tag {}", info.tag_name))
-}
-
-fn fetch_homebrew_cask_version() -> Result<String, String> {
-    #[derive(Deserialize)]
-    struct HomebrewCaskInfo {
-        version: String,
-    }
-
-    http_get_json::<HomebrewCaskInfo>(HOMEBREW_CASK_API_URL).map(|info| info.version)
 }
 
 fn http_get_json<T>(url: &str) -> Result<T, String>
@@ -508,6 +445,9 @@ struct VersionInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_install_context::CodexPackageLayout;
+    use codex_install_context::InstallMethod;
+    use codex_utils_absolute_path::AbsolutePathBuf;
 
     #[cfg(target_os = "macos")]
     #[test]
@@ -629,26 +569,75 @@ mod tests {
 
     #[test]
     fn update_action_labels_install_contexts() {
+        let manual_label = if cfg!(windows) {
+            "manual fork installer: https://github.com/dkropachev/codex/releases/latest/download/install.sh"
+        } else {
+            "manual fork bootstrap: curl -fsSL https://github.com/dkropachev/codex/releases/latest/download/install.sh | sh"
+        };
+        for method in [
+            InstallMethod::Npm,
+            InstallMethod::Bun,
+            InstallMethod::Pnpm,
+            InstallMethod::Brew,
+            InstallMethod::Other,
+        ] {
+            assert_eq!(
+                update_action_label(&InstallContext {
+                    method,
+                    package_layout: None,
+                }),
+                manual_label
+            );
+        }
+
+        let codex_home = tempfile::tempdir().expect("temporary Codex home should be created");
+        let Some(target) = (match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("linux", "x86_64") => Some("x86_64-unknown-linux-musl"),
+            ("linux", "aarch64") => Some("aarch64-unknown-linux-musl"),
+            ("macos", "x86_64") => Some("x86_64-apple-darwin"),
+            ("macos", "aarch64") => Some("aarch64-apple-darwin"),
+            (_, _) => None,
+        }) else {
+            return;
+        };
+        let release_dir = codex_home.path().join(format!(
+            "packages/standalone/releases/dkropachev-0.150.0-{target}"
+        ));
+        let bin_dir = release_dir.join("bin");
+        std::fs::create_dir_all(&bin_dir).expect("package bin directory should be created");
+        std::fs::write(
+            release_dir.join("codex-package.json"),
+            serde_json::json!({
+                "layoutVersion": 1,
+                "version": "0.150.0",
+                "target": target,
+                "variant": "codex",
+                "entrypoint": "bin/codex",
+                "resourcesDir": "codex-resources",
+                "pathDir": "codex-path",
+            })
+            .to_string(),
+        )
+        .expect("package manifest should be written");
+        let release_dir = AbsolutePathBuf::from_absolute_path(release_dir)
+            .expect("release directory should be absolute");
+        let bin_dir =
+            AbsolutePathBuf::from_absolute_path(bin_dir).expect("bin directory should be absolute");
         assert_eq!(
             update_action_label(&InstallContext {
-                method: InstallMethod::Npm,
-                package_layout: None,
+                method: InstallMethod::Standalone {
+                    release_dir: release_dir.clone(),
+                    resources_dir: None,
+                    platform: StandalonePlatform::Unix,
+                },
+                package_layout: Some(CodexPackageLayout {
+                    package_dir: release_dir,
+                    bin_dir,
+                    resources_dir: None,
+                    path_dir: None,
+                }),
             }),
-            "npm install -g @openai/codex"
-        );
-        assert_eq!(
-            update_action_label(&InstallContext {
-                method: InstallMethod::Pnpm,
-                package_layout: None,
-            }),
-            "pnpm add -g @openai/codex"
-        );
-        assert_eq!(
-            update_action_label(&InstallContext {
-                method: InstallMethod::Other,
-                package_layout: None,
-            }),
-            "manual or unknown"
+            "managed fork standalone installer"
         );
     }
 }

@@ -1219,7 +1219,7 @@ fn web_search_history_cell_snapshot() {
 }
 
 #[test]
-fn github_update_available_history_cell_snapshot() {
+fn unmanaged_update_available_history_cell_snapshot() {
     let cell = UpdateAvailableHistoryCell::new_with_current_version(
         "<VERSION>".to_string(),
         "9.9.9".to_string(),
@@ -1231,9 +1231,12 @@ fn github_update_available_history_cell_snapshot() {
 }
 
 #[test]
-fn pnpm_update_available_history_cell_snapshot() {
-    let cell =
-        UpdateAvailableHistoryCell::new("9.9.9".to_string(), Some(UpdateAction::PnpmGlobalLatest));
+fn managed_fork_update_available_history_cell_snapshot() {
+    let cell = UpdateAvailableHistoryCell::new_with_current_version(
+        "<VERSION>".to_string(),
+        "9.9.9".to_string(),
+        Some(UpdateAction::StandaloneUnix),
+    );
     let rendered = render_lines(&cell.display_lines(/*width*/ 110)).join("\n");
 
     insta::assert_snapshot!(rendered);

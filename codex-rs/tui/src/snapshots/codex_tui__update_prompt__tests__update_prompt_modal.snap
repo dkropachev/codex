@@ -2,11 +2,12 @@
 source: tui/src/update_prompt.rs
 expression: terminal.backend()
 ---
-  ✨ Update available! 0.0.0 -> 9.9.9
 
-  Download: https://github.com/dkropachev/codex/releases/latest
+  ✨ Update available! <VERSION> -> 9.9.9
 
-› 1. Download from GitHub
+  Release notes: https://github.com/dkropachev/codex/releases/latest
+
+› 1. Update now with the managed fork installer
   2. Skip
   3. Skip until next version
 
