@@ -13,6 +13,9 @@ const CODE_MODE_HOST_EXECUTABLE_NAME: &str = if cfg!(windows) {
 } else {
     "codex-code-mode-host"
 };
+const MANAGED_FORK_MIN_VERSION: (u64, u64, u64) = (0, 150, 0);
+const MANAGED_FORK_RELEASE_PREFIX: &str = "dkropachev-";
+const PACKAGE_LAYOUT_VERSION: u64 = 1;
 const PACKAGE_METADATA_FILENAME: &str = "codex-package.json";
 const PATH_DIRNAME: &str = "codex-path";
 const RELEASES_DIRNAME: &str = "releases";
@@ -43,6 +46,18 @@ pub struct CodexPackageLayout {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct CodexPackageManifest {
     pub version: Version,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagedForkPackageManifest {
+    layout_version: u64,
+    version: Version,
+    target: String,
+    variant: String,
+    entrypoint: String,
+    resources_dir: String,
+    path_dir: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -143,6 +158,43 @@ impl InstallContext {
             std::fs::read_to_string(package_layout.package_dir.join(PACKAGE_METADATA_FILENAME))
                 .ok()?;
         serde_json::from_str(&manifest).ok()
+    }
+
+    /// Returns the platform for installer-managed fork releases that are eligible for self-update.
+    pub fn managed_fork_standalone_platform(&self) -> Option<StandalonePlatform> {
+        let InstallMethod::Standalone {
+            release_dir,
+            platform,
+            ..
+        } = &self.method
+        else {
+            return None;
+        };
+        if *platform != StandalonePlatform::Unix
+            || release_dir.parent()?.file_name()? != OsStr::new(RELEASES_DIRNAME)
+            || self.package_layout.as_ref()?.package_dir.as_path() != release_dir.as_path()
+        {
+            return None;
+        }
+
+        let manifest = std::fs::read_to_string(release_dir.join(PACKAGE_METADATA_FILENAME)).ok()?;
+        let manifest: ManagedForkPackageManifest = serde_json::from_str(&manifest).ok()?;
+        let version = manifest.version;
+        if !version.pre.is_empty()
+            || !version.build.is_empty()
+            || (version.major, version.minor, version.patch) < MANAGED_FORK_MIN_VERSION
+            || manifest.layout_version != PACKAGE_LAYOUT_VERSION
+            || manifest.target != managed_fork_target()?
+            || manifest.variant != "codex"
+            || manifest.entrypoint != "bin/codex"
+            || manifest.resources_dir != RESOURCES_DIRNAME
+            || manifest.path_dir != PATH_DIRNAME
+        {
+            return None;
+        }
+        let release_name = release_dir.file_name()?.to_str()?;
+        let expected_name = format!("{MANAGED_FORK_RELEASE_PREFIX}{version}-{}", manifest.target);
+        (release_name == expected_name).then_some(*platform)
     }
 
     pub fn rg_command(&self) -> PathBuf {
@@ -325,6 +377,16 @@ fn standalone_platform() -> StandalonePlatform {
         StandalonePlatform::Windows
     } else {
         StandalonePlatform::Unix
+    }
+}
+
+fn managed_fork_target() -> Option<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => Some("x86_64-unknown-linux-musl"),
+        ("linux", "aarch64") => Some("aarch64-unknown-linux-musl"),
+        ("macos", "x86_64") => Some("x86_64-apple-darwin"),
+        ("macos", "aarch64") => Some("aarch64-apple-darwin"),
+        _ => None,
     }
 }
 
@@ -698,6 +760,91 @@ mod tests {
             context.bundled_resource(TEST_RESOURCE_NAME),
             Some(canonical_resources_dir.join(TEST_RESOURCE_NAME))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn managed_fork_standalone_requires_namespace_manifest_and_minimum_version()
+    -> std::io::Result<()> {
+        let target = managed_fork_target().unwrap_or("unsupported-target");
+        let manifest = |version: &str, target: &str| {
+            serde_json::json!({
+                "layoutVersion": 1,
+                "version": version,
+                "target": target,
+                "variant": "codex",
+                "entrypoint": "bin/codex",
+                "resourcesDir": "codex-resources",
+                "pathDir": "codex-path",
+            })
+            .to_string()
+        };
+        let valid_release_name = format!("dkropachev-0.150.0-{target}");
+        let expected_platform = (standalone_platform() == StandalonePlatform::Unix
+            && managed_fork_target().is_some())
+        .then_some(StandalonePlatform::Unix);
+        for (release_name, manifest, expected) in [
+            (
+                valid_release_name.clone(),
+                manifest("0.150.0", target),
+                expected_platform,
+            ),
+            (
+                format!("0.150.0-{target}"),
+                manifest("0.150.0", target),
+                None,
+            ),
+            (
+                format!("dkropachev-0.149.1-{target}"),
+                manifest("0.149.1", target),
+                None,
+            ),
+            (
+                format!("dkropachev-0.150.0-alpha.1-{target}"),
+                manifest("0.150.0-alpha.1", target),
+                None,
+            ),
+            (
+                format!("{valid_release_name}-extra"),
+                manifest("0.150.0", target),
+                None,
+            ),
+            (
+                format!("nested/{valid_release_name}"),
+                manifest("0.150.0", target),
+                None,
+            ),
+            (
+                valid_release_name.clone(),
+                manifest("0.150.0", "wrong-target"),
+                None,
+            ),
+            (
+                valid_release_name,
+                r#"{"version":"0.150.0"}"#.to_string(),
+                None,
+            ),
+        ] {
+            let codex_home = tempfile::tempdir()?;
+            let package_dir = codex_home
+                .path()
+                .join("packages/standalone/releases")
+                .join(&release_name);
+            let bin_dir = package_dir.join(BIN_DIRNAME);
+            fs::create_dir_all(&bin_dir)?;
+            fs::write(package_dir.join(PACKAGE_METADATA_FILENAME), &manifest)?;
+            let exe_path = bin_dir.join(if cfg!(windows) { "codex.exe" } else { "codex" });
+            fs::write(&exe_path, "")?;
+
+            let context = InstallContext::from_exe_with_codex_home(
+                /*is_macos*/ false,
+                /*current_exe*/ Some(&exe_path),
+                /*method_override*/ None,
+                /*codex_home*/ Some(codex_home.path()),
+            );
+
+            assert_eq!(context.managed_fork_standalone_platform(), expected);
+        }
         Ok(())
     }
 

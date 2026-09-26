@@ -16,52 +16,29 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 Run the following on Mac or Linux to install Codex CLI:
 
 ```shell
-curl -fsSL https://chatgpt.com/codex/install.sh | sh
+curl -fsSL https://github.com/dkropachev/codex/releases/latest/download/install.sh | sh
 ```
 
-Run the following on Windows to install Codex CLI:
-
-```shell
-powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"
-```
-
-The standalone installers download from `https://releases.openai.com/codex` by default and fall back to GitHub Releases if a metadata or asset download is unavailable. To force GitHub Releases, set `CODEX_INSTALLER_USE_RELEASES_OPENAI_COM` to `false` (`0` and `no` are also accepted):
-
-```shell
-curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_INSTALLER_USE_RELEASES_OPENAI_COM=false sh
-```
-
-```powershell
-$env:CODEX_INSTALLER_USE_RELEASES_OPENAI_COM='false'; irm https://chatgpt.com/codex/install.ps1 | iex
-```
-
-Codex CLI can also be installed via the following package managers:
-
-```shell
-# Install using npm
-npm install -g @openai/codex
-```
-
-```shell
-# Install using Homebrew
-brew install --cask codex
-```
+Fork-managed installs start with version `0.150.0` and support macOS and Linux
+on x64 and arm64. Windows and package-manager installs are not distributed or
+self-updated by this fork.
 
 Then simply run `codex` to get started.
 
 <details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
+<summary>You can also go to the <a href="https://github.com/dkropachev/codex/releases/latest">latest GitHub Release</a> and download the package for your platform.</summary>
 
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
+Managed GitHub Releases provide one package for each supported target:
 
 - macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
+  - Apple Silicon/arm64: `codex-package-aarch64-apple-darwin.tar.gz`
+  - x86_64 (older Mac hardware): `codex-package-x86_64-apple-darwin.tar.gz`
 - Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
+  - x86_64: `codex-package-x86_64-unknown-linux-musl.tar.gz`
+  - arm64: `codex-package-aarch64-unknown-linux-musl.tar.gz`
 
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
+Each archive contains the canonical standalone package layout, including the
+Codex executable and its bundled runtime helpers.
 
 </details>
 

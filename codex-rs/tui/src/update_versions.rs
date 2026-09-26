@@ -6,10 +6,11 @@ pub(crate) fn is_newer(latest: &str, current: &str) -> Option<bool> {
 }
 
 pub(crate) fn extract_version_from_latest_tag(latest_tag_name: &str) -> anyhow::Result<String> {
-    latest_tag_name
+    let version = latest_tag_name
         .strip_prefix("rust-v")
-        .map(str::to_owned)
-        .ok_or_else(|| anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))
+        .filter(|version| *version == version.trim() && parse_version(version).is_some())
+        .ok_or_else(|| anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))?;
+    Ok(version.to_owned())
 }
 
 pub(crate) fn is_source_build_version(version: &str) -> bool {
@@ -21,6 +22,9 @@ fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
     let maj = iter.next()?.parse::<u64>().ok()?;
     let min = iter.next()?.parse::<u64>().ok()?;
     let pat = iter.next()?.parse::<u64>().ok()?;
+    if iter.next().is_some() {
+        return None;
+    }
     Some((maj, min, pat))
 }
 
@@ -40,6 +44,18 @@ mod tests {
     #[test]
     fn latest_tag_without_prefix_is_invalid() {
         assert!(extract_version_from_latest_tag("v1.5.0").is_err());
+    }
+
+    #[test]
+    fn latest_tag_must_be_a_stable_three_component_version() {
+        for tag in [
+            "rust-v1.5.0-beta.1",
+            "rust-v1.5.0.1",
+            "rust-v1.5",
+            "rust-v1.5.0 ",
+        ] {
+            assert!(extract_version_from_latest_tag(tag).is_err(), "tag: {tag}");
+        }
     }
 
     #[test]

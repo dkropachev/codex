@@ -1,0 +1,11 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: rendered
+---
+╭───────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ✨ Update available! <VERSION> -> 9.9.9                                                           │
+│ Install the managed fork: https://github.com/dkropachev/codex/releases/latest/download/install.sh │
+│                                                                                                   │
+│ See full release notes:                                                                           │
+│ https://github.com/dkropachev/codex/releases/latest                                               │
+╰───────────────────────────────────────────────────────────────────────────────────────────────────╯

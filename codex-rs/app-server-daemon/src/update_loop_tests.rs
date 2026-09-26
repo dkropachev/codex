@@ -47,7 +47,10 @@ async fn installer_fetch_uses_exact_url_and_preserves_bytes() {
             .expect("installer fetch should succeed"),
         script
     );
-    assert_eq!(http.requested_urls(), vec![INSTALL_URL.to_string()]);
+    assert_eq!(
+        http.requested_urls(),
+        vec!["https://github.com/dkropachev/codex/releases/latest/download/install.sh".to_string()]
+    );
 }
 
 #[tokio::test]

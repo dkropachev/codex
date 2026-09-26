@@ -1,0 +1,13 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: rendered
+---
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ✨ Update available! <VERSION> -> 9.9.9                                                                    │
+│ Run sh -c 'installer=$(mktemp) && cleanup() { rm -f "$installer"; } && trap cleanup EXIT HUP INT TERM &&   │
+│ curl -fsSL https://github.com/dkropachev/codex/releases/latest/download/install.sh -o "$installer" &&      │
+│ CODEX_NON_INTERACTIVE=1 sh "$installer"' to update.                                                        │
+│                                                                                                            │
+│ See full release notes:                                                                                    │
+│ https://github.com/dkropachev/codex/releases/latest                                                        │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

@@ -1,9 +1,6 @@
-# Release workflow for codex-rs.
-# To release, follow a workflow like:
-# ```
-# git tag -a rust-v0.1.0 -m "Release 0.1.0"
-# git push origin rust-v0.1.0
-# ```
+# Upstream release workflow for codex-rs. Fork tag pushes are owned by
+# fork-rust-release.yml; this workflow remains manually dispatchable for
+# reference but is inert in the fork repository.
 #
 # Tag releases sign macOS binaries and DMGs through the protected `codesigning`
 # GitHub environment and Azure Key Vault before final verification on macOS.
@@ -16,9 +13,6 @@ on:
         description: "Existing rust release tag to build and publish"
         required: true
         type: string
-  push:
-    tags:
-      - "rust-v*.*.*"
 
 env:
   CODEX_REPO_ROOT: ${{ github.workspace }}
@@ -32,6 +26,9 @@ concurrency:
 
 jobs:
   tag-check:
+    # Fork tags are owned by fork-rust-release.yml. Keep the upstream release
+    # workflow inert so it cannot create a competing source-only release.
+    if: ${{ github.repository == 'openai/codex' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -65,11 +62,10 @@ jobs:
 
   build:
     needs: tag-check
-    # Fork releases are source-only because the artifact pipeline depends on
-    # OpenAI-only runners, signing environments, and publishing credentials.
+    # Fork releases use the public-runner pipeline in fork-rust-release.yml.
     if: ${{ github.repository == 'openai/codex' }}
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
-    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    runs-on: ${{ matrix.runner }}
     # Release builds can take a long time, so leave some headroom to avoid
     # having to restart the full workflow due to a timeout.
     timeout-minutes: 90

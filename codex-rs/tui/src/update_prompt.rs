@@ -1,4 +1,5 @@
-#![cfg(not(debug_assertions))]
+#![cfg(any(not(debug_assertions), test))]
+#![cfg_attr(test, allow(dead_code))]
 
 use crate::key_hint;
 use crate::legacy_core::config::Config;
@@ -188,8 +189,6 @@ impl WidgetRef for &UpdatePromptScreen {
         Clear.render(area, buf);
         let mut column = ColumnRenderable::new();
 
-        let update_command = self.update_action.command_str();
-
         column.push("");
         column.push(Line::from(vec![
             "  ✨\u{200A}".bold().cyan(),
@@ -208,21 +207,27 @@ impl WidgetRef for &UpdatePromptScreen {
                 "Release notes: ".dim(),
                 RELEASE_NOTES_URL.dim().underlined(),
             ])
-            .inset(Insets::tlbr(0, 2, 0, 0)),
+            .inset(Insets::tlbr(
+                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+            )),
         );
         column.push("");
         column.push(selection_option_row(
-            0,
-            format!("Update now (runs `{update_command}`)"),
+            /*index*/ 0,
+            match self.update_action {
+                UpdateAction::StandaloneUnix => {
+                    "Update now with the managed fork installer".to_string()
+                }
+            },
             self.highlighted == UpdateSelection::UpdateNow,
         ));
         column.push(selection_option_row(
-            1,
+            /*index*/ 1,
             "Skip".to_string(),
             self.highlighted == UpdateSelection::NotNow,
         ));
         column.push(selection_option_row(
-            2,
+            /*index*/ 2,
             "Skip until next version".to_string(),
             self.highlighted == UpdateSelection::DontRemind,
         ));
@@ -233,7 +238,9 @@ impl WidgetRef for &UpdatePromptScreen {
                 key_hint::plain(KeyCode::Enter).into(),
                 " to continue".dim(),
             ])
-            .inset(Insets::tlbr(0, 2, 0, 0)),
+            .inset(Insets::tlbr(
+                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+            )),
         );
         column.render(area, buf);
         crate::terminal_hyperlinks::mark_underlined_hyperlink(buf, area, RELEASE_NOTES_URL);
@@ -252,21 +259,30 @@ mod tests {
     use ratatui::widgets::FrameExt;
 
     fn new_prompt() -> UpdatePromptScreen {
-        UpdatePromptScreen::new(
+        let mut screen = UpdatePromptScreen::new(
             FrameRequester::test_dummy(),
             "9.9.9".into(),
-            UpdateAction::NpmGlobalLatest,
-        )
+            UpdateAction::StandaloneUnix,
+        );
+        screen.current_version = "<VERSION>".into();
+        screen
     }
 
     #[test]
     fn update_prompt_snapshot() {
         let screen = new_prompt();
-        let mut terminal = Terminal::new(VT100Backend::new(80, 12)).expect("terminal");
+        let mut terminal =
+            Terminal::new(VT100Backend::new(/*width*/ 80, /*height*/ 12)).expect("terminal");
         terminal
             .draw(|frame| frame.render_widget_ref(&screen, frame.area()))
             .expect("render update prompt");
-        insta::assert_snapshot!("update_prompt_modal", terminal.backend());
+        let rendered = terminal.backend().vt100().screen().contents();
+        let rendered = rendered
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!("update_prompt_modal", rendered);
     }
 
     #[test]
