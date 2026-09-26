@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::UpdateAction;
+use crate::update_action::FORK_INSTALLER_URL;
 
 #[cfg_attr(debug_assertions, allow(dead_code))]
 #[derive(Debug)]
@@ -40,11 +41,8 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             line!["Run ", update_action.command_str().cyan(), " to update."]
         } else {
             line![
-                "Download the latest release:",
-                " ",
-                "https://github.com/dkropachev/codex/releases/latest"
-                    .cyan()
-                    .underlined(),
+                "Install the managed fork: ",
+                FORK_INSTALLER_URL.cyan().underlined(),
             ]
         };
 
@@ -77,8 +75,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         let update_instruction = if let Some(update_action) = self.update_action {
             format!("Run {} to update.", update_action.command_str())
         } else {
-            "Download the latest release: https://github.com/dkropachev/codex/releases/latest"
-                .to_string()
+            format!("Install the managed fork: {FORK_INSTALLER_URL}")
         };
         vec![
             Line::from("Update available!"),

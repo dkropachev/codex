@@ -1,64 +1,35 @@
 #[cfg(any(not(debug_assertions), test))]
 use codex_install_context::InstallContext;
 #[cfg(any(not(debug_assertions), test))]
-use codex_install_context::InstallMethod;
-#[cfg(any(not(debug_assertions), test))]
 use codex_install_context::StandalonePlatform;
+
+pub(crate) const FORK_INSTALLER_URL: &str =
+    "https://github.com/dkropachev/codex/releases/latest/download/install.sh";
 
 /// Update action the CLI should perform after the TUI exits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateAction {
-    /// Update via `npm install -g @openai/codex@latest`.
-    NpmGlobalLatest,
-    /// Update via `bun install -g @openai/codex@latest`.
-    BunGlobalLatest,
-    /// Update via `pnpm add -g @openai/codex@latest`.
-    PnpmGlobalLatest,
-    /// Update via `brew upgrade codex`.
-    BrewUpgrade,
-    /// Update via `curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh`.
+    /// Update through the installer published with the latest fork release.
     StandaloneUnix,
-    /// Update via `$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex`.
-    StandaloneWindows,
 }
 
 impl UpdateAction {
     #[cfg(any(not(debug_assertions), test))]
     pub(crate) fn from_install_context(context: &InstallContext) -> Option<Self> {
-        match &context.method {
-            InstallMethod::Npm => Some(UpdateAction::NpmGlobalLatest),
-            InstallMethod::Bun => Some(UpdateAction::BunGlobalLatest),
-            InstallMethod::Pnpm => Some(UpdateAction::PnpmGlobalLatest),
-            InstallMethod::Brew => Some(UpdateAction::BrewUpgrade),
-            InstallMethod::Standalone { platform, .. } => Some(match platform {
-                StandalonePlatform::Unix => UpdateAction::StandaloneUnix,
-                StandalonePlatform::Windows => UpdateAction::StandaloneWindows,
-            }),
-            InstallMethod::Other => None,
+        match context.managed_fork_standalone_platform() {
+            Some(StandalonePlatform::Unix) => Some(UpdateAction::StandaloneUnix),
+            Some(StandalonePlatform::Windows) | None => None,
         }
     }
 
     /// Returns the list of command-line arguments for invoking the update.
     pub fn command_args(self) -> (&'static str, &'static [&'static str]) {
         match self {
-            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex"]),
-            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex"]),
-            UpdateAction::PnpmGlobalLatest => ("pnpm", &["add", "-g", "@openai/codex"]),
-            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
             UpdateAction::StandaloneUnix => (
                 "sh",
                 &[
                     "-c",
-                    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
-                ],
-            ),
-            UpdateAction::StandaloneWindows => (
-                "powershell",
-                &[
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-c",
-                    "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex",
+                    "installer=$(mktemp) && cleanup() { rm -f \"$installer\"; } && trap cleanup EXIT HUP INT TERM && curl -fsSL https://github.com/dkropachev/codex/releases/latest/download/install.sh -o \"$installer\" && CODEX_NON_INTERACTIVE=1 sh \"$installer\"",
                 ],
             ),
         }
@@ -73,6 +44,7 @@ impl UpdateAction {
 }
 
 #[cfg(any(not(debug_assertions), test))]
+#[cfg_attr(test, allow(dead_code))]
 pub fn get_update_action() -> Option<UpdateAction> {
     UpdateAction::from_install_context(InstallContext::current())
 }
@@ -80,72 +52,86 @@ pub fn get_update_action() -> Option<UpdateAction> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_install_context::CodexPackageLayout;
+    use codex_install_context::InstallMethod;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use std::fs;
 
+    #[cfg(unix)]
     #[test]
-    fn maps_install_context_to_update_action() {
-        let native_release_dir =
-            AbsolutePathBuf::from_absolute_path(std::env::temp_dir().join("native-release"))
-                .expect("temp dir path should be absolute");
+    fn only_managed_fork_unix_maps_to_update_action() -> std::io::Result<()> {
+        let codex_home = tempfile::tempdir()?;
+        let target = match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("linux", "x86_64") => "x86_64-unknown-linux-musl",
+            ("linux", "aarch64") => "aarch64-unknown-linux-musl",
+            ("macos", "x86_64") => "x86_64-apple-darwin",
+            ("macos", "aarch64") => "aarch64-apple-darwin",
+            platform => panic!("unsupported test platform: {platform:?}"),
+        };
+        let release_dir = codex_home.path().join(format!(
+            "packages/standalone/releases/dkropachev-0.150.0-{target}"
+        ));
+        let bin_dir = release_dir.join("bin");
+        fs::create_dir_all(&bin_dir)?;
+        fs::write(
+            release_dir.join("codex-package.json"),
+            serde_json::json!({
+                "layoutVersion": 1,
+                "version": "0.150.0",
+                "target": target,
+                "variant": "codex",
+                "entrypoint": "bin/codex",
+                "resourcesDir": "codex-resources",
+                "pathDir": "codex-path",
+            })
+            .to_string(),
+        )?;
+        let release_dir = AbsolutePathBuf::from_absolute_path(release_dir)?;
+        let bin_dir = AbsolutePathBuf::from_absolute_path(bin_dir)?;
+        let managed_unix = InstallContext {
+            method: InstallMethod::Standalone {
+                platform: StandalonePlatform::Unix,
+                release_dir: release_dir.clone(),
+                resources_dir: None,
+            },
+            package_layout: Some(CodexPackageLayout {
+                package_dir: release_dir.clone(),
+                bin_dir,
+                resources_dir: None,
+                path_dir: None,
+            }),
+        };
 
         assert_eq!(
-            UpdateAction::from_install_context(&InstallContext {
-                method: InstallMethod::Other,
-                package_layout: None,
-            }),
-            None
-        );
-        assert_eq!(
-            UpdateAction::from_install_context(&InstallContext {
-                method: InstallMethod::Npm,
-                package_layout: None,
-            }),
-            Some(UpdateAction::NpmGlobalLatest)
-        );
-        assert_eq!(
-            UpdateAction::from_install_context(&InstallContext {
-                method: InstallMethod::Bun,
-                package_layout: None,
-            }),
-            Some(UpdateAction::BunGlobalLatest)
-        );
-        assert_eq!(
-            UpdateAction::from_install_context(&InstallContext {
-                method: InstallMethod::Pnpm,
-                package_layout: None,
-            }),
-            Some(UpdateAction::PnpmGlobalLatest)
-        );
-        assert_eq!(
-            UpdateAction::from_install_context(&InstallContext {
-                method: InstallMethod::Brew,
-                package_layout: None,
-            }),
-            Some(UpdateAction::BrewUpgrade)
-        );
-        assert_eq!(
-            UpdateAction::from_install_context(&InstallContext {
-                method: InstallMethod::Standalone {
-                    platform: StandalonePlatform::Unix,
-                    release_dir: native_release_dir.clone(),
-                    resources_dir: Some(native_release_dir.join("codex-resources")),
-                },
-                package_layout: None,
-            }),
+            UpdateAction::from_install_context(&managed_unix),
             Some(UpdateAction::StandaloneUnix)
         );
-        assert_eq!(
-            UpdateAction::from_install_context(&InstallContext {
-                method: InstallMethod::Standalone {
-                    platform: StandalonePlatform::Windows,
-                    release_dir: native_release_dir.clone(),
-                    resources_dir: Some(native_release_dir.join("codex-resources")),
-                },
-                package_layout: None,
-            }),
-            Some(UpdateAction::StandaloneWindows)
-        );
+
+        for method in [
+            InstallMethod::Npm,
+            InstallMethod::Bun,
+            InstallMethod::Pnpm,
+            InstallMethod::Brew,
+            InstallMethod::Other,
+        ] {
+            assert_eq!(
+                UpdateAction::from_install_context(&InstallContext {
+                    method,
+                    package_layout: None,
+                }),
+                None
+            );
+        }
+
+        let mut managed_windows = managed_unix;
+        managed_windows.method = InstallMethod::Standalone {
+            platform: StandalonePlatform::Windows,
+            release_dir,
+            resources_dir: None,
+        };
+        assert_eq!(UpdateAction::from_install_context(&managed_windows), None);
+        Ok(())
     }
 
     #[test]
@@ -156,19 +142,7 @@ mod tests {
                 "sh",
                 &[
                     "-c",
-                    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
-                ][..],
-            )
-        );
-        assert_eq!(
-            UpdateAction::StandaloneWindows.command_args(),
-            (
-                "powershell",
-                &[
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-c",
-                    "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex"
+                    "installer=$(mktemp) && cleanup() { rm -f \"$installer\"; } && trap cleanup EXIT HUP INT TERM && curl -fsSL https://github.com/dkropachev/codex/releases/latest/download/install.sh -o \"$installer\" && CODEX_NON_INTERACTIVE=1 sh \"$installer\""
                 ][..],
             )
         );
