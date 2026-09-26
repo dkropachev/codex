@@ -1,0 +1,761 @@
+name: fork-rust-release
+
+on:
+  push:
+    tags:
+      - "rust-v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Stable fork tag to build
+        required: true
+        type: string
+      mode:
+        description: Build without publishing, or add archives to an existing historical release
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - backfill
+      replace_existing:
+        description: Replace a release asset when its recorded digest differs
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  CODEX_REPO_ROOT: ${{ github.workspace }}
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  RELEASE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'release' }}
+  REPLACE_EXISTING: ${{ github.event_name == 'workflow_dispatch' && inputs.replace_existing || false }}
+  CODEX_ZSH_MANIFEST_URL: https://github.com/openai/codex/releases/download/codex-zsh-v0.1.0/codex-zsh
+  CODEX_ZSH_MANIFEST_SHA256: c534eab89dcea7e3d8a5e5b3f49c025c7c64cd4e4d9814ee24871de58a9359a1
+
+concurrency:
+  group: fork-rust-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: ${{ github.repository == 'dkropachev/codex' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.validate.outputs.mode }}
+      tag_commit: ${{ steps.validate.outputs.tag_commit }}
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate fork release tag
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${RELEASE_TAG}"
+          mode="${RELEASE_MODE}"
+          [[ "$tag" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Release tag must be stable rust-vX.Y.Z: $tag" >&2
+            exit 1
+          }
+          case "$mode" in
+            release|dry-run|backfill) ;;
+            *) echo "Unsupported release mode: $mode" >&2; exit 1 ;;
+          esac
+          if [[ "$mode" == "backfill" ]]; then
+            case "$tag" in
+              rust-v0.144.[1-6]|rust-v0.145.0|rust-v0.146.[01]|rust-v0.147.0|rust-v0.148.0|rust-v0.149.[01]) ;;
+              *) echo "$tag is not an approved historical backfill release" >&2; exit 1 ;;
+            esac
+          fi
+
+          version="${tag#rust-v}"
+          cargo_version="$(sed -nE 's/^version = "([^"]+)"/\1/p' codex-rs/Cargo.toml | head -n 1)"
+          [[ "$version" == "$cargo_version" ]] || {
+            echo "Tag version $version does not match Cargo version $cargo_version" >&2
+            exit 1
+          }
+          if [[ "$mode" == "release" ]] && ! python3 - "$version" <<'PY'
+          import sys
+          raise SystemExit(tuple(map(int, sys.argv[1].split("."))) < (0, 150, 0))
+          PY
+          then
+            echo "Managed fork releases start at rust-v0.150.0" >&2
+            exit 1
+          fi
+
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          tag_commit="$(git rev-parse "${tag}^{commit}")"
+          remote_tag_commit="$(git ls-remote origin "refs/tags/${tag}^{}" | awk '{print $1}')"
+          if [[ -z "$remote_tag_commit" ]]; then
+            remote_tag_commit="$(git ls-remote origin "refs/tags/${tag}" | awk '{print $1}')"
+          fi
+          [[ "$tag_commit" == "$remote_tag_commit" ]] || {
+            echo "Checked-out tag commit $tag_commit does not match fork tag $remote_tag_commit" >&2
+            exit 1
+          }
+          git merge-base --is-ancestor "$tag_commit" refs/remotes/origin/main || {
+            echo "$tag ($tag_commit) is not reachable from fork main" >&2
+            exit 1
+          }
+
+          upstream_ref="refs/tags/upstream/${tag}"
+          git fetch --no-tags https://github.com/openai/codex.git \
+            "refs/tags/${tag}:${upstream_ref}"
+          upstream_commit="$(git rev-parse "${upstream_ref}^{commit}")"
+          if [[ "$tag_commit" == "$upstream_commit" ]]; then
+            echo "$tag resolves to the untouched upstream commit $upstream_commit" >&2
+            exit 1
+          fi
+
+          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" 2>/dev/null || true)"
+          if [[ "$mode" == "release" ]] && [[ -n "$release_json" ]] && \
+            [[ "$(jq -r '.draft' <<<"$release_json")" == "false" ]]; then
+            echo "Published release $tag already exists" >&2
+            exit 1
+          fi
+          if [[ "$mode" == "backfill" ]] && {
+            [[ -z "$release_json" ]] ||
+              [[ "$(jq -r '.draft' <<<"$release_json")" != "false" ]] ||
+              [[ "$(jq -r '.prerelease' <<<"$release_json")" != "false" ]];
+          }; then
+            echo "Backfill requires an existing published stable release for $tag" >&2
+            exit 1
+          fi
+
+          echo "mode=$mode" >>"$GITHUB_OUTPUT"
+          echo "tag_commit=$tag_commit" >>"$GITHUB_OUTPUT"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+  prepare-release:
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: ${{ needs.validate.outputs.mode == 'release' }}
+        with:
+          ref: ${{ needs.validate.outputs.tag_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Create unpublished release
+        if: ${{ needs.validate.outputs.mode == 'release' }}
+        env:
+          EXPECTED_COMMIT: ${{ needs.validate.outputs.tag_commit }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_commit="$(git ls-remote origin "refs/tags/${RELEASE_TAG}^{}" | awk '{print $1}')"
+          if [[ -z "$remote_commit" ]]; then
+            remote_commit="$(git ls-remote origin "refs/tags/${RELEASE_TAG}" | awk '{print $1}')"
+          fi
+          [[ "$remote_commit" == "$EXPECTED_COMMIT" ]] || {
+            echo "Release tag moved from $EXPECTED_COMMIT to $remote_commit" >&2
+            exit 1
+          }
+          existing="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" 2>/dev/null || true)"
+          if [[ -n "$existing" ]]; then
+            if [[ "$(jq -r '.draft' <<<"$existing")" != "true" ]] ||
+              [[ "$(jq -r '.prerelease' <<<"$existing")" != "false" ]]; then
+              echo "Refusing to reuse non-stable or published release ${RELEASE_TAG}" >&2
+              exit 1
+            fi
+            exit 0
+          fi
+
+          notes="${RUNNER_TEMP}/release-notes.md"
+          git log -1 --format=%B "${{ needs.validate.outputs.tag_commit }}" >"$notes"
+          echo >>"$notes"
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --latest=false \
+            --title "$VERSION" \
+            --notes-file "$notes"
+
+  build:
+    needs:
+      - validate
+      - prepare-release
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
+      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: "off"
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.validate.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.validate.outputs.tag_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Read pinned Rust toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          toolchain="$(sed -nE 's/^channel = "([^"]+)"/\1/p' rust-toolchain.toml)"
+          [[ -n "$toolchain" ]] || { echo "Pinned Rust toolchain is missing" >&2; exit 1; }
+          echo "version=$toolchain" >>"$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          toolchain: ${{ steps.toolchain.outputs.version }}
+          targets: ${{ matrix.target }}
+
+      - name: Use hermetic Cargo home
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+          mkdir -p "${cargo_home}/bin"
+          : >"${cargo_home}/config.toml"
+          echo "CARGO_HOME=${cargo_home}" >>"$GITHUB_ENV"
+          echo "${cargo_home}/bin" >>"$GITHUB_PATH"
+
+      - name: Install Zig
+        if: ${{ runner.os == 'Linux' }}
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.14.0
+          use-cache: false
+
+      - name: Install MUSL build tools
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends binutils
+          bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+      - name: Disable aws-lc jitter entropy
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >>"$GITHUB_ENV"
+          target_variable="AWS_LC_SYS_NO_JITTER_ENTROPY_${TARGET//-/_}"
+          echo "${target_variable}=1" >>"$GITHUB_ENV"
+
+      - name: Configure rusty_v8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Record source lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum Cargo.lock >"${RUNNER_TEMP}/Cargo.lock.sha256"
+          else
+            shasum -a 256 Cargo.lock >"${RUNNER_TEMP}/Cargo.lock.sha256"
+          fi
+
+      - name: Build and finalize bwrap
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --target "$TARGET" --release --bin bwrap
+          bwrap="target/${TARGET}/release/bwrap"
+          strip --strip-debug --strip-unneeded "$bwrap"
+          digest="$(sha256sum "$bwrap" | awk '{print $1}')"
+          echo "CODEX_BWRAP_SHA256=${digest}" >>"$GITHUB_ENV"
+
+      - name: Build Codex binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          export STABLE_GIT_COMMIT="$(git rev-parse HEAD)"
+          cargo build --locked --target "$TARGET" --release \
+            --bin codex \
+            --bin codex-code-mode-host
+
+      - name: Strip Codex binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_dir="target/${TARGET}/release"
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            strip --strip-debug --strip-unneeded \
+              "${release_dir}/codex" \
+              "${release_dir}/codex-code-mode-host"
+          else
+            strip -x "${release_dir}/codex" "${release_dir}/codex-code-mode-host"
+          fi
+
+      - name: Fetch pinned zsh manifest
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          manifest="${RUNNER_TEMP}/codex-zsh"
+          curl -fsSL "$CODEX_ZSH_MANIFEST_URL" -o "$manifest"
+          actual="$(python3 - "$manifest" <<'PY'
+          import hashlib
+          import pathlib
+          import sys
+          print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+          PY
+          )"
+          [[ "$actual" == "$CODEX_ZSH_MANIFEST_SHA256" ]] || {
+            echo "Pinned zsh manifest checksum mismatch" >&2
+            exit 1
+          }
+
+      - name: Assemble package archive
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          release_dir="codex-rs/target/${TARGET}/release"
+          package_dir="${RUNNER_TEMP}/codex-package-${TARGET}"
+          archive_dir="${GITHUB_WORKSPACE}/dist/${TARGET}"
+          archive="${archive_dir}/codex-package-${TARGET}.tar.gz"
+          mkdir -p "$archive_dir"
+          args=(
+            --target "$TARGET"
+            --variant codex
+            --entrypoint-bin "${release_dir}/codex"
+            --code-mode-host-bin "${release_dir}/codex-code-mode-host"
+            --zsh-manifest "${RUNNER_TEMP}/codex-zsh"
+            --cargo-profile release
+            --package-dir "$package_dir"
+            --force
+          )
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            args+=(--bwrap-bin "${release_dir}/bwrap")
+          fi
+          python3 scripts/build_codex_package.py "${args[@]}"
+          python3 - "$package_dir" "$archive" <<'PY'
+          import gzip
+          import pathlib
+          import sys
+          import tarfile
+
+          package_dir = pathlib.Path(sys.argv[1])
+          archive_path = pathlib.Path(sys.argv[2])
+          with archive_path.open("wb") as raw:
+              with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as compressed:
+                  with tarfile.open(fileobj=compressed, mode="w") as archive:
+                      for path in sorted(package_dir.rglob("*")):
+                          relative = path.relative_to(package_dir)
+                          info = archive.gettarinfo(path, arcname=relative.as_posix())
+                          info.uid = 0
+                          info.gid = 0
+                          info.uname = ""
+                          info.gname = ""
+                          info.mtime = 0
+                          info.pax_headers = {}
+                          if info.isdir() or info.mode & 0o111:
+                              info.mode = 0o755
+                          else:
+                              info.mode = 0o644
+                          if info.isfile():
+                              with path.open("rb") as source:
+                                  archive.addfile(info, source)
+                          else:
+                              archive.addfile(info)
+          PY
+
+      - name: Smoke-test native package
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          archive="dist/${TARGET}/codex-package-${TARGET}.tar.gz"
+          unpacked="${RUNNER_TEMP}/smoke-${TARGET}"
+          mkdir -p "$unpacked"
+          tar -xzf "$archive" -C "$unpacked"
+          python3 - "$unpacked/codex-package.json" "$VERSION" "$TARGET" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          metadata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          expected = {
+              "layoutVersion": 1,
+              "version": sys.argv[2],
+              "target": sys.argv[3],
+              "variant": "codex",
+              "entrypoint": "bin/codex",
+              "resourcesDir": "codex-resources",
+              "pathDir": "codex-path",
+          }
+          if metadata != expected:
+              raise SystemExit(f"unexpected package metadata: {metadata!r}")
+          PY
+          "${unpacked}/bin/codex" --version | grep -F " $VERSION"
+          "${unpacked}/bin/codex-code-mode-host" </dev/null >/dev/null
+          "${unpacked}/codex-path/rg" --version >/dev/null
+          "${unpacked}/codex-resources/zsh/bin/zsh" --version >/dev/null
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            "${unpacked}/codex-resources/bwrap" --version >/dev/null
+          fi
+
+      - name: Ensure Cargo.lock is unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum --check "${RUNNER_TEMP}/Cargo.lock.sha256"
+          else
+            shasum -a 256 --check "${RUNNER_TEMP}/Cargo.lock.sha256"
+          fi
+          git diff --exit-code -- Cargo.lock
+
+      - name: Upload package directly to the release
+        if: ${{ needs.validate.outputs.mode != 'dry-run' }}
+        env:
+          ASSET_PATH: ${{ github.workspace }}/dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz
+          EXPECTED_COMMIT: ${{ needs.validate.outputs.tag_commit }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          remote_commit="$(git ls-remote origin "refs/tags/${RELEASE_TAG}^{}" | awk '{print $1}')"
+          if [[ -z "$remote_commit" ]]; then
+            remote_commit="$(git ls-remote origin "refs/tags/${RELEASE_TAG}" | awk '{print $1}')"
+          fi
+          [[ "$remote_commit" == "$EXPECTED_COMMIT" ]] || {
+            echo "Release tag moved from $EXPECTED_COMMIT to $remote_commit" >&2
+            exit 1
+          }
+          asset="$(basename "$ASSET_PATH")"
+          digest="$(python3 - "$ASSET_PATH" <<'PY'
+          import hashlib
+          import pathlib
+          import sys
+          print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+          PY
+          )"
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          existing="$(jq -c --arg name "$asset" '.assets[] | select(.name == $name)' <<<"$release")"
+          if [[ -n "$existing" ]]; then
+            remote_digest="$(jq -r '.digest // ""' <<<"$existing")"
+            remote_state="$(jq -r '.state // ""' <<<"$existing")"
+            if [[ "$remote_digest" == "sha256:${digest}" ]]; then
+              echo "$asset already has the expected digest"
+              exit 0
+            fi
+            [[ "$remote_state" == "starter" || "$REPLACE_EXISTING" == "true" ]] || {
+              echo "$asset exists with digest $remote_digest, expected sha256:$digest" >&2
+              exit 1
+            }
+            gh api --method DELETE \
+              "repos/${GITHUB_REPOSITORY}/releases/assets/$(jq -r '.id' <<<"$existing")"
+          fi
+
+          uploaded=false
+          for attempt in 1 2 3; do
+            if gh release upload "$RELEASE_TAG" "$ASSET_PATH" --repo "$GITHUB_REPOSITORY"; then
+              uploaded=true
+              break
+            fi
+            existing=""
+            remote_digest=""
+            for observation in 1 2 3; do
+              existing="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" | \
+                jq -c --arg name "$asset" '.assets[] | select(.name == $name)')"
+              [[ -n "$existing" ]] || break
+              remote_digest="$(jq -r '.digest // ""' <<<"$existing")"
+              if [[ "$remote_digest" == "sha256:${digest}" ]]; then
+                uploaded=true
+                break
+              fi
+              [[ -n "$remote_digest" ]] && break
+              sleep $((observation * 3))
+            done
+            [[ "$uploaded" == "true" ]] && break
+            if [[ -n "$existing" ]]; then
+              remote_state="$(jq -r '.state // ""' <<<"$existing")"
+              [[ "$remote_state" == "starter" || "$REPLACE_EXISTING" == "true" ]] || {
+                echo "$asset appeared after a failed upload with digest $remote_digest" >&2
+                exit 1
+              }
+              gh api --method DELETE \
+                "repos/${GITHUB_REPOSITORY}/releases/assets/$(jq -r '.id' <<<"$existing")"
+            fi
+            sleep $((attempt * 5))
+          done
+          [[ "$uploaded" == "true" ]] || { echo "Failed to upload $asset" >&2; exit 1; }
+
+          for attempt in 1 2 3; do
+            remote_digest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" | \
+              jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .digest // ""')"
+            [[ "$remote_digest" == "sha256:${digest}" ]] && exit 0
+            sleep $((attempt * 5))
+          done
+          echo "GitHub recorded $remote_digest for $asset, expected sha256:$digest" >&2
+          exit 1
+
+  finalize:
+    needs:
+      - validate
+      - build
+    if: ${{ needs.validate.outputs.mode != 'dry-run' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.validate.outputs.tag_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Ensure release tag is unchanged
+        env:
+          EXPECTED_COMMIT: ${{ needs.validate.outputs.tag_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_commit="$(git ls-remote origin "refs/tags/${RELEASE_TAG}^{}" | awk '{print $1}')"
+          if [[ -z "$remote_commit" ]]; then
+            remote_commit="$(git ls-remote origin "refs/tags/${RELEASE_TAG}" | awk '{print $1}')"
+          fi
+          [[ "$remote_commit" == "$EXPECTED_COMMIT" ]] || {
+            echo "Release tag moved from $EXPECTED_COMMIT to $remote_commit" >&2
+            exit 1
+          }
+
+      - name: Generate checksum manifest from GitHub digests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          : >dist/codex-package_SHA256SUMS
+          for target in \
+            aarch64-apple-darwin \
+            x86_64-apple-darwin \
+            aarch64-unknown-linux-musl \
+            x86_64-unknown-linux-musl; do
+            asset="codex-package-${target}.tar.gz"
+            digest="$(jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .digest // ""' <<<"$release")"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+              echo "GitHub did not record a SHA-256 digest for $asset" >&2
+              exit 1
+            }
+            printf '%s  %s\n' "${digest#sha256:}" "$asset" >>dist/codex-package_SHA256SUMS
+          done
+          cat dist/codex-package_SHA256SUMS
+
+      - name: Stage installer for a managed release
+        if: ${{ needs.validate.outputs.mode == 'release' }}
+        run: cp scripts/install/install.sh dist/install.sh
+
+      - name: Upload final release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ needs.validate.outputs.mode }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          upload_asset() {
+            path="$1"
+            asset="$(basename "$path")"
+            digest="$(sha256sum "$path" | awk '{print $1}')"
+            release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+            existing="$(jq -c --arg name "$asset" '.assets[] | select(.name == $name)' <<<"$release")"
+            if [[ -n "$existing" ]]; then
+              remote_digest="$(jq -r '.digest // ""' <<<"$existing")"
+              remote_state="$(jq -r '.state // ""' <<<"$existing")"
+              if [[ "$remote_digest" == "sha256:${digest}" ]]; then
+                return
+              fi
+              [[ "$remote_state" == "starter" || "$REPLACE_EXISTING" == "true" ]] || {
+                echo "$asset exists with digest $remote_digest, expected sha256:$digest" >&2
+                return 1
+              }
+              gh api --method DELETE \
+                "repos/${GITHUB_REPOSITORY}/releases/assets/$(jq -r '.id' <<<"$existing")"
+            fi
+
+            for attempt in 1 2 3; do
+              if gh release upload "$RELEASE_TAG" "$path" --repo "$GITHUB_REPOSITORY"; then
+                break
+              fi
+              existing=""
+              remote_digest=""
+              for observation in 1 2 3; do
+                existing="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" | \
+                  jq -c --arg name "$asset" '.assets[] | select(.name == $name)')"
+                [[ -n "$existing" ]] || break
+                remote_digest="$(jq -r '.digest // ""' <<<"$existing")"
+                [[ "$remote_digest" == "sha256:${digest}" ]] && return
+                [[ -n "$remote_digest" ]] && break
+                sleep $((observation * 3))
+              done
+              if [[ -n "$existing" ]]; then
+                remote_state="$(jq -r '.state // ""' <<<"$existing")"
+                [[ "$remote_state" == "starter" || "$REPLACE_EXISTING" == "true" ]] || {
+                  echo "$asset appeared after a failed upload with digest $remote_digest" >&2
+                  return 1
+                }
+                gh api --method DELETE \
+                  "repos/${GITHUB_REPOSITORY}/releases/assets/$(jq -r '.id' <<<"$existing")"
+              fi
+              [[ "$attempt" -lt 3 ]] || return 1
+              sleep $((attempt * 5))
+            done
+            for attempt in 1 2 3; do
+              remote_digest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" | \
+                jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .digest // ""')"
+              [[ "$remote_digest" == "sha256:${digest}" ]] && return
+              sleep $((attempt * 5))
+            done
+            echo "GitHub recorded $remote_digest for $asset, expected sha256:$digest" >&2
+            return 1
+          }
+
+          upload_asset dist/codex-package_SHA256SUMS
+          if [[ "$MODE" == "release" ]]; then
+            upload_asset dist/install.sh
+          fi
+
+      - name: Download and verify every published asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ needs.validate.outputs.mode }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_dir="${RUNNER_TEMP}/release-assets"
+          mkdir -p "$verify_dir"
+          assets=(
+            codex-package-aarch64-apple-darwin.tar.gz
+            codex-package-x86_64-apple-darwin.tar.gz
+            codex-package-aarch64-unknown-linux-musl.tar.gz
+            codex-package-x86_64-unknown-linux-musl.tar.gz
+            codex-package_SHA256SUMS
+          )
+          if [[ "$MODE" == "release" ]]; then
+            assets+=(install.sh)
+          fi
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          expected_names="$(printf '%s\n' "${assets[@]}" | sort)"
+          remote_names="$(jq -r '.assets[].name' <<<"$release" | sort)"
+          [[ "$remote_names" == "$expected_names" ]] || {
+            echo "Release asset set differs from the expected fork artifacts" >&2
+            diff -u <(printf '%s\n' "$expected_names") <(printf '%s\n' "$remote_names") || true
+            exit 1
+          }
+          for asset in "${assets[@]}"; do
+            gh release download "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern "$asset" \
+              --dir "$verify_dir"
+          done
+
+          for asset in "${assets[@]}"; do
+            expected="$(jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .digest // ""' <<<"$release")"
+            actual="sha256:$(sha256sum "${verify_dir}/${asset}" | awk '{print $1}')"
+            expected_size="$(jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .size' <<<"$release")"
+            actual_size="$(stat -c %s "${verify_dir}/${asset}")"
+            [[ "$expected" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+              echo "$asset has invalid recorded digest $expected" >&2
+              exit 1
+            }
+            [[ "$actual" == "$expected" ]] || {
+              echo "$asset downloaded as $actual, expected $expected" >&2
+              exit 1
+            }
+            [[ "$actual_size" == "$expected_size" ]] || {
+              echo "$asset downloaded as $actual_size bytes, expected $expected_size" >&2
+              exit 1
+            }
+          done
+          (cd "$verify_dir" && sha256sum --check codex-package_SHA256SUMS)
+          if [[ "$MODE" == "release" ]]; then
+            cmp scripts/install/install.sh "${verify_dir}/install.sh"
+          fi
+
+      - name: Mark historical archives as manual downloads
+        if: ${{ needs.validate.outputs.mode == 'backfill' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          marker="<!-- fork-historical-package-backfill -->"
+          notes="${RUNNER_TEMP}/release-notes.md"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""' >"$notes"
+          if ! grep -F "$marker" "$notes" >/dev/null; then
+            cat >>"$notes" <<EOF
+
+          $marker
+          These unsigned package archives are exact historical builds for manual download only.
+          Their embedded updater targets OpenAI, predates fork-managed releases, and must not be used for self-update.
+          EOF
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$notes"
+          fi
+
+      - name: Publish managed release as latest
+        if: ${{ needs.validate.outputs.mode == 'release' }}
+        env:
+          EXPECTED_COMMIT: ${{ needs.validate.outputs.tag_commit }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_commit="$(git ls-remote origin "refs/tags/${RELEASE_TAG}^{}" | awk '{print $1}')"
+          if [[ -z "$remote_commit" ]]; then
+            remote_commit="$(git ls-remote origin "refs/tags/${RELEASE_TAG}" | awk '{print $1}')"
+          fi
+          [[ "$remote_commit" == "$EXPECTED_COMMIT" ]] || {
+            echo "Release tag moved from $EXPECTED_COMMIT to $remote_commit" >&2
+            exit 1
+          }
+          gh release edit "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false \
+            --prerelease=false \
+            --latest
