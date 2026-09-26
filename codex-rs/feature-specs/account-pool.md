@@ -464,6 +464,7 @@ the main Codex command surface.
 - Account limits displays account-pool member status: codex-rs/cli/tests/account_pool__account.rs:account_limits_groups_pool_members_and_reports_missing_invalid_in_config_order
 - Login status recognizes usable default-pool credentials: codex-rs/cli/tests/account_pool__account.rs:login_status_uses_configured_account_pool_auth
 - Account refresh reports account-pool member outcomes: codex-rs/cli/tests/account_pool__account.rs:account_refresh_pool_reports_all_missing_credentials,account_refresh_pool_reports_partial_success,account_refresh_pool_reports_blocked_member_and_succeeds_when_another_member_refreshes,account_refresh_pool_fails_when_all_members_are_blocked,account_refresh_pool_fails_when_stale_credentials_cannot_refresh,account_refresh_pool_reports_missing_pool
+- Named account logout preserves default Bedrock credentials and provider configuration: codex-rs/cli/tests/login.rs:logout_named_account_preserves_default_bedrock_auth_and_config
 
 ### tui-e2e (full terminal TUI behavior)
 

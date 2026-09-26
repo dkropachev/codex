@@ -184,6 +184,56 @@ fn logout_clears_only_the_selected_bedrock_provider() -> Result<()> {
 }
 
 #[test]
+fn logout_named_account_preserves_default_bedrock_auth_and_config() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let named_account_home = codex_home.path().join("accounts").join("work");
+    std::fs::create_dir_all(&named_account_home)?;
+    let config_path = codex_home.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        "cli_auth_credentials_store = \"file\"\n\
+         model_provider = \"amazon-bedrock\"\n\
+         model = \"openai.gpt-5.6-sol\"\n\
+         [model_providers.amazon-bedrock]\n\
+         base_url = \"https://bedrock.example.com/v1\"\n\
+         [model_providers.amazon-bedrock.aws]\n\
+         profile = \"default-profile\"\n\
+         region = \"us-west-2\"\n",
+    )?;
+    login_with_bedrock_access_keys(
+        codex_home.path(),
+        "default-access-key-id",
+        "default-secret-access-key",
+        Some("default-session-token"),
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+    login_with_bedrock_access_keys(
+        &named_account_home,
+        "named-access-key-id",
+        "named-secret-access-key",
+        Some("named-session-token"),
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+    let expected_default_auth = read_auth_json(codex_home.path())?;
+    let expected_config: toml::Value = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
+
+    codex_command(codex_home.path())?
+        .args(["logout", "--account", "work"])
+        .assert()
+        .success()
+        .stderr(contains("Successfully logged out"));
+
+    assert_eq!(read_auth_json(codex_home.path())?, expected_default_auth);
+    assert!(!named_account_home.join("auth.json").exists());
+    let actual_config: toml::Value = toml::from_str(&std::fs::read_to_string(config_path)?)?;
+    assert_eq!(actual_config, expected_config);
+
+    Ok(())
+}
+
+#[test]
 fn login_with_access_token_rejects_invalid_jwt() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_file_auth_config(codex_home.path())?;
