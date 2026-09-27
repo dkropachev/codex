@@ -520,10 +520,15 @@ impl SandboxManager {
     ) -> Result<SandboxExecRequest, SandboxTransformError> {
         #[cfg(target_os = "windows")]
         {
+            let Some(wrapper_executable) = runtime.windows_sandbox_wrapper_executable else {
+                return Err(SandboxTransformError::WindowsSandboxPreparation(
+                    "trusted Windows sandbox wrapper executable is required".to_string(),
+                ));
+            };
             self.transform_for_direct_spawn_with_windows_wrapper(
                 request,
                 runtime.codex_home.as_path(),
-                runtime.windows_sandbox_wrapper_executable,
+                Some(wrapper_executable),
             )
         }
 
@@ -595,12 +600,20 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
         ));
     };
     let wrapper = if let Some(wrapper_executable) = wrapper_executable {
-        wrapper_executable.as_path().to_path_buf()
+        wrapper_executable
+            .as_path()
+            .to_str()
+            .ok_or_else(|| {
+                SandboxTransformError::WindowsSandboxPreparation(
+                    "Windows sandbox wrapper path is not valid Unicode".to_string(),
+                )
+            })?
+            .to_string()
     } else {
         let source = std::path::PathBuf::from(&program);
         let helper = codex_windows_sandbox::resolve_exe_for_launch(source.as_path(), codex_home);
         *program = helper.to_string_lossy().into_owned();
-        source
+        source.to_string_lossy().into_owned()
     };
 
     let inner_command = std::mem::take(&mut request.command);
@@ -672,7 +685,7 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
         );
 
     request.command = Vec::with_capacity(1 + wrapper_args.len());
-    request.command.push(wrapper.to_string_lossy().into_owned());
+    request.command.push(wrapper);
     request.command.append(&mut wrapper_args);
     request.sandbox = SandboxType::None;
     request.arg0 = None;

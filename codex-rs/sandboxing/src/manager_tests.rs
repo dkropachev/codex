@@ -4,6 +4,8 @@ use super::SandboxDirectSpawnRuntime;
 #[cfg(target_os = "windows")]
 use super::SandboxDirectSpawnTransformRequest;
 use super::SandboxManager;
+#[cfg(target_os = "windows")]
+use super::SandboxTransformError;
 use super::SandboxTransformRequest;
 use super::SandboxType;
 use super::SandboxablePreference;
@@ -656,6 +658,8 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
 #[cfg(target_os = "windows")]
 #[test]
 fn transform_for_direct_spawn_windows_separates_wrapper_from_inner_command() {
+    use std::os::windows::ffi::OsStringExt;
+
     let directory = tempfile::tempdir().expect("temporary directory");
     let root = AbsolutePathBuf::from_absolute_path(directory.path()).expect("absolute root");
     let wrapper = root.join("codex.exe");
@@ -663,8 +667,8 @@ fn transform_for_direct_spawn_windows_separates_wrapper_from_inner_command() {
     let cwd_uri = PathUri::from_abs_path(&root);
     let permissions = PermissionProfile::read_only();
 
-    let request = SandboxManager::new()
-        .transform_for_direct_spawn_with_runtime(
+    let transform = |wrapper: Option<&AbsolutePathBuf>| {
+        SandboxManager::new().transform_for_direct_spawn_with_runtime(
             SandboxDirectSpawnTransformRequest {
                 workspace_roots: std::slice::from_ref(&root),
                 windows_sandbox_proxy_settings_mode:
@@ -692,10 +696,11 @@ fn transform_for_direct_spawn_windows_separates_wrapper_from_inner_command() {
             },
             SandboxDirectSpawnRuntime {
                 codex_home: &root,
-                windows_sandbox_wrapper_executable: Some(&wrapper),
+                windows_sandbox_wrapper_executable: wrapper,
             },
         )
-        .expect("transform arbitrary Windows command");
+    };
+    let request = transform(Some(&wrapper)).expect("transform arbitrary Windows command");
     let separator = request
         .command
         .iter()
@@ -715,4 +720,18 @@ fn transform_for_direct_spawn_windows_separates_wrapper_from_inner_command() {
             "--frozen-lockfile".to_string(),
         ]
     );
+
+    assert!(matches!(
+        transform(/*wrapper*/ None),
+        Err(SandboxTransformError::WindowsSandboxPreparation(message))
+            if message == "trusted Windows sandbox wrapper executable is required"
+    ));
+
+    let invalid_name = std::ffi::OsString::from_wide(&[0xd800]);
+    let invalid_wrapper = root.join(std::path::PathBuf::from(invalid_name));
+    assert!(matches!(
+        transform(Some(&invalid_wrapper)),
+        Err(SandboxTransformError::WindowsSandboxPreparation(message))
+            if message == "Windows sandbox wrapper path is not valid Unicode"
+    ));
 }
