@@ -6,6 +6,7 @@ mod local_command;
 mod local_selection;
 mod manager;
 pub mod policy_transforms;
+mod sandbox_command_input;
 #[cfg(target_os = "macos")]
 pub mod seatbelt;
 mod spawn;
@@ -35,6 +36,8 @@ pub use manager::SandboxablePreference;
 pub use manager::compatibility_sandbox_policy_for_permission_profile;
 pub use manager::get_platform_sandbox;
 pub use manager::with_managed_mitm_ca_readable_root;
+pub use sandbox_command_input::SandboxCommandInputError;
+pub use sandbox_command_input::prepare_sandbox_command;
 pub use spawn::SpawnRequest;
 pub use spawn::WindowsSandboxSpawnRequest;
 pub use spawn::spawn_process;
