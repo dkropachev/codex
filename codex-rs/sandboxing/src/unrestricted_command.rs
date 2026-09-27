@@ -12,7 +12,7 @@ pub struct LocalProcessCommand {
     pub program: OsString,
     pub args: Vec<OsString>,
     pub cwd: AbsolutePathBuf,
-    pub env: HashMap<String, String>,
+    pub env: HashMap<OsString, OsString>,
 }
 
 /// Prepares an explicitly authorized unrestricted command without spawning it.
@@ -27,7 +27,11 @@ pub fn prepare_unrestricted_command(request: LocalProcessCommand) -> Command {
         cwd,
         mut env,
     } = request;
-    env.retain(|name, _| !codex_protocol::shell_environment::is_non_inheritable_env_var(name));
+    env.retain(|name, _| {
+        !name
+            .to_str()
+            .is_some_and(codex_protocol::shell_environment::is_non_inheritable_env_var)
+    });
     let mut command = Command::new(program);
     command
         .args(args)

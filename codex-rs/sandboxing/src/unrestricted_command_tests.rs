@@ -16,11 +16,8 @@ fn preparation_preserves_command_and_uses_only_explicit_safe_environment() {
             .to_vec(),
         cwd: cwd.clone(),
         env: HashMap::from([
-            ("VISIBLE".to_string(), "yes".to_string()),
-            (
-                "OPENAI_IDENTITY_TOKEN_FILE".to_string(),
-                "secret".to_string(),
-            ),
+            ("VISIBLE".into(), "yes".into()),
+            ("OPENAI_IDENTITY_TOKEN_FILE".into(), "secret".into()),
         ]),
     });
 
@@ -49,15 +46,21 @@ fn preparation_preserves_non_utf8_program_and_arguments() {
     let cwd = AbsolutePathBuf::current_dir().expect("current directory");
     let program = OsString::from_vec(vec![b't', 0xff]);
     let argument = OsString::from_vec(vec![b'a', 0xff]);
+    let env_name = OsString::from_vec(vec![b'E', 0xff]);
+    let env_value = OsString::from_vec(vec![b'V', 0xff]);
     let command = prepare_unrestricted_command(LocalProcessCommand {
         program: program.clone(),
         args: vec![argument.clone()],
         cwd,
-        env: HashMap::new(),
+        env: HashMap::from([(env_name.clone(), env_value.clone())]),
     });
 
     assert_eq!(command.get_program(), program);
     assert_eq!(command.get_args().collect::<Vec<_>>(), [&argument]);
+    assert_eq!(
+        command.get_envs().collect::<Vec<_>>(),
+        [(env_name.as_os_str(), Some(env_value.as_os_str()))]
+    );
 }
 
 #[cfg(unix)]
@@ -68,7 +71,7 @@ fn prepared_command_does_not_inherit_ambient_environment() {
         program: "/usr/bin/env".into(),
         args: Vec::new(),
         cwd,
-        env: HashMap::from([("VISIBLE".to_string(), "yes".to_string())]),
+        env: HashMap::from([("VISIBLE".into(), "yes".into())]),
     })
     .output()
     .expect("run environment command");
