@@ -87,6 +87,7 @@ fn workflow_validation_propagates_cancellation_to_source_scan() {
 #[cfg(unix)]
 #[test]
 fn workflow_validation_command_observes_cancellation() {
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
     use std::time::Duration;
@@ -104,8 +105,39 @@ fn workflow_validation_command_observes_cancellation() {
             started_path.to_string_lossy().into_owned(),
         ],
     }];
+    fs::write(
+        root.join("workflow.yaml"),
+        serde_yaml::to_string(&package.manifest).expect("serialize workflow manifest"),
+    )
+    .expect("write workflow manifest");
+    let fake_bun = root.join("fake-bun");
+    let inspection = serde_json::to_string(&crate::runner::ModuleInspection {
+        api_version: 1,
+        id: "validate".to_string(),
+        title: "Validate".to_string(),
+        callable_name: "validate".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": { "workingDirectory": { "type": "string" } },
+            "additionalProperties": true,
+        }),
+        output_schema: json!({ "type": "object" }),
+        has_complete: false,
+    })
+    .expect("serialize workflow inspection");
+    fs::write(
+        &fake_bun,
+        format!(
+            "#!/bin/sh\ncase \"$5\" in\n  scan) printf '%s\\n' '[]' ;;\n  inspect) printf '%s\\n' '{inspection}' ;;\n  *) exit 2 ;;\nesac\n"
+        ),
+    )
+    .expect("write fake Bun");
+    let mut permissions = fs::metadata(&fake_bun)
+        .expect("read fake Bun metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_bun, permissions).expect("make fake Bun executable");
     let cancelled = AtomicBool::new(false);
-    let mut findings = BTreeSet::new();
 
     let error = std::thread::scope(|scope| {
         scope.spawn(|| {
@@ -119,12 +151,11 @@ fn workflow_validation_command_observes_cancellation() {
             }
             cancelled.store(true, Ordering::Relaxed);
         });
-        super::checks::validate_commands_cancellable(&package, &mut findings, &cancelled)
+        validate_workflow_cancellable_with_bun(&root, &cancelled, &fake_bun)
             .expect_err("validation command must be cancelled")
     });
 
     assert_eq!(error.to_string(), "workflow validation was cancelled");
-    assert_eq!(findings, BTreeSet::new());
 }
 
 #[test]

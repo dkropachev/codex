@@ -120,7 +120,7 @@ fn validate_workflow_cancellable_with_bun(
                 Vec::new()
             }
         };
-        validate_module_load_cancellable(package, &mut findings, cancelled)?;
+        validate_module_load_cancellable(package, &mut findings, cancelled, bun)?;
         validate_source_contract(package, &sources, &mut findings);
         validate_coverage(package, &mut findings);
         validate_commands_cancellable(package, &mut findings, cancelled)?;
@@ -223,8 +223,10 @@ fn validate_module_load_cancellable(
     package: &WorkflowPackage,
     findings: &mut BTreeSet<ValidationFinding>,
     cancelled: &AtomicBool,
+    bun: &Path,
 ) -> anyhow::Result<()> {
-    match crate::schema::load_workflow_contract_cancellable(
+    match crate::schema::load_workflow_contract_cancellable_with_bun(
+        bun,
         &package.root,
         &package.manifest,
         cancelled,

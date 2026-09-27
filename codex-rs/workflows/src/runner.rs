@@ -601,12 +601,13 @@ pub(crate) fn inspect_workflow(
     )
 }
 
-pub(crate) fn inspect_workflow_cancellable(
+pub(crate) fn inspect_workflow_cancellable_with_bun(
+    bun: &Path,
     workflow_dir: &Path,
     expected: &WorkflowManifest,
     cancelled: &AtomicBool,
 ) -> anyhow::Result<ModuleInspection> {
-    inspect_workflow_with_bun(Path::new("bun"), workflow_dir, expected, Some(cancelled))
+    inspect_workflow_with_bun(bun, workflow_dir, expected, Some(cancelled))
 }
 
 #[cfg(test)]
