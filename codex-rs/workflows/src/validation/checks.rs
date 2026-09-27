@@ -253,10 +253,20 @@ pub(super) fn validate_git_layout_until(
     deadline: crate::runner::CommandDeadline,
     cancelled: Option<&AtomicBool>,
 ) {
+    validate_git_layout_until_with_git(Path::new("git"), root, findings, deadline, cancelled);
+}
+
+pub(super) fn validate_git_layout_until_with_git(
+    git: &Path,
+    root: &Path,
+    findings: &mut BTreeSet<ValidationFinding>,
+    deadline: crate::runner::CommandDeadline,
+    cancelled: Option<&AtomicBool>,
+) {
     if !root.join(".git").is_dir() {
         return;
     }
-    let mut command = Command::new("git");
+    let mut command = Command::new(git);
     command
         .arg("-C")
         .arg(root)

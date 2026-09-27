@@ -23,6 +23,7 @@ mod checks;
 use checks::validate_commands_cancellable;
 use checks::validate_coverage;
 use checks::validate_git_layout_until;
+use checks::validate_git_layout_until_with_git;
 use checks::validate_gitignore;
 
 const REQUIRED_FILES: &[&str] = &[
@@ -89,6 +90,15 @@ fn validate_workflow_cancellable_with_bun(
     cancelled: &AtomicBool,
     bun: &Path,
 ) -> anyhow::Result<ValidationReport> {
+    validate_workflow_cancellable_with_tools(root, cancelled, bun, Path::new("git"))
+}
+
+fn validate_workflow_cancellable_with_tools(
+    root: &Path,
+    cancelled: &AtomicBool,
+    bun: &Path,
+    git: &Path,
+) -> anyhow::Result<ValidationReport> {
     ensure_not_cancelled(cancelled)?;
     let mut findings = BTreeSet::new();
     validate_required_layout(root, &mut findings);
@@ -127,7 +137,8 @@ fn validate_workflow_cancellable_with_bun(
     }
     ensure_not_cancelled(cancelled)?;
     validate_gitignore(root, &mut findings);
-    validate_git_layout_until(
+    validate_git_layout_until_with_git(
+        git,
         root,
         &mut findings,
         crate::runner::CommandDeadline::after(std::time::Duration::from_secs(/*secs*/ 2)),

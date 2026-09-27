@@ -152,29 +152,7 @@ fn workflow_validation_command_observes_cancellation() {
         serde_yaml::to_string(&package.manifest).expect("serialize workflow manifest"),
     )
     .expect("write workflow manifest");
-    let fake_bun = root.join("fake-bun");
-    let inspection = serde_json::to_string(&crate::runner::ModuleInspection {
-        api_version: 1,
-        id: "validate".to_string(),
-        title: "Validate".to_string(),
-        callable_name: "validate".to_string(),
-        input_schema: json!({
-            "type": "object",
-            "properties": { "workingDirectory": { "type": "string" } },
-            "additionalProperties": true,
-        }),
-        output_schema: json!({ "type": "object" }),
-        has_complete: false,
-    })
-    .expect("serialize workflow inspection");
-    fs::write(
-        &fake_bun,
-        format!(
-            "#!/bin/sh\ncase \"$5\" in\n  scan) printf '%s\\n' '[]' ;;\n  inspect) printf '%s\\n' '{inspection}' ;;\n  *) exit 2 ;;\nesac\n"
-        ),
-    )
-    .expect("write fake Bun");
-    make_executable(&fake_bun);
+    let fake_bun = write_fake_validation_bun(&root);
     let cancelled = AtomicBool::new(false);
     let started_at = Instant::now();
 
@@ -198,6 +176,57 @@ fn workflow_validation_command_observes_cancellation() {
     assert!(
         started_at.elapsed() < Duration::from_secs(/*secs*/ 3),
         "validation command ran to completion instead of observing cancellation"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn workflow_validation_propagates_cancellation_to_git_layout_inspection() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    let (_registry, root) = scaffold();
+    let mut package = WorkflowPackage::load(&root).expect("load package");
+    package.manifest.validation.commands.clear();
+    fs::write(
+        root.join("workflow.yaml"),
+        serde_yaml::to_string(&package.manifest).expect("serialize workflow manifest"),
+    )
+    .expect("write workflow manifest");
+    let fake_bun = write_fake_validation_bun(&root);
+    let fake_git = root.join("fake-git");
+    fs::write(
+        &fake_git,
+        "#!/bin/sh\ntouch \"$2/validation-git-started\"\nsleep 5\n",
+    )
+    .expect("write fake Git");
+    make_executable(&fake_git);
+    let started_path = root.join("validation-git-started");
+    let cancelled = AtomicBool::new(false);
+    let started_at = Instant::now();
+
+    let error = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let deadline = Instant::now() + Duration::from_secs(/*secs*/ 2);
+            while !started_path.exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "workflow Git layout inspection did not start"
+                );
+                std::thread::sleep(Duration::from_millis(/*millis*/ 10));
+            }
+            cancelled.store(true, Ordering::Relaxed);
+        });
+        validate_workflow_cancellable_with_tools(&root, &cancelled, &fake_bun, &fake_git)
+            .expect_err("workflow Git layout inspection must be cancelled")
+    });
+
+    assert_eq!(error.to_string(), "workflow validation was cancelled");
+    assert!(
+        started_at.elapsed() < Duration::from_millis(/*millis*/ 1_500),
+        "workflow Git layout inspection waited for its timeout instead of cancellation"
     );
 }
 
@@ -705,4 +734,36 @@ fn make_executable(path: &Path) {
         .permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(path, permissions).expect("make fixture executable");
+}
+
+#[cfg(unix)]
+fn write_fake_validation_bun(root: &Path) -> std::path::PathBuf {
+    let fake_bun = root.join("fake-bun");
+    let inspection = serde_json::to_string(&crate::runner::ModuleInspection {
+        api_version: 1,
+        id: "validate".to_string(),
+        title: "Validate".to_string(),
+        callable_name: "validate".to_string(),
+        input_schema: json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": { "workingDirectory": { "type": "string" } },
+            "additionalProperties": true,
+        }),
+        output_schema: json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+        }),
+        has_complete: false,
+    })
+    .expect("serialize workflow inspection");
+    fs::write(
+        &fake_bun,
+        format!(
+            "#!/bin/sh\ncase \"$5\" in\n  scan) printf '%s\\n' '[]' ;;\n  inspect) printf '%s\\n' '{inspection}' ;;\n  *) exit 2 ;;\nesac\n"
+        ),
+    )
+    .expect("write fake Bun");
+    make_executable(&fake_bun);
+    fake_bun
 }
