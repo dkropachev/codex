@@ -14,17 +14,25 @@ impl SandboxExecRequest {
         let Self {
             command: argv,
             cwd,
-            mut env,
+            env,
             arg0,
             sandbox,
+            network,
+            network_environment_id,
             ..
         } = self;
-        #[cfg(target_os = "windows")]
         if sandbox == crate::SandboxType::WindowsRestrictedToken {
             bail!("native Windows sandbox request must be wrapped before command conversion");
         }
-        #[cfg(not(target_os = "windows"))]
-        let _ = sandbox;
+        if network.is_some() || network_environment_id.is_some() {
+            bail!("managed network environment must be applied before command conversion");
+        }
+        if env
+            .keys()
+            .any(|name| codex_protocol::shell_environment::is_non_inheritable_env_var(name))
+        {
+            bail!("prepared sandbox environment contains a non-inheritable variable");
+        }
         let Some((program, args)) = argv.split_first() else {
             bail!("sandbox command was empty after preparation");
         };
@@ -41,7 +49,6 @@ impl SandboxExecRequest {
             .to_abs_path()
             .context("prepared sandbox cwd is not valid on this host")?;
         command.current_dir(cwd.as_path());
-        env.retain(|name, _| !codex_protocol::shell_environment::is_non_inheritable_env_var(name));
         command.env_clear().envs(env);
         Ok(command)
     }

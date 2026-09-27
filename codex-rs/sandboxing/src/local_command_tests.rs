@@ -15,13 +15,7 @@ fn request(command: Vec<String>, cwd: PathUri) -> SandboxExecRequest {
         command,
         cwd: cwd.clone(),
         sandbox_policy_cwd: cwd,
-        env: HashMap::from([
-            ("VISIBLE".to_string(), "yes".to_string()),
-            (
-                "OPENAI_IDENTITY_TOKEN_FILE".to_string(),
-                "secret".to_string(),
-            ),
-        ]),
+        env: HashMap::from([("VISIBLE".to_string(), "yes".to_string())]),
         network: None,
         network_environment_id: None,
         sandbox: SandboxType::None,
@@ -71,6 +65,37 @@ fn conversion_rejects_empty_argv() {
     assert_eq!(
         error.to_string(),
         "sandbox command was empty after preparation"
+    );
+}
+
+#[test]
+fn conversion_rejects_sensitive_environment_after_transformation() {
+    let cwd = AbsolutePathBuf::current_dir().expect("current directory");
+    let mut request = request(vec!["tool".to_string()], PathUri::from_abs_path(&cwd));
+    request.env.insert(
+        "OPENAI_IDENTITY_TOKEN_FILE".to_string(),
+        "secret".to_string(),
+    );
+    let error = request
+        .into_std_command()
+        .expect_err("sensitive environment must fail");
+    assert_eq!(
+        error.to_string(),
+        "prepared sandbox environment contains a non-inheritable variable"
+    );
+}
+
+#[test]
+fn conversion_rejects_unapplied_managed_network_environment() {
+    let cwd = AbsolutePathBuf::current_dir().expect("current directory");
+    let mut request = request(vec!["tool".to_string()], PathUri::from_abs_path(&cwd));
+    request.network_environment_id = Some("environment".to_string());
+    let error = request
+        .into_std_command()
+        .expect_err("managed network must fail");
+    assert_eq!(
+        error.to_string(),
+        "managed network environment must be applied before command conversion"
     );
 }
 
