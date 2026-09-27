@@ -1,6 +1,12 @@
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::permissions::project_roots_glob_pattern;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 
@@ -39,6 +45,30 @@ fn selection_matrix_never_falls_back_from_required_or_restricted() {
             permissions: PermissionProfile::Disabled,
         }
     );
+    let external = PermissionProfile::External {
+        network: NetworkSandboxPolicy::Enabled,
+    };
+    assert_eq!(
+        select_local_sandbox_for_platform(
+            &external,
+            std::slice::from_ref(&root),
+            LocalSandboxLaunchPolicy::FollowPermissionProfile,
+            /*platform_sandbox*/ None,
+        ),
+        LocalSandboxSelection::Selected {
+            sandbox: SandboxType::None,
+            permissions: external.clone(),
+        }
+    );
+    assert_eq!(
+        select_local_sandbox_for_platform(
+            &external,
+            std::slice::from_ref(&root),
+            LocalSandboxLaunchPolicy::Required,
+            /*platform_sandbox*/ None,
+        ),
+        LocalSandboxSelection::Unavailable
+    );
 }
 
 #[test]
@@ -67,20 +97,57 @@ fn selection_materializes_every_workspace_root_before_enforcement() {
 
 #[cfg(unix)]
 #[test]
-fn selection_rejects_non_utf8_workspace_root_before_materialization() {
+fn selection_rejects_lossy_workspace_root_glob_materialization() {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
 
     let root = AbsolutePathBuf::current_dir().expect("current directory");
     let invalid = root.join(std::path::PathBuf::from(OsString::from_vec(vec![0xff])));
+    let permissions = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+            FileSystemPath::GlobPattern {
+                pattern: project_roots_glob_pattern(std::path::Path::new("**/*.env")),
+            },
+            FileSystemAccessMode::Deny,
+        )]),
+        NetworkSandboxPolicy::Restricted,
+    );
     assert_eq!(
         select_local_sandbox_for_platform(
-            &PermissionProfile::workspace_write(),
-            &[invalid],
+            &permissions,
+            std::slice::from_ref(&invalid),
             LocalSandboxLaunchPolicy::FollowPermissionProfile,
             Some(SandboxType::LinuxSeccomp),
         ),
         LocalSandboxSelection::Unavailable
+    );
+    let workspace_write = PermissionProfile::workspace_write();
+    let expected = workspace_write
+        .clone()
+        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&invalid));
+    assert_eq!(
+        select_local_sandbox_for_platform(
+            &workspace_write,
+            std::slice::from_ref(&invalid),
+            LocalSandboxLaunchPolicy::FollowPermissionProfile,
+            Some(SandboxType::LinuxSeccomp),
+        ),
+        LocalSandboxSelection::Selected {
+            sandbox: SandboxType::LinuxSeccomp,
+            permissions: expected,
+        }
+    );
+    assert_eq!(
+        select_local_sandbox_for_platform(
+            &PermissionProfile::Disabled,
+            std::slice::from_ref(&invalid),
+            LocalSandboxLaunchPolicy::FollowPermissionProfile,
+            Some(SandboxType::LinuxSeccomp),
+        ),
+        LocalSandboxSelection::Selected {
+            sandbox: SandboxType::None,
+            permissions: PermissionProfile::Disabled,
+        }
     );
 }
 
