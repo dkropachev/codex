@@ -152,6 +152,8 @@ fn conversion_rejects_non_utf8_values_but_keeps_unix_names_case_sensitive() {
 #[cfg(windows)]
 #[test]
 fn conversion_canonicalizes_windows_environment_names_and_rejects_ambiguity() {
+    use std::os::windows::ffi::OsStringExt;
+
     let root = AbsolutePathBuf::current_dir().expect("current directory");
     let mut mixed_case = command(&root);
     mixed_case.env = HashMap::from([("Path".into(), "value".into())]);
@@ -172,4 +174,38 @@ fn conversion_canonicalizes_windows_environment_names_and_rejects_ambiguity() {
     let mut non_ascii = command(&root);
     non_ascii.env = HashMap::from([("café".into(), "value".into())]);
     assert_eq!(error(non_ascii).input(), "environment name");
+
+    let invalid = OsString::from_wide(&[0xd800]);
+    for (command, expected) in [
+        (
+            LocalProcessCommand {
+                program: invalid.clone(),
+                ..command(&root)
+            },
+            "command program",
+        ),
+        (
+            LocalProcessCommand {
+                args: vec![invalid.clone()],
+                ..command(&root)
+            },
+            "command argument",
+        ),
+        (
+            LocalProcessCommand {
+                env: HashMap::from([(invalid.clone(), "value".into())]),
+                ..command(&root)
+            },
+            "environment name",
+        ),
+        (
+            LocalProcessCommand {
+                env: HashMap::from([("NAME".into(), invalid.clone())]),
+                ..command(&root)
+            },
+            "environment value",
+        ),
+    ] {
+        assert_eq!(error(command).input(), expected);
+    }
 }
