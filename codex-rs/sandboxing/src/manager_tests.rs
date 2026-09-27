@@ -667,7 +667,7 @@ fn transform_for_direct_spawn_windows_separates_wrapper_from_inner_command() {
     let cwd_uri = PathUri::from_abs_path(&root);
     let permissions = PermissionProfile::read_only();
 
-    let transform = |wrapper: Option<&AbsolutePathBuf>| {
+    let transform = |sandbox: SandboxType, wrapper: Option<&AbsolutePathBuf>| {
         SandboxManager::new().transform_for_direct_spawn_with_runtime(
             SandboxDirectSpawnTransformRequest {
                 workspace_roots: std::slice::from_ref(&root),
@@ -683,7 +683,7 @@ fn transform_for_direct_spawn_windows_separates_wrapper_from_inner_command() {
                         additional_permissions: None,
                     },
                     permissions: &permissions,
-                    sandbox: SandboxType::WindowsRestrictedToken,
+                    sandbox,
                     enforce_managed_network: false,
                     environment_id: None,
                     network: None,
@@ -700,7 +700,8 @@ fn transform_for_direct_spawn_windows_separates_wrapper_from_inner_command() {
             },
         )
     };
-    let request = transform(Some(&wrapper)).expect("transform arbitrary Windows command");
+    let request = transform(SandboxType::WindowsRestrictedToken, Some(&wrapper))
+        .expect("transform arbitrary Windows command");
     let separator = request
         .command
         .iter()
@@ -722,7 +723,7 @@ fn transform_for_direct_spawn_windows_separates_wrapper_from_inner_command() {
     );
 
     assert!(matches!(
-        transform(/*wrapper*/ None),
+        transform(SandboxType::WindowsRestrictedToken, /*wrapper*/ None),
         Err(SandboxTransformError::WindowsSandboxPreparation(message))
             if message == "trusted Windows sandbox wrapper executable is required"
     ));
@@ -730,8 +731,19 @@ fn transform_for_direct_spawn_windows_separates_wrapper_from_inner_command() {
     let invalid_name = std::ffi::OsString::from_wide(&[0xd800]);
     let invalid_wrapper = root.join(std::path::PathBuf::from(invalid_name));
     assert!(matches!(
-        transform(Some(&invalid_wrapper)),
+        transform(SandboxType::WindowsRestrictedToken, Some(&invalid_wrapper)),
         Err(SandboxTransformError::WindowsSandboxPreparation(message))
             if message == "Windows sandbox wrapper path is not valid Unicode"
     ));
+
+    let unsandboxed = transform(SandboxType::None, /*wrapper*/ None)
+        .expect("unsandboxed command does not need a wrapper");
+    assert_eq!(
+        unsandboxed.command,
+        vec![
+            inner.display().to_string(),
+            "install".to_string(),
+            "--frozen-lockfile".to_string(),
+        ]
+    );
 }

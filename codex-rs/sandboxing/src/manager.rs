@@ -520,15 +520,17 @@ impl SandboxManager {
     ) -> Result<SandboxExecRequest, SandboxTransformError> {
         #[cfg(target_os = "windows")]
         {
-            let Some(wrapper_executable) = runtime.windows_sandbox_wrapper_executable else {
+            if request.transform.sandbox == SandboxType::WindowsRestrictedToken
+                && runtime.windows_sandbox_wrapper_executable.is_none()
+            {
                 return Err(SandboxTransformError::WindowsSandboxPreparation(
                     "trusted Windows sandbox wrapper executable is required".to_string(),
                 ));
-            };
+            }
             self.transform_for_direct_spawn_with_windows_wrapper(
                 request,
                 runtime.codex_home.as_path(),
-                Some(wrapper_executable),
+                runtime.windows_sandbox_wrapper_executable,
             )
         }
 
