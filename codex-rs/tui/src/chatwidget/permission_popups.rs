@@ -166,7 +166,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_auto_review_denials_popup(&mut self) {
-        if self.review.recent_auto_review_denials.is_empty() {
+        if self.recent_auto_review_denials.is_empty() {
             self.add_info_message(
                 "No recent auto-review denials in this thread.".to_string(),
                 Some("Denials are recorded after auto-review rejects an action.".to_string()),
@@ -185,33 +185,28 @@ impl ChatWidget {
             search_value: Some(String::new()),
             ..Default::default()
         }];
-        items.extend(
-            self.review
-                .recent_auto_review_denials
-                .entries()
-                .map(|event| {
-                    let id = event.id.clone();
-                    let summary = auto_review_denials::action_summary(&event.action);
-                    let rationale = event
-                        .rationale
-                        .as_deref()
-                        .unwrap_or("Auto-review did not include a rationale.");
-                    SelectionItem {
-                        name: summary.clone(),
-                        description: Some(rationale.to_string()),
-                        selected_description: Some(rationale.to_string()),
-                        search_value: Some(format!("{summary} {rationale}")),
-                        actions: vec![Box::new(move |tx| {
-                            tx.send(AppEvent::ApproveRecentAutoReviewDenial {
-                                thread_id,
-                                id: id.clone(),
-                            });
-                        })],
-                        dismiss_on_select: true,
-                        ..Default::default()
-                    }
-                }),
-        );
+        items.extend(self.recent_auto_review_denials.entries().map(|event| {
+            let id = event.id.clone();
+            let summary = auto_review_denials::action_summary(&event.action);
+            let rationale = event
+                .rationale
+                .as_deref()
+                .unwrap_or("Auto-review did not include a rationale.");
+            SelectionItem {
+                name: summary.clone(),
+                description: Some(rationale.to_string()),
+                selected_description: Some(rationale.to_string()),
+                search_value: Some(format!("{summary} {rationale}")),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::ApproveRecentAutoReviewDenial {
+                        thread_id,
+                        id: id.clone(),
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            }
+        }));
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Auto-review Denials".to_string()),
@@ -226,7 +221,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn approve_recent_auto_review_denial(&mut self, thread_id: ThreadId, id: String) {
-        let Some(event) = self.review.recent_auto_review_denials.take(&id) else {
+        let Some(event) = self.recent_auto_review_denials.take(&id) else {
             self.add_error_message("That auto-review denial is no longer available.".to_string());
             return;
         };

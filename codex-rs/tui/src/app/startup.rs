@@ -228,9 +228,7 @@ impl App {
         let terminal_title_invalid_items_warned = Arc::new(AtomicBool::new(false));
         let request_handle = app_server.request_handle();
         let workspace_command_runner: WorkspaceCommandRunner =
-            Arc::new(AppServerWorkspaceCommandRunner::new(request_handle.clone()));
-        let review_scope_resolver: SharedReviewScopeResolver =
-            Arc::new(AppServerReviewScopeResolver::new(request_handle));
+            Arc::new(AppServerWorkspaceCommandRunner::new(request_handle));
         let runtime_model_provider_started_at = Instant::now();
         let runtime_model_provider_base_url = match startup_draft
             .run_until(
@@ -291,7 +289,6 @@ impl App {
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     workspace_command_runner: Some(workspace_command_runner.clone()),
-                    review_scope_resolver: Some(review_scope_resolver.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
                         initial_images.clone(),
@@ -363,7 +360,6 @@ impl App {
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     workspace_command_runner: Some(workspace_command_runner.clone()),
-                    review_scope_resolver: Some(review_scope_resolver.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
                         initial_images.clone(),
@@ -425,7 +421,6 @@ impl App {
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
                     workspace_command_runner: Some(workspace_command_runner.clone()),
-                    review_scope_resolver: Some(review_scope_resolver.clone()),
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
                         initial_images.clone(),
@@ -476,7 +471,6 @@ See the Codex keymap documentation for supported actions and examples."
             app_event_tx,
             chat_widget,
             workspace_command_runner: Some(workspace_command_runner),
-            review_scope_resolver: Some(review_scope_resolver),
             config,
             launch_cwd,
             runtime_working_directory_override: None,

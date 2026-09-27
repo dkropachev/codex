@@ -3147,54 +3147,6 @@
             },
             "method": {
               "enum": [
-                "review/start"
-              ],
-              "title": "Review/startRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/ReviewStartParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Review/startRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "review/resolveScope"
-              ],
-              "title": "Review/resolveScopeRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/ReviewResolveScopeParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Review/resolveScopeRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
                 "model/list"
               ],
               "title": "Model/listRequestMethod",
@@ -4151,7 +4103,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Returned when `turn/start` or `turn/steer` is submitted while the current active turn cannot accept same-turn steering, for example `/review` or manual `/compact`.",
+          "description": "Returned when `turn/start` or `turn/steer` is submitted while the current active turn cannot accept same-turn steering, for example manual `/compact`.",
           "properties": {
             "activeTurnNotSteerable": {
               "properties": {
@@ -5115,12 +5067,6 @@
             {
               "type": "null"
             }
-          ]
-        },
-        "review_model": {
-          "type": [
-            "string",
-            "null"
           ]
         },
         "sandbox_mode": {
@@ -11400,7 +11346,6 @@
     },
     "NonSteerableTurnKind": {
       "enum": [
-        "review",
         "compact"
       ],
       "type": "string"
@@ -14704,279 +14649,6 @@
         }
       ]
     },
-    "ReviewDelivery": {
-      "enum": [
-        "inline",
-        "detached"
-      ],
-      "type": "string"
-    },
-    "ReviewResolveScopeParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "threadId"
-      ],
-      "title": "ReviewResolveScopeParams",
-      "type": "object"
-    },
-    "ReviewResolveScopeResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "branches": {
-          "description": "Available explicit base-branch targets, with the preferred target first.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "currentBranch": {
-          "description": "Currently checked-out branch, or `null` for a detached head or non-repository cwd.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "defaultBranch": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReviewScopeBranch"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Detected repository default branch, when one was found."
-        },
-        "pullRequest": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReviewScopePullRequest"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Open pull request associated with the selected checkout, when one was found."
-        }
-      },
-      "required": [
-        "branches"
-      ],
-      "title": "ReviewResolveScopeResponse",
-      "type": "object"
-    },
-    "ReviewScopeBranch": {
-      "properties": {
-        "displayName": {
-          "description": "Human-readable branch name presented to the user.",
-          "type": "string"
-        },
-        "target": {
-          "description": "Exact local or remote ref used as the review target.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "displayName",
-        "target"
-      ],
-      "type": "object"
-    },
-    "ReviewScopePullRequest": {
-      "properties": {
-        "baseBranch": {
-          "description": "Display name of the pull request's base branch, when supplied by GitHub.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "baseBranchTarget": {
-          "description": "Exact local or remote ref for the pull request base, when it resolved unambiguously.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "number": {
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "url": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "number",
-        "url"
-      ],
-      "type": "object"
-    },
-    "ReviewStartParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "delivery": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReviewDelivery"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Where to run the review: inline (default) on the current thread or detached on a new thread (returned in `reviewThreadId`)."
-        },
-        "target": {
-          "$ref": "#/definitions/ReviewTarget"
-        },
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "target",
-        "threadId"
-      ],
-      "title": "ReviewStartParams",
-      "type": "object"
-    },
-    "ReviewStartResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "reviewThreadId": {
-          "description": "Identifies the thread where the review runs.\n\nFor inline reviews, this is the original thread id. For detached reviews, this is the id of the new review thread.",
-          "type": "string"
-        },
-        "turn": {
-          "$ref": "#/definitions/Turn"
-        }
-      },
-      "required": [
-        "reviewThreadId",
-        "turn"
-      ],
-      "title": "ReviewStartResponse",
-      "type": "object"
-    },
-    "ReviewTarget": {
-      "oneOf": [
-        {
-          "description": "Review the working tree: staged, unstaged, and untracked files.",
-          "properties": {
-            "type": {
-              "enum": [
-                "uncommittedChanges"
-              ],
-              "title": "UncommittedChangesReviewTargetType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "UncommittedChangesReviewTarget",
-          "type": "object"
-        },
-        {
-          "description": "Review changes between the current branch and the given base branch.",
-          "properties": {
-            "branch": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "baseBranch"
-              ],
-              "title": "BaseBranchReviewTargetType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "branch",
-            "type"
-          ],
-          "title": "BaseBranchReviewTarget",
-          "type": "object"
-        },
-        {
-          "description": "Review the changes introduced by a specific commit.",
-          "properties": {
-            "sha": {
-              "type": "string"
-            },
-            "title": {
-              "description": "Optional human-readable label (e.g., commit subject) for UIs.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "commit"
-              ],
-              "title": "CommitReviewTargetType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "sha",
-            "type"
-          ],
-          "title": "CommitReviewTarget",
-          "type": "object"
-        },
-        {
-          "description": "Review the changes associated with a pull request.",
-          "properties": {
-            "type": {
-              "enum": [
-                "pullRequest"
-              ],
-              "title": "PullRequestReviewTargetType",
-              "type": "string"
-            },
-            "url": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "url"
-          ],
-          "title": "PullRequestReviewTarget",
-          "type": "object"
-        },
-        {
-          "description": "Arbitrary instructions, equivalent to the old free-form prompt.",
-          "properties": {
-            "instructions": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "custom"
-              ],
-              "title": "CustomReviewTargetType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "instructions",
-            "type"
-          ],
-          "title": "CustomReviewTarget",
-          "type": "object"
-        }
-      ]
-    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -17502,7 +17174,6 @@
       "oneOf": [
         {
           "enum": [
-            "review",
             "compact",
             "memory_consolidation"
           ],
@@ -19134,60 +18805,6 @@
             "id": {
               "type": "string"
             },
-            "review": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "enteredReviewMode"
-              ],
-              "title": "EnteredReviewModeThreadItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "review",
-            "type"
-          ],
-          "title": "EnteredReviewModeThreadItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "findingCount": {
-              "default": 0,
-              "format": "uint",
-              "minimum": 0.0,
-              "type": "integer"
-            },
-            "id": {
-              "type": "string"
-            },
-            "review": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "exitedReviewMode"
-              ],
-              "title": "ExitedReviewModeThreadItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "review",
-            "type"
-          ],
-          "title": "ExitedReviewModeThreadItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "type": "string"
-            },
             "type": {
               "enum": [
                 "contextCompaction"
@@ -20758,7 +20375,6 @@
         "exec",
         "appServer",
         "subAgent",
-        "subAgentReview",
         "subAgentCompact",
         "subAgentThreadSpawn",
         "subAgentOther",

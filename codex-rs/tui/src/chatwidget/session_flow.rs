@@ -26,7 +26,7 @@ impl ChatWidget {
             .set_queue_submissions(/*queue_submissions*/ false);
         if previous_thread_id != self.thread_id {
             self.pending_automatic_thread_names.clear();
-            self.review.reset_for_thread_change();
+            self.recent_auto_review_denials = Default::default();
             self.clear_thread_usage_state();
         }
         self.turn_lifecycle.reset_thread();

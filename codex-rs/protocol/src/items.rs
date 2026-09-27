@@ -17,8 +17,6 @@ use crate::protocol::ExecCommandSource;
 use crate::protocol::ExecCommandStatus;
 use crate::protocol::FileChange;
 use crate::protocol::PatchApplyStatus;
-use crate::protocol::ReviewOutputEvent;
-use crate::protocol::ReviewTarget;
 use crate::protocol::SubAgentActivityKind;
 use crate::user_input::ByteRange;
 use crate::user_input::TextElement;
@@ -67,8 +65,6 @@ pub enum TurnItem {
     /// This remains separate from [`Self::Extension`] because core still owns
     /// hosted image persistence and legacy-event fanout.
     ImageGeneration(ImageGenerationItem),
-    EnteredReviewMode(EnteredReviewModeItem),
-    ExitedReviewMode(ExitedReviewModeItem),
     FileChange(FileChangeItem),
     McpToolCall(McpToolCallItem),
     ContextCompaction(ContextCompactionItem),
@@ -143,19 +139,6 @@ pub struct AgentMessageItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub delivery: Option<AgentMessageDelivery>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
-pub struct EnteredReviewModeItem {
-    pub id: String,
-    pub target: ReviewTarget,
-    pub user_facing_hint: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
-pub struct ExitedReviewModeItem {
-    pub id: String,
-    pub review_output: Option<ReviewOutputEvent>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -689,8 +672,6 @@ impl TurnItem {
             TurnItem::ImageView(item) => item.id.clone(),
             TurnItem::Extension(item) => item.id().to_string(),
             TurnItem::ImageGeneration(item) => item.id.clone(),
-            TurnItem::EnteredReviewMode(item) => item.id.clone(),
-            TurnItem::ExitedReviewMode(item) => item.id.clone(),
             TurnItem::FileChange(item) => item.id.clone(),
             TurnItem::McpToolCall(item) => item.id.clone(),
             TurnItem::ContextCompaction(item) => item.id.clone(),

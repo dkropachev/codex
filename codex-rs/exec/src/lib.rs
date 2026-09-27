@@ -12,7 +12,6 @@ pub(crate) mod exec_events;
 
 pub use cli::Cli;
 pub use cli::Command;
-pub use cli::ReviewArgs;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::EnvironmentManager;
 use codex_app_server_client::ExecServerRuntimePaths;
@@ -26,9 +25,6 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ReviewStartParams;
-use codex_app_server_protocol::ReviewStartResponse;
-use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread as AppServerThread;
@@ -53,7 +49,6 @@ use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
-use codex_app_server_protocol::TurnStartedNotification;
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_config::cloud_config_bundle_loader_for_storage;
 use codex_config::CloudConfigBundleLoader;
@@ -96,8 +91,6 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::ReviewRequest;
-use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
@@ -173,9 +166,6 @@ enum InitialOperation {
     UserTurn {
         items: Vec<UserInput>,
         output_schema: Option<Value>,
-    },
-    Review {
-        review_request: ReviewRequest,
     },
 }
 
@@ -408,7 +398,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 
     let overrides = ConfigOverrides {
         model,
-        review_model: None,
         // Default to never ask for approvals in headless mode. Rebuild below if
         // the fully resolved reviewer is AutoReview.
         approval_policy: Some(AskForApproval::Never),
@@ -709,11 +698,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     let default_effort = config.model_reasoning_effort.clone();
 
     let (initial_operation, prompt_summary) = match (command.as_ref(), prompt, images) {
-        (Some(ExecCommand::Review(review_cli)), _, _) => {
-            let review_request = build_review_request(review_cli)?;
-            let summary = codex_core::review_prompts::user_facing_hint(&review_request.target);
-            (InitialOperation::Review { review_request }, summary)
-        }
         (Some(ExecCommand::Resume(args)), root_prompt, imgs) => {
             let prompt_arg = args
                 .prompt
@@ -1002,31 +986,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             .map_err(anyhow::Error::msg)?;
             let task_id = response.turn.id;
             info!("Sent prompt with event ID: {task_id}");
-            task_id
-        }
-        InitialOperation::Review { review_request } => {
-            let response: ReviewStartResponse = send_request_with_response(
-                &client,
-                ClientRequest::ReviewStart {
-                    request_id: request_ids.next(),
-                    params: ReviewStartParams {
-                        thread_id: primary_thread_id_for_span.clone(),
-                        target: review_target_to_api(review_request.target),
-                        delivery: None,
-                    },
-                },
-                "review/start",
-            )
-            .await
-            .map_err(anyhow::Error::msg)?;
-            let _ = event_processor.process_server_notification(ServerNotification::TurnStarted(
-                TurnStartedNotification {
-                    thread_id: response.review_thread_id.clone(),
-                    turn: response.turn.clone(),
-                },
-            ));
-            let task_id = response.turn.id;
-            info!("Sent review request with event ID: {task_id}");
             task_id
         }
     };
@@ -1335,16 +1294,6 @@ fn session_configured_from_thread_resume_response(
     )
 }
 
-fn review_target_to_api(target: ReviewTarget) -> ApiReviewTarget {
-    match target {
-        ReviewTarget::UncommittedChanges => ApiReviewTarget::UncommittedChanges,
-        ReviewTarget::BaseBranch { branch } => ApiReviewTarget::BaseBranch { branch },
-        ReviewTarget::Commit { sha, title } => ApiReviewTarget::Commit { sha, title },
-        ReviewTarget::PullRequest { url } => ApiReviewTarget::PullRequest { url },
-        ReviewTarget::Custom { instructions } => ApiReviewTarget::Custom { instructions },
-    }
-}
-
 #[expect(
     clippy::too_many_arguments,
     reason = "session mapping keeps explicit fields"
@@ -1540,7 +1489,6 @@ fn all_thread_source_kinds() -> Vec<ThreadSourceKind> {
         ThreadSourceKind::Exec,
         ThreadSourceKind::AppServer,
         ThreadSourceKind::SubAgent,
-        ThreadSourceKind::SubAgentReview,
         ThreadSourceKind::SubAgentCompact,
         ThreadSourceKind::SubAgentThreadSpawn,
         ThreadSourceKind::SubAgentOther,
@@ -2142,36 +2090,6 @@ fn resolve_root_prompt(prompt_arg: Option<String>) -> String {
         }
         maybe_dash => resolve_prompt(maybe_dash),
     }
-}
-
-fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
-    let target = if args.uncommitted {
-        ReviewTarget::UncommittedChanges
-    } else if let Some(branch) = args.base.clone() {
-        ReviewTarget::BaseBranch { branch }
-    } else if let Some(sha) = args.commit.clone() {
-        ReviewTarget::Commit {
-            sha,
-            title: args.commit_title.clone(),
-        }
-    } else if let Some(prompt_arg) = args.prompt.clone() {
-        let prompt = resolve_prompt(Some(prompt_arg)).trim().to_string();
-        if prompt.is_empty() {
-            anyhow::bail!("Review prompt cannot be empty");
-        }
-        ReviewTarget::Custom {
-            instructions: prompt,
-        }
-    } else {
-        anyhow::bail!(
-            "Specify --uncommitted, --base, --commit, or provide custom review instructions"
-        );
-    };
-
-    Ok(ReviewRequest {
-        target,
-        user_facing_hint: None,
-    })
 }
 
 #[cfg(test)]

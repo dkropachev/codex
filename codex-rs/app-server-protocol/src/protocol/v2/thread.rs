@@ -1490,7 +1490,6 @@ pub enum ThreadSourceKind {
     Exec,
     AppServer,
     SubAgent,
-    SubAgentReview,
     SubAgentCompact,
     SubAgentThreadSpawn,
     SubAgentOther,

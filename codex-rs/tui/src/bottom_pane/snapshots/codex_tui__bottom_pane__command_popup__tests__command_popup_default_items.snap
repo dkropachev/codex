@@ -13,7 +13,6 @@ expression: commands
 /skills - use skills to improve how Codex performs specific tasks
 /import - import setup, this project, and recent chats from Claude Code
 /hooks - view and manage lifecycle hooks
-/review - review my current changes and find issues
 /rename - rename the current thread
 /new - start a new chat during a conversation
 /archive - archive this session and exit

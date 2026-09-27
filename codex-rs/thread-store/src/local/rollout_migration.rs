@@ -18,6 +18,7 @@ use chrono::DateTime;
 use codex_app_server_protocol::project_rollout_line;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::InternalSessionSource;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -45,6 +46,7 @@ mod canonicalizer;
 mod legacy_event;
 mod line_parser;
 mod publish;
+mod retired_review;
 mod rollback;
 mod rollback_plan;
 mod rollback_replay;
@@ -65,6 +67,7 @@ use publish::rewritten_staged_rollout_path;
 use publish::staged_rollout_path;
 use publish::sync_parent_directory;
 use publish::write_migration_journal;
+use retired_review::RetiredReviewPlan;
 use rollback_plan::RollbackPlan;
 use rollback_plan::RollbackPlanner;
 use telemetry::RolloutMigrationTelemetry;
@@ -92,6 +95,7 @@ struct CanonicalizationSource<'a> {
     staged_path: &'a Path,
     source_permissions: &'a std::fs::Permissions,
     canonical_session_meta: &'a RolloutLine,
+    retired_review_plan: &'a RetiredReviewPlan,
 }
 
 /// Controls whether eligible rollouts are reported or migrated.
@@ -381,7 +385,7 @@ impl LocalThreadStore {
     ) -> ThreadStoreResult<Option<RolloutMigrationOutcome>> {
         let mut retried_moved_path = false;
         let metadata = loop {
-            let error = match codex_rollout::read_session_meta_line(&path).await {
+            let error = match read_migration_session_meta_line(&path).await {
                 Ok(metadata) => break metadata,
                 Err(error) if !retried_moved_path && error.kind() == io::ErrorKind::NotFound => {
                     // A different Codex process can archive or compress this rollout after path
@@ -420,7 +424,7 @@ impl LocalThreadStore {
                     }
                     Err(error) => return Err(error),
                 };
-                match codex_rollout::read_session_meta_line(&path).await {
+                match read_migration_session_meta_line(&path).await {
                     Ok(metadata) => break metadata,
                     Err(error) => error,
                 }
@@ -669,6 +673,11 @@ impl LocalThreadStore {
         } else {
             rollout_path
         };
+        let (retired_review_plan, retired_review_scan_bytes) = with_failure_reason(
+            RetiredReviewPlan::build(source_path).await,
+            RolloutMigrationFailureReason::RolloutReadFailed,
+        )?;
+        limiter.account(retired_review_scan_bytes).await;
         let source_file = with_failure_reason(
             File::open(source_path).await.map_err(migration_error),
             RolloutMigrationFailureReason::RolloutReadFailed,
@@ -706,12 +715,15 @@ impl LocalThreadStore {
             staged_path: &staged_path,
             source_permissions: &source_permissions,
             canonical_session_meta: &canonical_session_meta,
+            retired_review_plan: &retired_review_plan,
         };
 
         // Everything up through a durable staged file is one legacy-to-paginated conversion
         // phase. Keep the individual operations readable and tag the phase once if it fails.
         let conversion_result = async {
-            let bounded_subagent_context = if kind == RolloutMigrationKind::Subagent {
+            let bounded_subagent_context = if kind == RolloutMigrationKind::Subagent
+                && retired_review_plan.is_empty()
+            {
                 let RolloutItem::SessionMeta(session_meta) = &canonical_session_meta.item else {
                     return Err(migration_error("canonical session metadata is missing"));
                 };
@@ -835,14 +847,23 @@ impl LocalThreadStore {
 
     async fn build_rollback_plan(
         source_path: &Path,
+        retired_review_plan: &RetiredReviewPlan,
         limiter: &mut RolloutMigrationRateLimiter,
     ) -> ThreadStoreResult<RollbackPlan> {
         let source_file = File::open(source_path).await.map_err(migration_error)?;
         let mut source = BufReader::with_capacity(PROJECTION_BATCH_BYTES as usize, source_file);
         let mut bytes = Vec::new();
         let mut planner = RollbackPlanner::new();
+        let mut source_record_index = 0_usize;
         while let Some(record) = read_rollout_record(&mut source, &mut bytes).await? {
             limiter.account(record.byte_count).await;
+            let record_index = source_record_index;
+            source_record_index = source_record_index
+                .checked_add(1)
+                .ok_or_else(|| migration_error("legacy rollout record index overflow"))?;
+            if retired_review_plan.contains(record_index) {
+                continue;
+            }
             if let Some(line) = record.line {
                 planner.observe(&line)?;
             }
@@ -862,7 +883,12 @@ impl LocalThreadStore {
             } => Ok((expected_length, expected_ordinal)),
             CanonicalizationAttempt::NeedsRollbackPlan => {
                 remove_file_if_present(input.staged_path).await?;
-                let plan = Self::build_rollback_plan(input.source_path, limiter).await?;
+                let plan = Self::build_rollback_plan(
+                    input.source_path,
+                    input.retired_review_plan,
+                    limiter,
+                )
+                .await?;
                 let CanonicalizationAttempt::Complete {
                     expected_length,
                     expected_ordinal,
@@ -942,6 +968,7 @@ impl LocalThreadStore {
         let mut staged = BufWriter::with_capacity(PROJECTION_BATCH_BYTES as usize, staged_file);
         let mut bytes = Vec::new();
         let mut parsed_record_index = 0_usize;
+        let mut source_record_index = 0_usize;
         let mut canonicalizer = LegacyRolloutCanonicalizer::new(input.thread_id);
         let written = canonicalizer
             .write_head_session_meta(input.canonical_session_meta.clone(), &mut staged)
@@ -951,6 +978,13 @@ impl LocalThreadStore {
 
         while let Some(record) = read_rollout_record(&mut source, &mut bytes).await? {
             limiter.account(record.byte_count).await;
+            let record_index = source_record_index;
+            source_record_index = source_record_index
+                .checked_add(1)
+                .ok_or_else(|| migration_error("legacy rollout record index overflow"))?;
+            if input.retired_review_plan.contains(record_index) {
+                continue;
+            }
             let Some(line) = record.line else {
                 continue;
             };
@@ -1052,7 +1086,7 @@ impl LocalThreadStore {
         rollout_path: &Path,
         journal_path: &Path,
     ) -> ThreadStoreResult<()> {
-        let Ok(metadata) = codex_rollout::read_session_meta_line(rollout_path).await else {
+        let Ok(metadata) = read_migration_session_meta_line(rollout_path).await else {
             return Ok(());
         };
         if metadata.meta.history_mode == ThreadHistoryMode::Paginated {
@@ -1246,6 +1280,35 @@ async fn read_rollout_record(
         line,
         byte_count: byte_count as u64,
     }))
+}
+
+async fn read_migration_session_meta_line(path: &Path) -> io::Result<SessionMetaLine> {
+    let original_error = match codex_rollout::read_session_meta_line(path).await {
+        Ok(metadata) => return Ok(metadata),
+        Err(error) => error,
+    };
+    let mut lines = codex_rollout::open_rollout_line_reader(path).await?;
+    while let Some(line) = lines.next_line().await? {
+        let Ok(value) = serde_json::from_str(&line) else {
+            continue;
+        };
+        if !line_parser::is_legacy_review_subagent_session_meta(&value) {
+            continue;
+        }
+        let Ok(Some(line)) = line_parser::parse_legacy_rollout_value(value) else {
+            continue;
+        };
+        let RolloutItem::SessionMeta(metadata) = line.item else {
+            continue;
+        };
+        if matches!(
+            &metadata.meta.source,
+            SessionSource::SubAgent(SubAgentSource::Other(source)) if source == "review"
+        ) {
+            return Ok(metadata);
+        }
+    }
+    Err(original_error)
 }
 
 async fn find_rollout_paths(root: &Path) -> ThreadStoreResult<Vec<PathBuf>> {

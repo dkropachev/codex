@@ -223,12 +223,10 @@ impl ChatWidget {
         true
     }
 
-    /// Handle a turn aborted due to user interrupt (Esc), budget exhaustion,
-    /// or review completion.
+    /// Handle a turn aborted due to user interrupt (Esc) or budget exhaustion.
     /// When there are queued user messages, restore them into the composer
     /// separated by newlines rather than auto-submitting the next one.
     pub(super) fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
-        self.clear_review_action();
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
         let send_pending_steers_immediately =

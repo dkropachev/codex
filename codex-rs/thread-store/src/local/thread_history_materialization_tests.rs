@@ -815,14 +815,14 @@ async fn named_fork_boundaries_reject_invisible_and_noncanonical_turns() {
                 turn_completed("replacement-turn"),
                 completed_item(
                     source_id,
-                    "review-turn",
+                    "terminal-only-turn",
                     TurnItem::UserMessage(UserMessageItem {
-                        id: "review-message".to_string(),
+                        id: "terminal-only-message".to_string(),
                         client_id: None,
                         content: Vec::new(),
                     }),
                 ),
-                turn_completed("review-turn"),
+                turn_completed("terminal-only-turn"),
             ],
         })
         .await
@@ -841,8 +841,8 @@ async fn named_fork_boundaries_reject_invisible_and_noncanonical_turns() {
         ),
         (
             source_id,
-            ForkBoundary::BeforeTurn("review-turn".to_string()),
-            "turn review-turn does not have a persisted start boundary",
+            ForkBoundary::BeforeTurn("terminal-only-turn".to_string()),
+            "turn terminal-only-turn does not have a persisted start boundary",
         ),
     ] {
         let error = store

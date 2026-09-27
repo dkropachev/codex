@@ -1,7 +1,6 @@
 mod compact;
 mod lifecycle;
 mod regular;
-mod review;
 mod user_shell;
 mod workflow_command;
 
@@ -60,7 +59,6 @@ use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
 pub(crate) use compact::CompactTask;
 pub(crate) use regular::RegularTask;
-pub(crate) use review::ReviewTask;
 pub(crate) use user_shell::UserShellCommandMode;
 pub(crate) use user_shell::UserShellCommandTask;
 pub(crate) use user_shell::execute_user_shell_command;
@@ -177,7 +175,7 @@ fn bool_tag(value: bool) -> &'static str {
 /// Async task that drives a [`Session`] turn.
 ///
 /// Implementations encapsulate a specific Codex workflow (regular chat,
-/// reviews, ghost snapshots, etc.). Each task instance is owned by a
+/// compaction, shell commands, etc.). Each task instance is owned by a
 /// [`Session`] and executed on a background Tokio task. The trait is
 /// intentionally small: implementers identify themselves via
 /// [`SessionTask::kind`], perform their work in [`SessionTask::run`], and may

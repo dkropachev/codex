@@ -95,7 +95,7 @@
 //!
 //! The numeric auto-submit path used by the slash popup performs the same pending-paste expansion
 //! and attachment pruning, and clears pending paste state on success.
-//! Slash commands with arguments (like `/plan` and `/review`) reuse the same preparation path so
+//! Slash commands with arguments (like `/plan` and `/rename`) reuse the same preparation path so
 //! pasted content and text elements are preserved when extracting args.
 //!
 //! # Parent-Owned Thread Mode
@@ -3366,7 +3366,7 @@ impl ChatComposer {
         })
     }
 
-    /// Check if the input is a slash command with args (e.g., /review args) and dispatch it.
+    /// Check if the input is a slash command with args (e.g., /rename args) and dispatch it.
     /// Returns Some(InputResult) if a command was dispatched, None otherwise.
     fn try_dispatch_slash_command_with_args(&mut self) -> Option<InputResult> {
         let text = self.draft.textarea.text().to_string();
@@ -4099,7 +4099,7 @@ impl ChatComposer {
 
         // If the cursor is currently positioned within an `@token`, prefer the
         // file-search popup over the slash popup so users can insert a file path
-        // as an argument to the command (e.g., "/review @docs/...").
+        // as an argument to the command (e.g., "/rename @docs/...").
         if Self::current_at_token(&self.draft.textarea).is_some() {
             if matches!(self.popups.active, ActivePopup::Command(_)) {
                 self.popups.active = ActivePopup::None;
@@ -9813,13 +9813,13 @@ mod tests {
         composer
             .draft
             .textarea
-            .set_text_clearing_elements("/review these changes");
+            .set_text_clearing_elements("/clear now");
 
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert_eq!(InputResult::None, result);
-        assert_eq!("/review these changes", composer.draft.textarea.text());
+        assert_eq!("/clear now", composer.draft.textarea.text());
 
         let mut found_error = false;
         while let Ok(event) = rx.try_recv() {
@@ -9916,7 +9916,7 @@ mod tests {
         }
 
         assert_queued_slash("/compact");
-        assert_queued_slash("/review check regressions");
+        assert_queued_slash("/rename check-regressions");
         assert_queued_slash("/fast");
         assert_queued_slash("/does-not-exist");
     }
@@ -10290,11 +10290,11 @@ mod tests {
             /*disable_paste_burst*/ false,
         );
 
-        type_chars_humanlike(&mut composer, &['/', 'r', 'e', 'v', 'i', 'e', 'w', ' ']);
+        type_chars_humanlike(&mut composer, &['/', 'r', 'e', 'n', 'a', 'm', 'e', ' ']);
 
         let text = composer.draft.textarea.text().to_string();
         let elements = composer.draft.textarea.text_elements();
-        assert_eq!(text, "/review ");
+        assert_eq!(text, "/rename ");
         assert_eq!(elements.len(), 1);
 
         composer.draft.textarea.set_cursor(/*pos*/ 0);
@@ -10302,7 +10302,7 @@ mod tests {
 
         let text = composer.draft.textarea.text().to_string();
         let elements = composer.draft.textarea.text_elements();
-        assert_eq!(text, "x/review ");
+        assert_eq!(text, "x/rename ");
         assert!(elements.is_empty());
     }
 
@@ -12494,7 +12494,7 @@ mod tests {
             "bare '/' should activate slash popup"
         );
 
-        // Case 2: valid prefix "/re" (matches /review, /resume, etc.)
+        // Case 2: valid prefix "/re" (matches /rename, /resume, etc.)
         composer.set_text_content("/re".to_string(), Vec::new(), Vec::new());
         assert!(
             matches!(composer.popups.active, ActivePopup::Command(_)),

@@ -275,12 +275,6 @@ impl ChatWidget {
         self.last_rendered_user_message_display = None;
         let was_replaying_turn_completion = self.thread_usage.replaying_turn_completion;
         self.thread_usage.replaying_turn_completion = replay_kind.is_some();
-        self.note_review_turn_terminal(
-            &notification.thread_id,
-            &notification.turn.id,
-            &notification.turn.status,
-            replay_kind.is_some(),
-        );
         match notification.turn.status {
             TurnStatus::Completed => {
                 let last_agent_message =
@@ -357,10 +351,8 @@ impl ChatWidget {
     fn handle_item_started_notification(
         &mut self,
         notification: ItemStartedNotification,
-        from_replay: bool,
+        _from_replay: bool,
     ) {
-        let notification_thread_id = notification.thread_id;
-        let turn_id = notification.turn_id;
         match notification.item {
             item @ ThreadItem::CommandExecution { .. } => self.on_command_execution_started(item),
             ThreadItem::FileChange { id: _, changes, .. } => {
@@ -394,10 +386,6 @@ impl ChatWidget {
                 reasoning_effort,
                 agents_states,
             }),
-            ThreadItem::EnteredReviewMode { review, .. } if !from_replay => {
-                self.bind_live_review_action(&notification_thread_id, turn_id);
-                self.enter_review_mode_with_hint(review, /*from_replay*/ false);
-            }
             _ => {}
         }
     }
@@ -407,15 +395,6 @@ impl ChatWidget {
         notification: ItemCompletedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
-        if replay_kind.is_none()
-            && let ThreadItem::ExitedReviewMode { finding_count, .. } = &notification.item
-        {
-            self.note_live_review_exit(
-                &notification.thread_id,
-                &notification.turn_id,
-                *finding_count,
-            );
-        }
         match notification.item {
             item @ ThreadItem::CommandExecution { .. } => self.on_command_execution_completed(item),
             item => self.handle_thread_item(

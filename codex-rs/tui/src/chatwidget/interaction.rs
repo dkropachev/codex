@@ -124,20 +124,6 @@ impl ChatWidget {
             return;
         }
 
-        const REVIEW_STEER_UNAVAILABLE_MESSAGE: &str = "Steer messages aren't supported during /review. Press Ctrl+C now to cancel the review.";
-
-        if self.chat_keymap.interrupt_turn.is_pressed(key_event)
-            && self.review.is_review_mode
-            && (!self.input_queue.pending_steers.is_empty()
-                || !self.input_queue.rejected_steers_queue.is_empty())
-            && self.bottom_pane.is_task_running()
-            && self.bottom_pane.no_modal_or_popup_active()
-            && !self.should_handle_vim_insert_escape(key_event)
-        {
-            self.add_warning_message(REVIEW_STEER_UNAVAILABLE_MESSAGE.to_string());
-            return;
-        }
-
         if self.chat_keymap.interrupt_turn.is_pressed(key_event)
             && !self.input_queue.pending_steers.is_empty()
             && self.bottom_pane.is_task_running()
@@ -611,9 +597,8 @@ impl ChatWidget {
         self.bottom_pane.show_quit_shortcut_hint(key);
     }
 
-    // Review mode counts as cancellable work so Ctrl+C interrupts instead of quitting.
     fn is_cancellable_work_active(&self) -> bool {
-        self.bottom_pane.is_task_running() || self.review.is_review_mode
+        self.bottom_pane.is_task_running()
     }
 
     pub(crate) fn is_agent_turn_running(&self) -> bool {

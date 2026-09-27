@@ -450,12 +450,8 @@ impl App {
                                     turns.push(notification.turn.clone());
                                 }
                                 ServerNotification::ItemCompleted(notification) => {
-                                    if matches!(
-                                        notification.item,
-                                        ThreadItem::UserMessage { .. }
-                                            | ThreadItem::EnteredReviewMode { .. }
-                                            | ThreadItem::ExitedReviewMode { .. }
-                                    ) && let Some(turn) = turns
+                                    if matches!(notification.item, ThreadItem::UserMessage { .. })
+                                        && let Some(turn) = turns
                                         .iter_mut()
                                         .find(|turn| turn.id == notification.turn_id)
                                         && !turn
@@ -2740,42 +2736,6 @@ impl App {
             }
             AppEvent::OpenPermissionsPopup => {
                 self.chat_widget.open_permissions_popup();
-            }
-            AppEvent::OpenReviewBranchPicker { thread_id, cwd } => {
-                self.chat_widget.show_review_branch_picker(thread_id, &cwd);
-            }
-            AppEvent::OpenReviewCommitPicker { thread_id, cwd } => {
-                self.chat_widget
-                    .show_review_commit_picker(thread_id, &cwd)
-                    .await;
-            }
-            AppEvent::OpenReviewCustomPrompt { thread_id, cwd } => {
-                self.chat_widget.show_review_custom_prompt(thread_id, &cwd);
-            }
-            AppEvent::ReviewScopesResolved {
-                request_id,
-                cwd,
-                resolution,
-            } => {
-                self.chat_widget
-                    .apply_review_scope_resolution(request_id, cwd, resolution);
-            }
-            AppEvent::OpenReviewActionPicker {
-                thread_id,
-                cwd,
-                target,
-            } => {
-                self.chat_widget
-                    .show_review_action_picker(thread_id, cwd, target);
-            }
-            AppEvent::StartReview {
-                thread_id,
-                cwd,
-                target,
-                action,
-            } => {
-                self.chat_widget
-                    .start_review_for_thread(thread_id, cwd, target, action);
             }
             AppEvent::SubmitUserMessageWithMode {
                 text,

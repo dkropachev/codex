@@ -684,9 +684,6 @@ pub enum Op {
     /// responsible for undoing any edits on disk.
     ThreadRollback { num_turns: u32 },
 
-    /// Request a code review from the agent.
-    Review { review_request: ReviewRequest },
-
     /// Record that the user approved one retry of a concrete Guardian-denied action.
     ApproveGuardianDeniedAction { event: GuardianAssessmentEvent },
 
@@ -904,7 +901,6 @@ impl Op {
             Self::Compact => "compact",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
             Self::ThreadRollback { .. } => "thread_rollback",
-            Self::Review { .. } => "review",
             Self::ApproveGuardianDeniedAction { .. } => "approve_guardian_denied_action",
             Self::Shutdown => "shutdown",
             Self::RunUserShellCommand { .. } => "run_user_shell_command",
@@ -1471,12 +1467,6 @@ pub enum EventMsg {
     /// Notification that the agent is shutting down.
     ShutdownComplete,
 
-    /// Entered review mode.
-    EnteredReviewMode(EnteredReviewModeEvent),
-
-    /// Exited review mode with an optional final result to apply.
-    ExitedReviewMode(ExitedReviewModeEvent),
-
     RawResponseItem(RawResponseItemEvent),
     RawResponseCompleted(RawResponseCompletedEvent),
 
@@ -1779,7 +1769,6 @@ pub enum AgentStatus {
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
 pub enum NonSteerableTurnKind {
-    Review,
     Compact,
 }
 
@@ -1814,7 +1803,7 @@ pub enum CodexErrorInfo {
         http_status_code: Option<u16>,
     },
     /// Returned when `turn/start` or `turn/steer` is submitted while the current active turn
-    /// cannot accept same-turn steering, for example `/review` or manual `/compact`.
+    /// cannot accept same-turn steering, for example manual `/compact`.
     ActiveTurnNotSteerable {
         turn_kind: NonSteerableTurnKind,
     },
@@ -1923,31 +1912,6 @@ pub struct ReasoningRawContentDeltaEvent {
     // load with default value so it's backward compatible with the old format.
     #[serde(default)]
     pub content_index: i64,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct EnteredReviewModeEvent {
-    pub target: ReviewTarget,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub user_facing_hint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub turn_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub item_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ExitedReviewModeEvent {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub turn_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub item_id: Option<String>,
-    pub review_output: Option<ReviewOutputEvent>,
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -2679,7 +2643,6 @@ pub enum InternalSessionSource {
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
 pub enum SubAgentSource {
-    Review,
     Compact,
     ThreadSpawn {
         parent_thread_id: ThreadId,
@@ -2802,7 +2765,6 @@ impl SessionSource {
 impl fmt::Display for SubAgentSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SubAgentSource::Review => f.write_str("review"),
             SubAgentSource::Compact => f.write_str("compact"),
             SubAgentSource::MemoryConsolidation => f.write_str("memory_consolidation"),
             SubAgentSource::ThreadSpawn {
@@ -2820,7 +2782,6 @@ impl fmt::Display for SubAgentSource {
 impl SubAgentSource {
     pub fn kind(&self) -> &str {
         match self {
-            SubAgentSource::Review => "review",
             SubAgentSource::Compact => "compact",
             SubAgentSource::ThreadSpawn { .. } => "thread_spawn",
             SubAgentSource::MemoryConsolidation => "memory_consolidation",
@@ -2833,8 +2794,7 @@ impl SubAgentSource {
             SubAgentSource::ThreadSpawn {
                 parent_thread_id, ..
             } => Some(*parent_thread_id),
-            SubAgentSource::Review
-            | SubAgentSource::Compact
+            SubAgentSource::Compact
             | SubAgentSource::MemoryConsolidation
             | SubAgentSource::Other(_) => None,
         }
@@ -3185,98 +3145,6 @@ pub struct GitInfo {
     /// Repository URL (if available from remote)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository_url: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum ReviewDelivery {
-    Inline,
-    Detached,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "camelCase")]
-#[ts(tag = "type")]
-pub enum ReviewTarget {
-    /// Review the working tree: staged, unstaged, and untracked files.
-    UncommittedChanges,
-
-    /// Review changes between the current branch and the given base branch.
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    BaseBranch { branch: String },
-
-    /// Review the changes introduced by a specific commit.
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    Commit {
-        sha: String,
-        /// Optional human-readable label (e.g., commit subject) for UIs.
-        title: Option<String>,
-    },
-
-    /// Review the changes associated with a pull request.
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    PullRequest { url: String },
-
-    /// Arbitrary instructions provided by the user.
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    Custom { instructions: String },
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-/// Review request sent to the review session.
-pub struct ReviewRequest {
-    pub target: ReviewTarget,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub user_facing_hint: Option<String>,
-}
-
-/// Structured review result produced by a child review session.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct ReviewOutputEvent {
-    pub findings: Vec<ReviewFinding>,
-    pub overall_correctness: String,
-    pub overall_explanation: String,
-    pub overall_confidence_score: f32,
-}
-
-impl Default for ReviewOutputEvent {
-    fn default() -> Self {
-        Self {
-            findings: Vec::new(),
-            overall_correctness: String::default(),
-            overall_explanation: String::default(),
-            overall_confidence_score: 0.0,
-        }
-    }
-}
-
-/// A single review finding describing an observed issue or recommendation.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct ReviewFinding {
-    pub title: String,
-    pub body: String,
-    pub confidence_score: f32,
-    pub priority: i32,
-    pub code_location: ReviewCodeLocation,
-}
-
-/// Location of the code related to a review finding.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct ReviewCodeLocation {
-    pub absolute_file_path: PathBuf,
-    pub line_range: ReviewLineRange,
-}
-
-/// Inclusive line range in a file associated with the finding.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct ReviewLineRange {
-    pub start: u32,
-    pub end: u32,
 }
 
 #[derive(
@@ -4017,7 +3885,6 @@ pub struct TurnAbortedEvent {
 pub enum TurnAbortReason {
     Interrupted,
     Replaced,
-    ReviewEnded,
     BudgetLimited,
 }
 
@@ -4258,8 +4125,6 @@ mod tests {
     use crate::items::CommandExecutionStatus;
     use crate::items::DynamicToolCallItem;
     use crate::items::DynamicToolCallStatus;
-    use crate::items::EnteredReviewModeItem;
-    use crate::items::ExitedReviewModeItem;
     use crate::items::FileChangeItem;
     use crate::items::ImageGenerationItem;
     use crate::items::McpToolCallItem;
@@ -4503,7 +4368,7 @@ mod tests {
     #[test]
     fn session_source_restriction_product_does_not_guess_subagent_products() {
         assert_eq!(
-            SessionSource::SubAgent(SubAgentSource::Review).restriction_product(),
+            SessionSource::SubAgent(SubAgentSource::Compact).restriction_product(),
             None
         );
         assert_eq!(
@@ -5420,65 +5285,6 @@ mod tests {
     }
 
     #[test]
-    fn review_mode_item_completion_emits_legacy_events_with_ids() {
-        let entered = ItemCompletedEvent {
-            thread_id: ThreadId::new(),
-            turn_id: "turn-1".into(),
-            started_at_ms: Some(0),
-            completed_at_ms: 0,
-            item: TurnItem::EnteredReviewMode(EnteredReviewModeItem {
-                id: "entered-review".into(),
-                target: ReviewTarget::Custom {
-                    instructions: "review this".into(),
-                },
-                user_facing_hint: "Review requested.".into(),
-            }),
-        };
-        let exited = ItemCompletedEvent {
-            thread_id: ThreadId::new(),
-            turn_id: "turn-1".into(),
-            started_at_ms: Some(0),
-            completed_at_ms: 0,
-            item: TurnItem::ExitedReviewMode(ExitedReviewModeItem {
-                id: "exited-review".into(),
-                review_output: Some(ReviewOutputEvent {
-                    overall_explanation: "Looks good.".into(),
-                    ..Default::default()
-                }),
-            }),
-        };
-
-        assert!(matches!(
-            entered
-                .as_legacy_events(/*show_raw_agent_reasoning*/ false)
-                .as_slice(),
-            [EventMsg::EnteredReviewMode(EnteredReviewModeEvent {
-                target: ReviewTarget::Custom { instructions },
-                user_facing_hint: Some(user_facing_hint),
-                turn_id: Some(turn_id),
-                item_id: Some(item_id),
-            })]
-                if instructions == "review this"
-                    && user_facing_hint == "Review requested."
-                    && turn_id == "turn-1"
-                    && item_id == "entered-review"
-        ));
-        assert!(matches!(
-            exited
-                .as_legacy_events(/*show_raw_agent_reasoning*/ false)
-                .as_slice(),
-            [EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
-                turn_id: Some(turn_id),
-                item_id: Some(item_id),
-                review_output: Some(review_output),
-            })]
-                if turn_id == "turn-1"
-                    && item_id == "exited-review"
-                    && review_output.overall_explanation == "Looks good."
-        ));
-    }
-
-    #[test]
     fn item_started_event_requires_started_at_ms() {
         let mut value = serde_json::to_value(ItemStartedEvent {
             thread_id: ThreadId::new(),
@@ -5510,27 +5316,6 @@ mod tests {
     }
 
     #[test]
-    fn review_mode_events_deserialize_legacy_payloads() {
-        let entered = serde_json::from_value::<EnteredReviewModeEvent>(json!({
-            "target": {
-                "type": "custom",
-                "instructions": "review this"
-            },
-            "user_facing_hint": "hint"
-        }))
-        .unwrap();
-        assert_eq!(entered.turn_id, None);
-        assert_eq!(entered.item_id, None);
-
-        let exited = serde_json::from_value::<ExitedReviewModeEvent>(json!({
-            "review_output": null
-        }))
-        .unwrap();
-        assert_eq!(exited.turn_id, None);
-        assert_eq!(exited.item_id, None);
-    }
-
-    #[test]
     fn rollback_failed_error_does_not_affect_turn_status() {
         let event = ErrorEvent {
             message: "rollback failed".into(),
@@ -5542,9 +5327,9 @@ mod tests {
     #[test]
     fn active_turn_not_steerable_error_does_not_affect_turn_status() {
         let event = ErrorEvent {
-            message: "cannot steer a review turn".into(),
+            message: "cannot steer a compact turn".into(),
             codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
-                turn_kind: NonSteerableTurnKind::Review,
+                turn_kind: NonSteerableTurnKind::Compact,
             }),
         };
         assert!(!event.affects_turn_status());

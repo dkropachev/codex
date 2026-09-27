@@ -12,8 +12,6 @@ use crate::JsonSchema;
 use crate::TS;
 use crate::protocol::item_builders::CommandExecutionPresentation;
 use crate::protocol::item_builders::convert_patch_changes;
-use crate::protocol::item_builders::review_finding_count;
-use crate::protocol::item_builders::review_output_text;
 use codex_experimental_api_macros::ExperimentalApi;
 use codex_extension_items::ExtensionItem;
 pub use codex_extension_items::image_generation::ImageGenerationFailure;
@@ -388,20 +386,6 @@ pub enum ThreadItem {
     ImageGeneration(ImageGenerationItem),
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    EnteredReviewMode {
-        id: String,
-        review: String,
-    },
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    ExitedReviewMode {
-        id: String,
-        review: String,
-        #[serde(default)]
-        finding_count: usize,
-    },
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
     ContextCompaction {
         id: String,
     },
@@ -441,8 +425,6 @@ impl ThreadItem {
             | ThreadItem::CollabAgentToolCall { id, .. }
             | ThreadItem::SubAgentActivity { id, .. }
             | ThreadItem::ImageView { id, .. }
-            | ThreadItem::EnteredReviewMode { id, .. }
-            | ThreadItem::ExitedReviewMode { id, .. }
             | ThreadItem::ContextCompaction { id, .. } => id,
             ThreadItem::WebSearch(item) => &item.id,
             ThreadItem::Sleep(item) => &item.id,
@@ -978,15 +960,6 @@ impl From<CoreTurnItem> for ThreadItem {
                     saved_path: image.saved_path,
                 })
             }
-            CoreTurnItem::EnteredReviewMode(review) => ThreadItem::EnteredReviewMode {
-                id: review.id,
-                review: review.user_facing_hint,
-            },
-            CoreTurnItem::ExitedReviewMode(review) => ThreadItem::ExitedReviewMode {
-                id: review.id,
-                review: review_output_text(review.review_output.as_ref()),
-                finding_count: review_finding_count(review.review_output.as_ref()),
-            },
             CoreTurnItem::FileChange(file_change) => ThreadItem::FileChange {
                 id: file_change.id,
                 changes: convert_patch_changes(&file_change.changes),

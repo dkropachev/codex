@@ -295,8 +295,7 @@ fn activity_metadata_is_retained_without_including_outputs() -> color_eyre::Resu
             {"type": "webSearch", "id": "web-1", "query": "latest docs", "action": null},
             {"type": "sleep", "id": "sleep-1", "durationMs": 1000},
             {"type": "imageGeneration", "id": "image-1", "status": "completed",
-                "revisedPrompt": "a cat", "result": "image bytes"},
-            {"type": "enteredReviewMode", "id": "review-1", "review": "review changes"}
+                "revisedPrompt": "a cat", "result": "image bytes"}
         ]
     }))?;
 
@@ -319,8 +318,7 @@ fn activity_metadata_is_retained_without_including_outputs() -> color_eyre::Resu
             {"type": "webSearch", "id": "web-1", "query": "latest docs", "action": null},
             {"type": "sleep", "id": "sleep-1", "durationMs": 1000},
             {"type": "imageGeneration", "id": "image-1", "status": "completed",
-                "revisedPrompt": "a cat", "savedPath": null},
-            {"type": "enteredReviewMode", "id": "review-1", "review": "review changes"}
+                "revisedPrompt": "a cat", "savedPath": null}
         ])
     );
 

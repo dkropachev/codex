@@ -12,7 +12,6 @@ use codex_exec_server::SelectedCapabilityRootsStatus;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ThreadIdleCause;
 use codex_features::Feature;
-use codex_git_utils::ReviewScopeResolution;
 use codex_history::RolloutItem;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
@@ -849,12 +848,6 @@ impl CodexThread {
     /// Passively inspects the selected capability roots whose environments are ready now.
     pub fn inspect_selected_capability_roots(&self) -> SelectedCapabilityRootsStatus {
         self.session.inspect_selected_capability_roots()
-    }
-
-    /// Resolves repository metadata for a review-scope picker beside this thread's primary
-    /// environment, without starting a model turn or changing thread state.
-    pub async fn resolve_review_scope(&self) -> anyhow::Result<ReviewScopeResolution> {
-        self.session.resolve_review_scope().await
     }
 
     pub async fn read_mcp_resource(

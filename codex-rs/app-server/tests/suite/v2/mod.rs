@@ -82,10 +82,6 @@ mod request_permissions;
 mod request_user_input;
 mod request_validation;
 mod residency;
-mod review;
-#[cfg(unix)]
-mod review_pull_request;
-mod review_scope;
 mod rollout_migration;
 mod safety_check_downgrade;
 #[cfg(not(target_os = "windows"))]

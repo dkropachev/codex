@@ -32,6 +32,8 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadRolledBackEvent;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -361,6 +363,234 @@ async fn migration_publishes_canonical_projected_history_and_is_idempotent() {
         RolloutMigrationStatus::AlreadyPaginated
     );
     assert_eq!(fs::read(&path).expect("read idempotent rollout"), bytes);
+}
+
+#[tokio::test]
+async fn migration_retires_review_records_and_normalizes_review_subagent_metadata() {
+    let home = TempDir::new().expect("create Codex home");
+    let thread_id = ThreadId::new();
+    let path = write_rollout(
+        home.path(),
+        thread_id,
+        SessionSource::SubAgent(SubAgentSource::Other("review".to_string())),
+        vec![user_message("kept question"), agent_message("kept answer")],
+    );
+    let current_source = r#"{"subagent":{"other":"review"}}"#;
+    let legacy_source = r#"{"subagent":"review"}"#;
+    let rollout = fs::read_to_string(&path).expect("read legacy rollout");
+    assert!(rollout.contains(current_source));
+    fs::write(&path, rollout.replacen(current_source, legacy_source, 1))
+        .expect("write legacy review subagent metadata");
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("open legacy rollout");
+    for payload in [
+        json!({"type": "entered_review_mode"}),
+        json!({"type": "exited_review_mode"}),
+        json!({
+            "type": "item_started",
+            "item": {"type": "enteredReviewMode"},
+        }),
+        json!({
+            "type": "item_completed",
+            "item": {"type": "exitedReviewMode"},
+        }),
+    ] {
+        writeln!(
+            file,
+            "{}",
+            json!({
+                "timestamp": TIMESTAMP,
+                "type": "event_msg",
+                "payload": payload,
+            })
+        )
+        .expect("append retired review record");
+    }
+    drop(file);
+    let store = indexed_store(home.path()).await;
+
+    let report = store
+        .migrate_rollouts(apply_options())
+        .await
+        .expect("migrate legacy review rollout");
+
+    assert_eq!(report.outcomes.len(), 1);
+    assert_eq!(report.outcomes[0].status, RolloutMigrationStatus::Migrated);
+    let lines = read_rollout(&path);
+    assert!(matches!(
+        &lines[0].item,
+        RolloutItem::SessionMeta(metadata)
+            if metadata.meta.source
+                == SessionSource::SubAgent(SubAgentSource::Other("review".to_string()))
+    ));
+    let migrated = fs::read_to_string(path).expect("read migrated rollout");
+    for retired_type in [
+        "entered_review_mode",
+        "exited_review_mode",
+        "enteredReviewMode",
+        "exitedReviewMode",
+    ] {
+        assert!(!migrated.contains(retired_type));
+    }
+}
+
+#[tokio::test]
+async fn migration_retires_inline_review_child_without_hiding_surrounding_turns() {
+    let home = TempDir::new().expect("create Codex home");
+    let thread_id = ThreadId::new();
+    let path = write_rollout(
+        home.path(),
+        thread_id,
+        SessionSource::Cli,
+        vec![
+            started("before-review"),
+            user_message("kept before review"),
+            agent_message("before answer"),
+            completed("before-review"),
+            started("ordinary-interrupted"),
+            user_message("ordinary repeated prompt"),
+            user_message("ordinary repeated prompt"),
+            RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: Some("ordinary-interrupted".to_string()),
+                reason: TurnAbortReason::Interrupted,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            })),
+        ],
+    );
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("open legacy rollout");
+    let review_prompt = "Review the current code changes.";
+    let records = [
+        json!({
+            "timestamp": TIMESTAMP,
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "thread_id": thread_id,
+                "turn_id": "review-marker",
+                "item": {"type": "enteredReviewMode", "id": "review-start"},
+            },
+        }),
+        json!({
+            "timestamp": TIMESTAMP,
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "thread_id": thread_id,
+                "turn_id": "review-marker",
+                "item": {"type": "exitedReviewMode", "id": "review-end"},
+            },
+        }),
+        serde_json::to_value(RolloutLine {
+            timestamp: TIMESTAMP.to_string(),
+            ordinal: None,
+            item: completed("review-marker"),
+        })
+        .expect("serialize review marker completion"),
+        serde_json::to_value(RolloutLine {
+            timestamp: TIMESTAMP.to_string(),
+            ordinal: None,
+            item: started("review-child"),
+        })
+        .expect("serialize review child start"),
+        json!({
+            "timestamp": TIMESTAMP,
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "id": "review_rollout_user",
+                "role": "user",
+                "content": [{"type": "input_text", "text": review_prompt}],
+            },
+        }),
+        serde_json::to_value(RolloutLine {
+            timestamp: TIMESTAMP.to_string(),
+            ordinal: None,
+            item: user_message(review_prompt),
+        })
+        .expect("serialize first review prompt"),
+        serde_json::to_value(RolloutLine {
+            timestamp: TIMESTAMP.to_string(),
+            ordinal: None,
+            item: user_message(review_prompt),
+        })
+        .expect("serialize duplicated review prompt"),
+        serde_json::to_value(RolloutLine {
+            timestamp: TIMESTAMP.to_string(),
+            ordinal: None,
+            item: agent_message("retired review result"),
+        })
+        .expect("serialize review result"),
+        json!({
+            "timestamp": TIMESTAMP,
+            "type": "event_msg",
+            "payload": {
+                "type": "turn_aborted",
+                "turn_id": "review-child",
+                "reason": "review_ended",
+            },
+        }),
+        serde_json::to_value(RolloutLine {
+            timestamp: TIMESTAMP.to_string(),
+            ordinal: None,
+            item: started("after-review"),
+        })
+        .expect("serialize following turn start"),
+        serde_json::to_value(RolloutLine {
+            timestamp: TIMESTAMP.to_string(),
+            ordinal: None,
+            item: user_message("kept after review"),
+        })
+        .expect("serialize following user message"),
+        serde_json::to_value(RolloutLine {
+            timestamp: TIMESTAMP.to_string(),
+            ordinal: None,
+            item: agent_message("after answer"),
+        })
+        .expect("serialize following answer"),
+        serde_json::to_value(RolloutLine {
+            timestamp: TIMESTAMP.to_string(),
+            ordinal: None,
+            item: completed("after-review"),
+        })
+        .expect("serialize following turn completion"),
+    ];
+    for record in records {
+        writeln!(file, "{record}").expect("append legacy review span");
+    }
+    drop(file);
+    let store = indexed_store(home.path()).await;
+
+    let report = store
+        .migrate_rollouts(apply_options())
+        .await
+        .expect("migrate inline review rollout");
+
+    assert_eq!(report.outcomes[0].status, RolloutMigrationStatus::Migrated);
+    let migrated = fs::read_to_string(path).expect("read migrated rollout");
+    for retained in [
+        "kept before review",
+        "ordinary repeated prompt",
+        "kept after review",
+    ] {
+        assert!(migrated.contains(retained), "missing {retained}");
+    }
+    assert_eq!(migrated.matches("ordinary repeated prompt").count(), 2);
+    for retired in [
+        "review_rollout_user",
+        review_prompt,
+        "retired review result",
+        "review-marker",
+        "review-child",
+    ] {
+        assert!(!migrated.contains(retired), "retained {retired}");
+    }
 }
 
 #[tokio::test]

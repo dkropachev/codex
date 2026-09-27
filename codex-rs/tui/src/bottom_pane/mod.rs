@@ -2848,6 +2848,17 @@ mod tests {
             skills: Some(Vec::new()),
         });
 
+        pane.set_workflow_commands_context(
+            /*enabled*/ true,
+            PathBuf::from("/tmp"),
+            vec![WorkflowCommand {
+                id: "revise".to_string(),
+                command: "revise".to_string(),
+                description: "Revise the current work".to_string(),
+                option_hints: Vec::new(),
+                workflow_dir: PathBuf::from("/tmp/revise"),
+            }],
+        );
         pane.set_task_running(/*running*/ true);
 
         // Repro: a running task + slash-command popup + Esc should dismiss the popup without

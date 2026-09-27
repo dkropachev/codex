@@ -42,7 +42,6 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -156,22 +155,6 @@ async fn goal_tools_hidden_for_ephemeral_threads() -> anyhow::Result<()> {
         thread_id,
         SessionSource::Cli,
         /*persistent_thread_state_available*/ false,
-    )
-    .await;
-
-    assert_eq!(Vec::<String>::new(), tool_names(&tools));
-    Ok(())
-}
-
-#[tokio::test]
-async fn goal_tools_hidden_for_review_subagents() -> anyhow::Result<()> {
-    let runtime = test_runtime().await?;
-    let thread_id = test_thread_id()?;
-    let tools = installed_tools_with_start(
-        runtime,
-        thread_id,
-        SessionSource::SubAgent(SubAgentSource::Review),
-        /*persistent_thread_state_available*/ true,
     )
     .await;
 

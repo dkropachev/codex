@@ -505,11 +505,6 @@ impl Session {
 
         match active_task.kind {
             crate::state::TaskKind::Regular => {}
-            crate::state::TaskKind::Review => {
-                return Err(NotSubmittedReason::ActiveTurnNotSteerable {
-                    turn_kind: NonSteerableTurnKind::Review,
-                });
-            }
             crate::state::TaskKind::Compact => {
                 return Err(NotSubmittedReason::ActiveTurnNotSteerable {
                     turn_kind: NonSteerableTurnKind::Compact,

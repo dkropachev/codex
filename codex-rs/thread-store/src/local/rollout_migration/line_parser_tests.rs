@@ -1,4 +1,6 @@
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_rollout::RolloutItem;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -140,23 +142,65 @@ fn normalizes_legacy_turn_context_sandbox_policy() {
 }
 
 #[test]
-fn normalizes_legacy_review_entry_prompt() {
+fn skips_retired_review_records() {
+    for event_type in ["entered_review_mode", "exited_review_mode"] {
+        let bytes = line("event_msg", json!({"type": event_type}));
+        assert!(
+            parse_legacy_rollout_line(&bytes)
+                .expect("inspect retired review event")
+                .is_none()
+        );
+    }
+
+    for event_type in ["item_started", "item_completed"] {
+        for item_type in [
+            "enteredReviewMode",
+            "exitedReviewMode",
+            "EnteredReviewMode",
+            "ExitedReviewMode",
+        ] {
+            let bytes = line(
+                "event_msg",
+                json!({
+                    "type": event_type,
+                    "item": {"type": item_type},
+                }),
+            );
+            assert!(
+                parse_legacy_rollout_line(&bytes)
+                    .expect("inspect retired review item")
+                    .is_none()
+            );
+        }
+    }
+}
+
+#[test]
+fn normalizes_legacy_review_subagent_source() {
+    let id = "00000000-0000-0000-0000-000000000001";
     let bytes = line(
-        "event_msg",
+        "session_meta",
         json!({
-            "type": "entered_review_mode",
-            "prompt": "review these changes",
-            "user_facing_hint": "Review requested.",
+            "session_id": id,
+            "id": id,
+            "timestamp": "2025-01-03T12:00:00Z",
+            "cwd": std::env::temp_dir(),
+            "originator": "test",
+            "cli_version": "0.0.0",
+            "source": {"subagent": "review"},
         }),
     );
 
     let parsed = parse_legacy_rollout_line(&bytes)
-        .expect("parse legacy review entry")
-        .expect("keep legacy review entry");
-    assert!(matches!(
-        parsed.item,
-        RolloutItem::EventMsg(EventMsg::EnteredReviewMode(_))
-    ));
+        .expect("parse legacy review subagent metadata")
+        .expect("keep legacy session metadata");
+    let RolloutItem::SessionMeta(metadata) = parsed.item else {
+        panic!("expected session metadata");
+    };
+    assert_eq!(
+        metadata.meta.source,
+        SessionSource::SubAgent(SubAgentSource::Other("review".to_string()))
+    );
 }
 
 #[test]

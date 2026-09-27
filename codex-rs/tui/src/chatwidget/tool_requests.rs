@@ -205,7 +205,7 @@ impl ChatWidget {
         if ev.status != GuardianAssessmentStatus::Denied {
             return;
         }
-        self.review.recent_auto_review_denials.push(ev.clone());
+        self.recent_auto_review_denials.push(ev.clone());
         let cell = if let Some(command) = guardian_command(&ev.action) {
             history_cell::new_approval_decision_cell(
                 history_cell::ApprovalDecisionSubject::Command(command),

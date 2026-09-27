@@ -106,7 +106,6 @@ use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
-use codex_app_server_protocol::CodexErrorInfo;
 use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::CommandAction;
@@ -129,7 +128,6 @@ use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpToolCallAppContext;
 use codex_app_server_protocol::McpToolCallStatus;
-use codex_app_server_protocol::NonSteerableTurnKind;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PermissionsRequestApprovalParams;
 use codex_app_server_protocol::RequestId;
@@ -539,27 +537,6 @@ fn no_active_turn_steer_error() -> JSONRPCErrorError {
 
 fn no_active_turn_steer_error_type() -> AnalyticsJsonRpcError {
     AnalyticsJsonRpcError::TurnSteer(TurnSteerRequestError::NoActiveTurn)
-}
-
-fn non_steerable_review_error() -> JSONRPCErrorError {
-    JSONRPCErrorError {
-        code: -32600,
-        message: "cannot steer a review turn".to_string(),
-        data: Some(
-            serde_json::to_value(AppServerTurnError {
-                message: "cannot steer a review turn".to_string(),
-                codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
-                    turn_kind: NonSteerableTurnKind::Review,
-                }),
-                additional_details: None,
-            })
-            .expect("serialize turn error"),
-        ),
-    }
-}
-
-fn non_steerable_review_error_type() -> AnalyticsJsonRpcError {
-    AnalyticsJsonRpcError::TurnSteer(TurnSteerRequestError::NonSteerableReview)
 }
 
 fn input_too_large_steer_error() -> JSONRPCErrorError {
@@ -3282,11 +3259,11 @@ async fn item_review_summaries_do_not_cross_threads_with_reused_item_ids() {
 }
 
 #[test]
-fn subagent_thread_started_review_serializes_expected_shape() {
+fn subagent_thread_started_compact_serializes_expected_shape() {
     let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
         SubAgentThreadStartedInput {
             session_id: "session-root".to_string(),
-            thread_id: "thread-review".to_string(),
+            thread_id: "thread-compact".to_string(),
             parent_thread_id: None,
             forked_from_thread_id: None,
             product_client_id: "codex-tui".to_string(),
@@ -3295,12 +3272,12 @@ fn subagent_thread_started_review_serializes_expected_shape() {
             model: "gpt-5".to_string(),
             ephemeral: false,
             thread_source: Some(ThreadSource::Subagent),
-            subagent_source: SubAgentSource::Review,
+            subagent_source: SubAgentSource::Compact,
             created_at: 123,
         },
     ));
 
-    let payload = serde_json::to_value(&event).expect("serialize review subagent event");
+    let payload = serde_json::to_value(&event).expect("serialize compact subagent event");
     assert_eq!(payload["event_params"]["thread_source"], "subagent");
     assert_eq!(
         payload["event_params"]["app_server_client"]["product_client_id"],
@@ -3320,7 +3297,7 @@ fn subagent_thread_started_review_serializes_expected_shape() {
     );
     assert_eq!(payload["event_params"]["created_at"], 123);
     assert_eq!(payload["event_params"]["initialization_mode"], "new");
-    assert_eq!(payload["event_params"]["subagent_source"], "review");
+    assert_eq!(payload["event_params"]["subagent_source"], "compact");
     assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
     assert_eq!(
         payload["event_params"]["forked_from_thread_id"],
@@ -3467,7 +3444,7 @@ async fn subagent_thread_started_publishes_without_initialize() {
             AnalyticsFact::Custom(CustomAnalyticsFact::SubAgentThreadStarted(
                 SubAgentThreadStartedInput {
                     session_id: "session-root".to_string(),
-                    thread_id: "thread-review".to_string(),
+                    thread_id: "thread-compact".to_string(),
                     parent_thread_id: None,
                     forked_from_thread_id: None,
                     product_client_id: "codex-tui".to_string(),
@@ -3476,7 +3453,7 @@ async fn subagent_thread_started_publishes_without_initialize() {
                     model: "gpt-5".to_string(),
                     ephemeral: false,
                     thread_source: Some(ThreadSource::Subagent),
-                    subagent_source: SubAgentSource::Review,
+                    subagent_source: SubAgentSource::Compact,
                     created_at: 127,
                 },
             )),
@@ -3492,7 +3469,7 @@ async fn subagent_thread_started_publishes_without_initialize() {
         "codex-tui"
     );
     assert_eq!(payload[0]["event_params"]["thread_source"], "subagent");
-    assert_eq!(payload[0]["event_params"]["subagent_source"], "review");
+    assert_eq!(payload[0]["event_params"]["subagent_source"], "compact");
 }
 
 #[tokio::test]
@@ -3690,7 +3667,7 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
                     model: "gpt-5".to_string(),
                     ephemeral: false,
                     thread_source: Some(ThreadSource::Subagent),
-                    subagent_source: SubAgentSource::Review,
+                    subagent_source: SubAgentSource::Compact,
                     created_at: 128,
                 },
             )),
@@ -3798,7 +3775,7 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
     assert_eq!(payload[0]["event_params"]["thread_id"], "thread-subagent");
     assert_eq!(payload[0]["event_params"]["session_id"], "session-thread-1");
     assert_eq!(payload[0]["event_params"]["thread_source"], "subagent");
-    assert_eq!(payload[0]["event_params"]["subagent_source"], "review");
+    assert_eq!(payload[0]["event_params"]["subagent_source"], "compact");
     assert_eq!(payload[0]["event_params"]["parent_thread_id"], "thread-1");
     assert_eq!(
         payload[0]["event_params"]["app_server_client"]["client_name"],
@@ -4879,24 +4856,6 @@ async fn rejected_turn_steer_uses_request_connection_metadata() {
             .as_u64()
             .expect("created_at")
             > 0
-    );
-}
-
-#[tokio::test]
-async fn rejected_turn_steer_maps_active_turn_not_steerable_error_type() {
-    let mut reducer = AnalyticsReducer::default();
-    let mut out = Vec::new();
-    let payload = ingest_rejected_turn_steer(
-        &mut reducer,
-        &mut out,
-        non_steerable_review_error(),
-        Some(non_steerable_review_error_type()),
-    )
-    .await;
-
-    assert_eq!(
-        payload["event_params"]["rejection_reason"],
-        json!("non_steerable_review")
     );
 }
 

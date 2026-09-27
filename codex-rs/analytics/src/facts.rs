@@ -300,7 +300,6 @@ pub enum TurnSteerResult {
 pub enum TurnSteerRejectionReason {
     NoActiveTurn,
     ExpectedTurnMismatch,
-    NonSteerableReview,
     NonSteerableCompact,
     EmptyInput,
     InputTooLarge,
@@ -326,7 +325,6 @@ pub enum AnalyticsJsonRpcError {
 pub enum TurnSteerRequestError {
     NoActiveTurn,
     ExpectedTurnMismatch,
-    NonSteerableReview,
     NonSteerableCompact,
 }
 
@@ -341,7 +339,6 @@ impl From<TurnSteerRequestError> for TurnSteerRejectionReason {
         match error {
             TurnSteerRequestError::NoActiveTurn => Self::NoActiveTurn,
             TurnSteerRequestError::ExpectedTurnMismatch => Self::ExpectedTurnMismatch,
-            TurnSteerRequestError::NonSteerableReview => Self::NonSteerableReview,
             TurnSteerRequestError::NonSteerableCompact => Self::NonSteerableCompact,
         }
     }
