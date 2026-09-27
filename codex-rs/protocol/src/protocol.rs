@@ -2639,7 +2639,7 @@ pub enum InternalSessionSource {
     Guardian,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Serialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
 pub enum SubAgentSource {
@@ -2656,6 +2656,52 @@ pub enum SubAgentSource {
     },
     MemoryConsolidation,
     Other(String),
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SubAgentSourceWire {
+    Review,
+    Compact,
+    ThreadSpawn {
+        parent_thread_id: ThreadId,
+        depth: i32,
+        #[serde(default)]
+        agent_path: Option<AgentPath>,
+        #[serde(default)]
+        agent_nickname: Option<String>,
+        #[serde(default, alias = "agent_type")]
+        agent_role: Option<String>,
+    },
+    MemoryConsolidation,
+    Other(String),
+}
+
+impl<'de> Deserialize<'de> for SubAgentSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(match SubAgentSourceWire::deserialize(deserializer)? {
+            SubAgentSourceWire::Review => Self::Other("review".to_string()),
+            SubAgentSourceWire::Compact => Self::Compact,
+            SubAgentSourceWire::ThreadSpawn {
+                parent_thread_id,
+                depth,
+                agent_path,
+                agent_nickname,
+                agent_role,
+            } => Self::ThreadSpawn {
+                parent_thread_id,
+                depth,
+                agent_path,
+                agent_nickname,
+                agent_role,
+            },
+            SubAgentSourceWire::MemoryConsolidation => Self::MemoryConsolidation,
+            SubAgentSourceWire::Other(other) => Self::Other(other),
+        })
+    }
 }
 
 impl fmt::Display for SessionSource {
@@ -4266,6 +4312,14 @@ mod tests {
         assert_eq!(
             SessionSource::from_startup_arg("app-server").unwrap(),
             SessionSource::Mcp
+        );
+    }
+
+    #[test]
+    fn legacy_review_subagent_source_deserializes_as_other() {
+        assert_eq!(
+            serde_json::from_value::<SubAgentSource>(json!("review")).unwrap(),
+            SubAgentSource::Other("review".to_string())
         );
     }
 

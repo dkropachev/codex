@@ -66,6 +66,7 @@ use crate::ListTurnsParams;
 use crate::LoadThreadHistoryParams;
 use crate::SortDirection;
 use crate::StoredTurnItemsView;
+use crate::StoredTurnStatus;
 use crate::ThreadMetadataPatch;
 use crate::ThreadSortKey;
 use crate::ThreadStore;
@@ -437,7 +438,7 @@ async fn migration_retires_review_records_and_normalizes_review_subagent_metadat
 }
 
 #[tokio::test]
-async fn migration_retires_inline_review_child_without_hiding_surrounding_turns() {
+async fn migration_retires_review_lifecycle_but_preserves_review_messages() {
     let home = TempDir::new().expect("create Codex home");
     let thread_id = ThreadId::new();
     let path = write_rollout(
@@ -578,19 +579,24 @@ async fn migration_retires_inline_review_child_without_hiding_surrounding_turns(
         "kept before review",
         "ordinary repeated prompt",
         "kept after review",
+        "review_rollout_user",
+        review_prompt,
+        "retired review result",
     ] {
         assert!(migrated.contains(retained), "missing {retained}");
     }
     assert_eq!(migrated.matches("ordinary repeated prompt").count(), 2);
-    for retired in [
-        "review_rollout_user",
-        review_prompt,
-        "retired review result",
-        "review-marker",
-        "review-child",
-    ] {
+    assert_eq!(migrated.matches(review_prompt).count(), 1);
+    for retired in ["review-marker", "review_ended"] {
         assert!(!migrated.contains(retired), "retained {retired}");
     }
+    let review_child = list_active_summary_turns(&store, thread_id)
+        .await
+        .turns
+        .into_iter()
+        .find(|turn| turn.turn_id == "review-child")
+        .expect("preserve review child turn");
+    assert_eq!(review_child.status, StoredTurnStatus::Interrupted);
 }
 
 #[tokio::test]

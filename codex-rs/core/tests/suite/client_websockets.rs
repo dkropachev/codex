@@ -253,7 +253,7 @@ async fn responses_websocket_omits_routing_hint_for_provider_with_own_credential
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_omits_unprefixed_item_ids_without_mutating_prompt() {
+async fn responses_websocket_omits_invalid_item_ids_without_mutating_prompt() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![vec![
@@ -286,20 +286,33 @@ async fn responses_websocket_omits_unprefixed_item_ids_without_mutating_prompt()
         "content": [{"type": "input_text", "text": "empty-id message"}],
     }))
     .expect("response item with an empty id should deserialize");
-    let prompt = prompt_with_input(vec![prefixed, unprefixed, empty]);
+    let wrong_prefix = serde_json::from_value(json!({
+        "type": "message",
+        "id": "review_rollout_user",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "review history"}],
+    }))
+    .expect("response item with a wrong id prefix should deserialize");
+    let prompt = prompt_with_input(vec![prefixed, unprefixed, empty, wrong_prefix]);
 
     stream_until_complete(&mut client_session, &harness, &prompt).await;
 
     let connection = server.single_connection();
     let body = connection.first().expect("missing request").body_json();
-    assert_eq!(body["input"].as_array().map(Vec::len), Some(3));
+    assert_eq!(body["input"].as_array().map(Vec::len), Some(4));
     assert_eq!(body["input"][0]["id"].as_str(), Some("msg_existing"));
     assert_eq!(body["input"][1].get("id"), None);
     assert_eq!(body["input"][2].get("id"), None);
+    assert_eq!(body["input"][3].get("id"), None);
     assert_eq!(
         serde_json::to_value(&prompt.input).expect("prompt input should serialize")[1]["id"]
             .as_str(),
         Some("018f9e15-7a6a-7000-8000-000000000001")
+    );
+    assert_eq!(
+        serde_json::to_value(&prompt.input).expect("prompt input should serialize")[3]["id"]
+            .as_str(),
+        Some("review_rollout_user")
     );
 
     server.shutdown().await;

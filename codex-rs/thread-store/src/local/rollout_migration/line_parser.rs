@@ -38,6 +38,7 @@ pub(super) fn parse_legacy_rollout_value(mut value: Value) -> Result<Option<Roll
     normalize_legacy_sandbox_policy(&mut value);
     normalize_legacy_rate_limit_resets(&mut value);
     normalize_legacy_review_subagent_source(&mut value);
+    normalize_legacy_review_abort_reason(&mut value);
     normalize_legacy_command_cwd(&mut value)?;
     serde_json::from_value(value)
         .map(Some)
@@ -45,32 +46,30 @@ pub(super) fn parse_legacy_rollout_value(mut value: Value) -> Result<Option<Roll
 }
 
 fn should_skip_retired_record(value: &Value) -> bool {
-    is_retired_review_response(value)
-        || matches!(
-            event_type(value),
-            Some(
-                "entered_review_mode"
-                    | "exited_review_mode"
-                    | "guardian_assessment"
-                    | "thread_name_updated"
-                    | "undo_completed"
-            )
+    matches!(
+        event_type(value),
+        Some(
+            "entered_review_mode"
+                | "exited_review_mode"
+                | "guardian_assessment"
+                | "thread_name_updated"
+                | "undo_completed"
         )
-        || (matches!(event_type(value), Some("item_started" | "item_completed"))
-            && value
-                .get("payload")
-                .and_then(|payload| payload.get("item"))
-                .and_then(|item| item.get("type"))
-                .and_then(Value::as_str)
-                .is_some_and(|item_type| {
-                    matches!(
-                        item_type,
-                        "enteredReviewMode"
-                            | "exitedReviewMode"
-                            | "EnteredReviewMode"
-                            | "ExitedReviewMode"
-                    )
-                }))
+    ) || (matches!(event_type(value), Some("item_started" | "item_completed"))
+        && value
+            .get("payload")
+            .and_then(|payload| payload.get("item"))
+            .and_then(|item| item.get("type"))
+            .and_then(Value::as_str)
+            .is_some_and(|item_type| {
+                matches!(
+                    item_type,
+                    "enteredReviewMode"
+                        | "exitedReviewMode"
+                        | "EnteredReviewMode"
+                        | "ExitedReviewMode"
+                )
+            }))
         || (rollout_type(value) == Some("response_item")
             && value
                 .get("payload")
@@ -78,15 +77,6 @@ fn should_skip_retired_record(value: &Value) -> bool {
                 .and_then(|payload| payload.get("type"))
                 .and_then(Value::as_str)
                 == Some("ghost_snapshot"))
-}
-
-pub(super) fn is_retired_review_response(value: &Value) -> bool {
-    rollout_type(value) == Some("response_item")
-        && value
-            .get("payload")
-            .and_then(|payload| payload.get("id"))
-            .and_then(Value::as_str)
-            == Some("review_rollout_user")
 }
 
 fn normalize_legacy_turn_context(value: &mut Value) {
@@ -138,6 +128,21 @@ fn normalize_legacy_review_subagent_source(value: &mut Value) {
         return;
     };
     *source = serde_json::json!({"subagent": {"other": "review"}});
+}
+
+fn normalize_legacy_review_abort_reason(value: &mut Value) {
+    if event_type(value) != Some("turn_aborted") {
+        return;
+    }
+    let Some(payload) = payload_object_mut(value) else {
+        return;
+    };
+    if payload.get("reason").and_then(Value::as_str) == Some("review_ended") {
+        payload.insert(
+            "reason".to_string(),
+            Value::String("interrupted".to_string()),
+        );
+    }
 }
 
 fn normalize_legacy_rate_limit_resets(value: &mut Value) {

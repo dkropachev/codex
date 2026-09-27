@@ -1,3 +1,36 @@
+mod retired_review_item_tests {
+    use super::super::deserialize_stored_thread_item;
+    use codex_thread_store::StoredThreadItem;
+
+    #[test]
+    fn skips_retired_review_items_from_paginated_history() {
+        for item_type in [
+            "enteredReviewMode",
+            "exitedReviewMode",
+            "EnteredReviewMode",
+            "ExitedReviewMode",
+        ] {
+            let item = StoredThreadItem {
+                turn_id: "turn-1".to_string(),
+                item_id: format!("item-{item_type}"),
+                updated_at_ordinal: 1,
+                created_at_ms: 1,
+                item_json: serde_json::to_vec(&serde_json::json!({
+                    "type": item_type,
+                    "id": format!("item-{item_type}"),
+                }))
+                .expect("serialize retired review item"),
+            };
+
+            assert!(
+                deserialize_stored_thread_item(item)
+                    .expect("retired review item should be accepted")
+                    .is_none()
+            );
+        }
+    }
+}
+
 mod thread_list_cwd_filter_tests {
     use super::super::normalize_thread_list_cwd_filters;
     use codex_app_server_protocol::ThreadListCwdFilter;

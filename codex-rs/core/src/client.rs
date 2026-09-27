@@ -994,7 +994,14 @@ impl ModelClient {
 
     fn prepare_response_items_for_request(&self, input: &mut [ResponseItem]) {
         for item in input {
-            if item.id().is_some_and(|id| !id.is_prefixed()) {
+            let has_invalid_id = item.id().is_some_and(|id| {
+                !item.id_prefix().is_some_and(|prefix| {
+                    id.as_str()
+                        .strip_prefix(prefix)
+                        .is_some_and(|suffix| suffix.starts_with('_') && suffix.len() > 1)
+                })
+            });
+            if has_invalid_id {
                 item.set_id(/*new_id*/ None);
             }
             if !self.state.content_item_kinds_enabled {

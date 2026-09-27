@@ -17,7 +17,6 @@ use tokio::io::BufReader;
 
 use super::MAX_ROLLOUT_LINE_BYTES;
 use super::PROJECTION_BATCH_BYTES;
-use super::line_parser::is_retired_review_response;
 use super::migration_error;
 use crate::ThreadStoreResult;
 
@@ -77,6 +76,7 @@ struct LegacyTurn {
     entered_review: bool,
     exited_review: bool,
     user_messages: Vec<UserMessageEvent>,
+    user_message_record_indexes: Vec<usize>,
     record_indexes: Vec<usize>,
 }
 
@@ -95,10 +95,6 @@ struct RetiredReviewPlanner {
 
 impl RetiredReviewPlanner {
     fn observe(&mut self, record_index: usize, value: &Value) {
-        if is_retired_review_response(value) {
-            self.retired_record_indexes.insert(record_index);
-        }
-
         if let Some((marker, turn_id)) = review_marker(value) {
             let turn_index = self.review_turn(turn_id, record_index);
             let turn = &mut self.turns[turn_index];
@@ -159,6 +155,7 @@ impl RetiredReviewPlanner {
                 let turn_index = self.ensure_current_turn(record_index);
                 let turn = &mut self.turns[turn_index];
                 turn.user_messages.push(message);
+                turn.user_message_record_indexes.push(record_index);
                 push_record(turn, record_index);
             }
             _ => self.record_in_target_or_current_turn(
@@ -187,7 +184,7 @@ impl RetiredReviewPlanner {
                 self.retired_record_indexes
                     .extend(marker.record_indexes.iter().copied());
                 self.retired_record_indexes
-                    .extend(child.record_indexes.iter().copied());
+                    .extend(child.user_message_record_indexes.iter().copied());
             }
         }
         RetiredReviewPlan {

@@ -111,6 +111,9 @@ SELECT rollout_ordinal, 1 AS kind, item_id AS id, turn_id, item_json
 FROM thread_items
 WHERE thread_id = ?1 AND rollout_ordinal >= ?2
   AND rollout_ordinal < ?3 AND rollout_ordinal <= ?4
+  AND json_extract(item_json, '$.type') NOT IN (
+    'enteredReviewMode', 'exitedReviewMode', 'EnteredReviewMode', 'ExitedReviewMode'
+  )
   AND (rollout_ordinal, 1, item_id) < (?4, ?5, ?6)
 ORDER BY rollout_ordinal DESC, item_id DESC LIMIT ?7
 ), realtime AS (
