@@ -1,5 +1,7 @@
 use super::SandboxCommand;
 #[cfg(target_os = "windows")]
+use super::SandboxDirectSpawnRuntime;
+#[cfg(target_os = "windows")]
 use super::SandboxDirectSpawnTransformRequest;
 use super::SandboxManager;
 use super::SandboxTransformRequest;
@@ -649,4 +651,68 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
         Some(std::ffi::OsStr::new(".sandbox-bin"))
     );
     assert!(materialized_helper.exists());
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn transform_for_direct_spawn_windows_separates_wrapper_from_inner_command() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let root = AbsolutePathBuf::from_absolute_path(directory.path()).expect("absolute root");
+    let wrapper = root.join("codex.exe");
+    let inner = root.join("bun.exe");
+    let cwd_uri = PathUri::from_abs_path(&root);
+    let permissions = PermissionProfile::read_only();
+
+    let request = SandboxManager::new()
+        .transform_for_direct_spawn_with_runtime(
+            SandboxDirectSpawnTransformRequest {
+                workspace_roots: std::slice::from_ref(&root),
+                windows_sandbox_proxy_settings_mode:
+                    codex_windows_sandbox::WindowsSandboxProxySettingsMode::Preserve,
+                transform: SandboxTransformRequest {
+                    command: SandboxCommand {
+                        program: inner.as_os_str().to_owned(),
+                        args: vec!["install".to_string(), "--frozen-lockfile".to_string()],
+                        cwd: cwd_uri.clone(),
+                        env: HashMap::new(),
+                        managed_network: None,
+                        additional_permissions: None,
+                    },
+                    permissions: &permissions,
+                    sandbox: SandboxType::WindowsRestrictedToken,
+                    enforce_managed_network: false,
+                    environment_id: None,
+                    network: None,
+                    sandbox_policy_cwd: &cwd_uri,
+                    codex_linux_sandbox_exe: None,
+                    use_legacy_landlock: false,
+                    windows_sandbox_level: WindowsSandboxLevel::Elevated,
+                    windows_sandbox_private_desktop: false,
+                },
+            },
+            SandboxDirectSpawnRuntime {
+                codex_home: &root,
+                windows_sandbox_wrapper_executable: Some(&wrapper),
+            },
+        )
+        .expect("transform arbitrary Windows command");
+    let separator = request
+        .command
+        .iter()
+        .position(|arg| arg == "--")
+        .expect("wrapper argv separator");
+
+    assert_eq!(request.sandbox, SandboxType::None);
+    assert_eq!(
+        request.command.first(),
+        Some(&wrapper.display().to_string())
+    );
+    assert_eq!(
+        &request.command[separator + 1..],
+        &[
+            inner.display().to_string(),
+            "install".to_string(),
+            "--frozen-lockfile".to_string(),
+        ]
+    );
 }
