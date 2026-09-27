@@ -198,3 +198,56 @@ fn conversion_preserves_unix_arg0() {
     assert!(output.status.success());
     assert_eq!(output.stdout, b"sandbox-helper");
 }
+
+#[cfg(target_os = "windows")]
+#[test]
+fn public_atomic_preparation_wraps_windows_restricted_command() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let cwd = AbsolutePathBuf::from_absolute_path(directory.path()).expect("absolute cwd");
+    let cwd_uri = PathUri::from_abs_path(&cwd);
+    let wrapper = cwd.join("codex.exe");
+    let inner = cwd.join("bun.exe");
+    let permissions = PermissionProfile::read_only();
+    let command = SandboxManager::new()
+        .prepare_command_for_direct_spawn_with_runtime(
+            SandboxDirectSpawnTransformRequest {
+                transform: SandboxTransformRequest {
+                    command: SandboxCommand {
+                        program: inner.as_os_str().to_owned(),
+                        args: vec!["install".to_string()],
+                        cwd: cwd_uri.clone(),
+                        env: HashMap::new(),
+                        managed_network: None,
+                        additional_permissions: None,
+                    },
+                    permissions: &permissions,
+                    sandbox: SandboxType::WindowsRestrictedToken,
+                    enforce_managed_network: false,
+                    environment_id: None,
+                    network: None,
+                    sandbox_policy_cwd: &cwd_uri,
+                    codex_linux_sandbox_exe: None,
+                    use_legacy_landlock: false,
+                    windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+                    windows_sandbox_private_desktop: false,
+                },
+                workspace_roots: std::slice::from_ref(&cwd),
+                windows_sandbox_proxy_settings_mode: WindowsSandboxProxySettingsMode::Preserve,
+            },
+            SandboxDirectSpawnRuntime {
+                codex_home: &cwd,
+                windows_sandbox_wrapper_executable: Some(&wrapper),
+            },
+        )
+        .expect("prepare Windows command");
+    let args = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let separator = args.iter().position(|arg| arg == "--").expect("separator");
+    assert_eq!(command.get_program(), wrapper.as_path());
+    assert_eq!(
+        &args[separator + 1..],
+        &[inner.display().to_string(), "install".to_string()]
+    );
+}
