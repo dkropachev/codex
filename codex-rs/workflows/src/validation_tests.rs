@@ -343,7 +343,7 @@ fn validation_commands_treat_shell_metacharacters_as_literal_arguments() {
     }];
 
     let mut findings = BTreeSet::new();
-    super::checks::validate_commands(&package, &mut findings);
+    validate_commands_for_test(&package, &mut findings);
 
     assert!(!side_effect.exists());
     assert!(
@@ -551,7 +551,7 @@ fn tracked_artifacts_are_rejected() {
         .expect("run git add");
     assert!(status.success());
     let mut findings = BTreeSet::new();
-    super::checks::validate_git_layout(&root, &mut findings);
+    validate_git_layout_for_test(&root, &mut findings);
     assert!(
         findings
             .iter()
@@ -575,7 +575,7 @@ fn oversized_tracked_file_listing_is_rejected_deterministically() {
     assert!(status.success());
     let mut findings = BTreeSet::new();
 
-    super::checks::validate_git_layout(&root, &mut findings);
+    validate_git_layout_for_test(&root, &mut findings);
 
     assert!(findings.iter().any(|finding| {
         finding.message
@@ -596,7 +596,7 @@ fn invalid_git_layout_and_unreadable_gitignore_are_rejected() {
 
     let mut findings = BTreeSet::new();
     super::checks::validate_gitignore(&root, &mut findings);
-    super::checks::validate_git_layout(&root, &mut findings);
+    validate_git_layout_for_test(&root, &mut findings);
 
     assert!(findings.iter().any(|finding| {
         finding.code == "gitignore" && finding.message.contains("65536-byte limit")
@@ -766,4 +766,25 @@ fn write_fake_validation_bun(root: &Path) -> std::path::PathBuf {
     .expect("write fake Bun");
     make_executable(&fake_bun);
     fake_bun
+}
+
+fn validate_commands_for_test(
+    package: &WorkflowPackage,
+    findings: &mut BTreeSet<ValidationFinding>,
+) {
+    super::checks::validate_commands_cancellable(
+        package,
+        findings,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .expect("validation command must complete");
+}
+
+fn validate_git_layout_for_test(root: &Path, findings: &mut BTreeSet<ValidationFinding>) {
+    super::checks::validate_git_layout_until(
+        root,
+        findings,
+        crate::runner::CommandDeadline::after(std::time::Duration::from_secs(/*secs*/ 2)),
+        /*cancelled*/ None,
+    );
 }

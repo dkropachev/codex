@@ -147,14 +147,6 @@ fn scan_coverage_markers(root: &Path, depth: usize, scan: &mut CoverageScan) {
     }
 }
 
-#[cfg(test)]
-pub(super) fn validate_commands(
-    package: &WorkflowPackage,
-    findings: &mut BTreeSet<ValidationFinding>,
-) {
-    let _ = validate_commands_cancellable(package, findings, &AtomicBool::new(false));
-}
-
 pub(super) fn validate_commands_cancellable(
     package: &WorkflowPackage,
     findings: &mut BTreeSet<ValidationFinding>,
@@ -235,16 +227,6 @@ pub(super) fn validate_gitignore(root: &Path, findings: &mut BTreeSet<Validation
             ));
         }
     }
-}
-
-#[cfg(test)]
-pub(super) fn validate_git_layout(root: &Path, findings: &mut BTreeSet<ValidationFinding>) {
-    validate_git_layout_until(
-        root,
-        findings,
-        crate::runner::CommandDeadline::after(GIT_LAYOUT_TIMEOUT),
-        /*cancelled*/ None,
-    );
 }
 
 pub(super) fn validate_git_layout_until(

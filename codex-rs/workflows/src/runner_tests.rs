@@ -715,6 +715,14 @@ fn source_scan_bounds_entries_depth_and_file_size() {
     assert!(format!("{error:#}").contains("exceeds 1048576 bytes"));
 }
 
+fn scan_workflow_sources(workflow_dir: &Path) -> anyhow::Result<Vec<SourceInspection>> {
+    scan_workflow_sources_cancellable(
+        workflow_dir,
+        CommandDeadline::after(INSPECTION_TIMEOUT),
+        &AtomicBool::new(false),
+    )
+}
+
 fn run_output(root: &Path, manifest: &WorkflowManifest, input: &Value) -> (ExitStatus, Vec<u8>) {
     let mut markdown = Vec::new();
     let status = run_cli_workflow_with_bun(

@@ -610,18 +610,6 @@ pub(crate) fn inspect_workflow_cancellable_with_bun(
     inspect_workflow_with_bun(bun, workflow_dir, expected, Some(cancelled))
 }
 
-#[cfg(test)]
-pub(crate) fn scan_workflow_sources(workflow_dir: &Path) -> anyhow::Result<Vec<SourceInspection>> {
-    run_json_operation(
-        Path::new("bun"),
-        workflow_dir,
-        RunnerOperation::Scan,
-        /*payload*/ None,
-        /*expected*/ None,
-        /*cancelled*/ None,
-    )
-}
-
 pub(crate) fn scan_workflow_sources_cancellable(
     workflow_dir: &Path,
     deadline: CommandDeadline,
