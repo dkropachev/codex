@@ -1,3 +1,4 @@
+#[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -64,6 +65,25 @@ fn selection_materializes_every_workspace_root_before_enforcement() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn selection_rejects_non_utf8_workspace_root_before_materialization() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = AbsolutePathBuf::current_dir().expect("current directory");
+    let invalid = root.join(std::path::PathBuf::from(OsString::from_vec(vec![0xff])));
+    assert_eq!(
+        select_local_sandbox_for_platform(
+            &PermissionProfile::workspace_write(),
+            &[invalid],
+            LocalSandboxLaunchPolicy::FollowPermissionProfile,
+            Some(SandboxType::LinuxSeccomp),
+        ),
+        LocalSandboxSelection::Unavailable
+    );
+}
+
 #[cfg(target_os = "windows")]
 #[test]
 fn public_selection_observes_disabled_windows_sandbox() {
@@ -77,4 +97,21 @@ fn public_selection_observes_disabled_windows_sandbox() {
         ),
         LocalSandboxSelection::Unavailable
     );
+    for level in [
+        WindowsSandboxLevel::RestrictedToken,
+        WindowsSandboxLevel::Elevated,
+    ] {
+        assert_eq!(
+            select_local_sandbox(
+                &PermissionProfile::Disabled,
+                std::slice::from_ref(&root),
+                LocalSandboxLaunchPolicy::Required,
+                level,
+            ),
+            LocalSandboxSelection::Selected {
+                sandbox: SandboxType::WindowsRestrictedToken,
+                permissions: PermissionProfile::Disabled,
+            }
+        );
+    }
 }

@@ -45,6 +45,12 @@ fn select_local_sandbox_for_platform(
     policy: LocalSandboxLaunchPolicy,
     platform_sandbox: Option<SandboxType>,
 ) -> LocalSandboxSelection {
+    if workspace_roots
+        .iter()
+        .any(|root| root.as_path().to_str().is_none())
+    {
+        return LocalSandboxSelection::Unavailable;
+    }
     let permissions = permissions
         .clone()
         .materialize_project_roots_with_workspace_roots(workspace_roots);
