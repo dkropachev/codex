@@ -7,8 +7,16 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 
+use super::command_from_direct_spawn_request;
+use super::validate_direct_spawn_state;
+use crate::SandboxCommand;
+use crate::SandboxDirectSpawnRuntime;
+use crate::SandboxDirectSpawnTransformRequest;
 use crate::SandboxExecRequest;
+use crate::SandboxManager;
+use crate::SandboxTransformRequest;
 use crate::SandboxType;
+use crate::WindowsSandboxProxySettingsMode;
 
 fn request(command: Vec<String>, cwd: PathUri) -> SandboxExecRequest {
     SandboxExecRequest {
@@ -29,17 +37,40 @@ fn request(command: Vec<String>, cwd: PathUri) -> SandboxExecRequest {
 #[test]
 fn conversion_preserves_argv_cwd_and_only_inheritable_environment() {
     let cwd = AbsolutePathBuf::current_dir().expect("current directory");
-    let command = request(
-        vec![
-            "tool".to_string(),
-            "".to_string(),
-            "two words".to_string(),
-            "λ".to_string(),
-        ],
-        PathUri::from_abs_path(&cwd),
-    )
-    .into_std_command()
-    .expect("convert sandbox request");
+    let cwd_uri = PathUri::from_abs_path(&cwd);
+    let permissions = PermissionProfile::Disabled;
+    let command = SandboxManager::new()
+        .prepare_command_for_direct_spawn_with_runtime(
+            SandboxDirectSpawnTransformRequest {
+                transform: SandboxTransformRequest {
+                    command: SandboxCommand {
+                        program: "tool".into(),
+                        args: vec!["".to_string(), "two words".to_string(), "λ".to_string()],
+                        cwd: cwd_uri.clone(),
+                        env: HashMap::from([("VISIBLE".to_string(), "yes".to_string())]),
+                        managed_network: None,
+                        additional_permissions: None,
+                    },
+                    permissions: &permissions,
+                    sandbox: SandboxType::None,
+                    enforce_managed_network: false,
+                    environment_id: None,
+                    network: None,
+                    sandbox_policy_cwd: &cwd_uri,
+                    codex_linux_sandbox_exe: None,
+                    use_legacy_landlock: false,
+                    windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                    windows_sandbox_private_desktop: false,
+                },
+                workspace_roots: std::slice::from_ref(&cwd),
+                windows_sandbox_proxy_settings_mode: WindowsSandboxProxySettingsMode::Preserve,
+            },
+            SandboxDirectSpawnRuntime {
+                codex_home: &cwd,
+                windows_sandbox_wrapper_executable: None,
+            },
+        )
+        .expect("convert sandbox request");
 
     assert_eq!(command.get_program(), "tool");
     assert_eq!(
@@ -59,9 +90,9 @@ fn conversion_preserves_argv_cwd_and_only_inheritable_environment() {
 #[test]
 fn conversion_rejects_empty_argv() {
     let cwd = AbsolutePathBuf::current_dir().expect("current directory");
-    let error = request(Vec::new(), PathUri::from_abs_path(&cwd))
-        .into_std_command()
-        .expect_err("empty argv must fail");
+    let error =
+        command_from_direct_spawn_request(request(Vec::new(), PathUri::from_abs_path(&cwd)))
+            .expect_err("empty argv must fail");
     assert_eq!(
         error.to_string(),
         "sandbox command was empty after preparation"
@@ -76,9 +107,8 @@ fn conversion_rejects_sensitive_environment_after_transformation() {
         "OPENAI_IDENTITY_TOKEN_FILE".to_string(),
         "secret".to_string(),
     );
-    let error = request
-        .into_std_command()
-        .expect_err("sensitive environment must fail");
+    let error =
+        command_from_direct_spawn_request(request).expect_err("sensitive environment must fail");
     assert_eq!(
         error.to_string(),
         "prepared sandbox environment contains a non-inheritable variable"
@@ -87,16 +117,19 @@ fn conversion_rejects_sensitive_environment_after_transformation() {
 
 #[test]
 fn conversion_rejects_unapplied_managed_network_environment() {
-    let cwd = AbsolutePathBuf::current_dir().expect("current directory");
-    let mut request = request(vec!["tool".to_string()], PathUri::from_abs_path(&cwd));
-    request.network_environment_id = Some("environment".to_string());
-    let error = request
-        .into_std_command()
+    for (has_network, has_environment_id) in [(true, false), (false, true)] {
+        let error = validate_direct_spawn_state(
+            SandboxType::None,
+            has_network,
+            has_environment_id,
+            &HashMap::new(),
+        )
         .expect_err("managed network must fail");
-    assert_eq!(
-        error.to_string(),
-        "managed network environment must be applied before command conversion"
-    );
+        assert_eq!(
+            error.to_string(),
+            "managed network environment must be applied before command conversion"
+        );
+    }
 }
 
 #[test]
@@ -105,8 +138,7 @@ fn conversion_rejects_foreign_host_cwd() {
     let cwd = PathUri::parse("file:///C:/foreign").expect("Windows URI");
     #[cfg(windows)]
     let cwd = PathUri::parse("file:///tmp/foreign").expect("POSIX URI");
-    let error = request(vec!["tool".to_string()], cwd)
-        .into_std_command()
+    let error = command_from_direct_spawn_request(request(vec!["tool".to_string()], cwd))
         .expect_err("foreign cwd must fail");
     assert_eq!(
         error.to_string(),
@@ -120,9 +152,8 @@ fn conversion_rejects_unwrapped_native_windows_sandbox_request() {
     let cwd = AbsolutePathBuf::current_dir().expect("current directory");
     let mut request = request(vec!["tool".to_string()], PathUri::from_abs_path(&cwd));
     request.sandbox = SandboxType::WindowsRestrictedToken;
-    let error = request
-        .into_std_command()
-        .expect_err("native Windows request must fail");
+    let error =
+        command_from_direct_spawn_request(request).expect_err("native Windows request must fail");
     assert_eq!(
         error.to_string(),
         "native Windows sandbox request must be wrapped before command conversion"
@@ -133,11 +164,10 @@ fn conversion_rejects_unwrapped_native_windows_sandbox_request() {
 #[test]
 fn converted_command_clears_ambient_environment() {
     let cwd = AbsolutePathBuf::current_dir().expect("current directory");
-    let output = request(
+    let output = command_from_direct_spawn_request(request(
         vec!["/usr/bin/env".to_string()],
         PathUri::from_abs_path(&cwd),
-    )
-    .into_std_command()
+    ))
     .expect("convert sandbox request")
     .output()
     .expect("run environment command");
@@ -161,8 +191,7 @@ fn conversion_preserves_unix_arg0() {
         PathUri::from_abs_path(&cwd),
     );
     request.arg0 = Some("sandbox-helper".to_string());
-    let output = request
-        .into_std_command()
+    let output = command_from_direct_spawn_request(request)
         .expect("convert sandbox request")
         .output()
         .expect("run command");
