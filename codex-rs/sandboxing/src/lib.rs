@@ -3,6 +3,7 @@ mod bwrap;
 mod denial;
 pub mod landlock;
 mod local_command;
+mod local_selection;
 mod manager;
 pub mod policy_transforms;
 #[cfg(target_os = "macos")]
@@ -19,6 +20,9 @@ pub use bwrap::system_bwrap_warning;
 pub use codex_windows_sandbox::WindowsSandboxProxySettingsMode;
 pub use denial::is_likely_executor_managed_sandbox_denied;
 pub use denial::is_likely_sandbox_denied;
+pub use local_selection::LocalSandboxLaunchPolicy;
+pub use local_selection::LocalSandboxSelection;
+pub use local_selection::select_local_sandbox;
 pub use manager::SandboxCommand;
 pub use manager::SandboxDirectSpawnRuntime;
 pub use manager::SandboxDirectSpawnTransformRequest;
