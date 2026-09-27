@@ -1,7 +1,11 @@
 use super::SandboxCommand;
 #[cfg(target_os = "windows")]
+use super::SandboxDirectSpawnRuntime;
+#[cfg(target_os = "windows")]
 use super::SandboxDirectSpawnTransformRequest;
 use super::SandboxManager;
+#[cfg(target_os = "windows")]
+use super::SandboxTransformError;
 use super::SandboxTransformRequest;
 use super::SandboxType;
 use super::SandboxablePreference;
@@ -649,4 +653,125 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
         Some(std::ffi::OsStr::new(".sandbox-bin"))
     );
     assert!(materialized_helper.exists());
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn transform_for_direct_spawn_windows_separates_wrapper_from_inner_command() {
+    use std::os::windows::ffi::OsStringExt;
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let root = AbsolutePathBuf::from_absolute_path(directory.path()).expect("absolute root");
+    let wrapper = root.join("codex.exe");
+    let inner = root.join("bun.exe");
+    let cwd_uri = PathUri::from_abs_path(&root);
+    let permissions = PermissionProfile::read_only();
+
+    let transform =
+        |sandbox: SandboxType, wrapper: Option<&AbsolutePathBuf>, program: std::ffi::OsString| {
+            SandboxManager::new().transform_for_direct_spawn_with_runtime(
+                SandboxDirectSpawnTransformRequest {
+                    workspace_roots: std::slice::from_ref(&root),
+                    windows_sandbox_proxy_settings_mode:
+                        codex_windows_sandbox::WindowsSandboxProxySettingsMode::Preserve,
+                    transform: SandboxTransformRequest {
+                        command: SandboxCommand {
+                            program,
+                            args: vec!["install".to_string(), "--frozen-lockfile".to_string()],
+                            cwd: cwd_uri.clone(),
+                            env: HashMap::new(),
+                            managed_network: None,
+                            additional_permissions: None,
+                        },
+                        permissions: &permissions,
+                        sandbox,
+                        enforce_managed_network: false,
+                        environment_id: None,
+                        network: None,
+                        sandbox_policy_cwd: &cwd_uri,
+                        codex_linux_sandbox_exe: None,
+                        use_legacy_landlock: false,
+                        windows_sandbox_level: WindowsSandboxLevel::Elevated,
+                        windows_sandbox_private_desktop: false,
+                    },
+                },
+                SandboxDirectSpawnRuntime {
+                    codex_home: &root,
+                    windows_sandbox_wrapper_executable: wrapper,
+                },
+            )
+        };
+    let request = transform(
+        SandboxType::WindowsRestrictedToken,
+        Some(&wrapper),
+        inner.as_os_str().to_owned(),
+    )
+    .expect("transform arbitrary Windows command");
+    let separator = request
+        .command
+        .iter()
+        .position(|arg| arg == "--")
+        .expect("wrapper argv separator");
+
+    assert_eq!(request.sandbox, SandboxType::None);
+    assert_eq!(
+        request.command.first(),
+        Some(&wrapper.display().to_string())
+    );
+    assert_eq!(
+        &request.command[separator + 1..],
+        &[
+            inner.display().to_string(),
+            "install".to_string(),
+            "--frozen-lockfile".to_string(),
+        ]
+    );
+
+    assert!(matches!(
+        transform(
+            SandboxType::WindowsRestrictedToken,
+            /*wrapper*/ None,
+            inner.as_os_str().to_owned(),
+        ),
+        Err(SandboxTransformError::WindowsSandboxPreparation(message))
+            if message == "trusted Windows sandbox wrapper executable is required"
+    ));
+
+    let invalid_name = std::ffi::OsString::from_wide(&[0xd800]);
+    let invalid_wrapper = root.join(std::path::PathBuf::from(invalid_name));
+    assert!(matches!(
+        transform(
+            SandboxType::WindowsRestrictedToken,
+            Some(&invalid_wrapper),
+            inner.as_os_str().to_owned(),
+        ),
+        Err(SandboxTransformError::WindowsSandboxPreparation(message))
+            if message == "Windows sandbox wrapper path is not valid Unicode"
+    ));
+
+    let invalid_inner = std::ffi::OsString::from_wide(&[0xd800]);
+    assert!(matches!(
+        transform(
+            SandboxType::WindowsRestrictedToken,
+            Some(&wrapper),
+            invalid_inner,
+        ),
+        Err(SandboxTransformError::WindowsSandboxPreparation(message))
+            if message == "Windows sandbox inner executable path is not valid Unicode"
+    ));
+
+    let unsandboxed = transform(
+        SandboxType::None,
+        /*wrapper*/ None,
+        inner.as_os_str().to_owned(),
+    )
+    .expect("unsandboxed command does not need a wrapper");
+    assert_eq!(
+        unsandboxed.command,
+        vec![
+            inner.display().to_string(),
+            "install".to_string(),
+            "--frozen-lockfile".to_string(),
+        ]
+    );
 }

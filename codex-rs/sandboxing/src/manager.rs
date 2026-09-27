@@ -159,6 +159,12 @@ pub struct SandboxDirectSpawnTransformRequest<'a> {
     pub windows_sandbox_proxy_settings_mode: codex_windows_sandbox::WindowsSandboxProxySettingsMode,
 }
 
+/// Trusted host-local paths required when a direct-spawn command needs a Windows wrapper.
+pub struct SandboxDirectSpawnRuntime<'a> {
+    pub codex_home: &'a AbsolutePathBuf,
+    pub windows_sandbox_wrapper_executable: Option<&'a AbsolutePathBuf>,
+}
+
 // TODO(anp): Revisit this preparation type once this module's PathUri migration is complete.
 struct PendingSandboxedExecRequest {
     native_command_cwd: AbsolutePathBuf,
@@ -502,11 +508,59 @@ impl SandboxManager {
         }
     }
 
+    /// Transforms an arbitrary direct-spawn command using explicit trusted runtime paths.
+    ///
+    /// On Windows, `windows_sandbox_wrapper_executable` hosts the sandbox wrapper while the
+    /// request's program remains the inner sandboxed command. Other platforms ignore these
+    /// Windows-only wrapper paths.
+    pub fn transform_for_direct_spawn_with_runtime(
+        &self,
+        request: SandboxDirectSpawnTransformRequest<'_>,
+        runtime: SandboxDirectSpawnRuntime<'_>,
+    ) -> Result<SandboxExecRequest, SandboxTransformError> {
+        #[cfg(target_os = "windows")]
+        {
+            if request.transform.command.program.to_str().is_none() {
+                return Err(SandboxTransformError::WindowsSandboxPreparation(
+                    "Windows sandbox inner executable path is not valid Unicode".to_string(),
+                ));
+            }
+            if request.transform.sandbox == SandboxType::WindowsRestrictedToken
+                && runtime.windows_sandbox_wrapper_executable.is_none()
+            {
+                return Err(SandboxTransformError::WindowsSandboxPreparation(
+                    "trusted Windows sandbox wrapper executable is required".to_string(),
+                ));
+            }
+            self.transform_for_direct_spawn_with_windows_wrapper(
+                request,
+                runtime.codex_home.as_path(),
+                runtime.windows_sandbox_wrapper_executable,
+            )
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = runtime;
+            self.transform(request.transform)
+        }
+    }
+
     #[cfg(target_os = "windows")]
     fn transform_for_direct_spawn_with_codex_home(
         &self,
         request: SandboxDirectSpawnTransformRequest<'_>,
         codex_home: &Path,
+    ) -> Result<SandboxExecRequest, SandboxTransformError> {
+        self.transform_for_direct_spawn_with_windows_wrapper(request, codex_home, None)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn transform_for_direct_spawn_with_windows_wrapper(
+        &self,
+        request: SandboxDirectSpawnTransformRequest<'_>,
+        codex_home: &Path,
+        wrapper_executable: Option<&AbsolutePathBuf>,
     ) -> Result<SandboxExecRequest, SandboxTransformError> {
         let workspace_roots = request.workspace_roots;
         let proxy_settings_mode = request.windows_sandbox_proxy_settings_mode;
@@ -517,6 +571,7 @@ impl SandboxManager {
                 workspace_roots,
                 codex_home,
                 proxy_settings_mode,
+                wrapper_executable,
             )?;
         }
         Ok(request)
@@ -529,6 +584,7 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
     workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
     proxy_settings_mode: codex_windows_sandbox::WindowsSandboxProxySettingsMode,
+    wrapper_executable: Option<&AbsolutePathBuf>,
 ) -> Result<(), SandboxTransformError> {
     // TODO(anp): Keep PathUri through the Windows sandbox wrapper boundary.
     let native_cwd =
@@ -550,9 +606,22 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
             "sandbox command was empty".to_string(),
         ));
     };
-    let source = std::path::PathBuf::from(&program);
-    let helper = codex_windows_sandbox::resolve_exe_for_launch(source.as_path(), codex_home);
-    *program = helper.to_string_lossy().into_owned();
+    let wrapper = if let Some(wrapper_executable) = wrapper_executable {
+        wrapper_executable
+            .as_path()
+            .to_str()
+            .ok_or_else(|| {
+                SandboxTransformError::WindowsSandboxPreparation(
+                    "Windows sandbox wrapper path is not valid Unicode".to_string(),
+                )
+            })?
+            .to_string()
+    } else {
+        let source = std::path::PathBuf::from(&program);
+        let helper = codex_windows_sandbox::resolve_exe_for_launch(source.as_path(), codex_home);
+        *program = helper.to_string_lossy().into_owned();
+        source.to_string_lossy().into_owned()
+    };
 
     let inner_command = std::mem::take(&mut request.command);
     let proxy_enforced = request.network.is_some();
@@ -623,7 +692,7 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
         );
 
     request.command = Vec::with_capacity(1 + wrapper_args.len());
-    request.command.push(source.to_string_lossy().into_owned());
+    request.command.push(wrapper);
     request.command.append(&mut wrapper_args);
     request.sandbox = SandboxType::None;
     request.arg0 = None;
