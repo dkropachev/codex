@@ -393,7 +393,7 @@ INSERT INTO thread_realtime_items (
 async fn timeline_skips_retired_review_items() {
     let (_home, store, thread_id) = store_with_mode(ThreadHistoryMode::Paginated).await;
     let db = history_db(&store).await;
-    insert_item(db, thread_id, "turn-1", "kept", 10).await;
+    insert_item(db, thread_id, "turn-1", "kept", /*rollout_ordinal*/ 10).await;
     let retired_json = serde_json::json!({
         "type": "enteredReviewMode",
         "id": "retired-review",
@@ -405,9 +405,9 @@ async fn timeline_skips_retired_review_items() {
     .bind(thread_id.to_string())
     .bind("turn-1")
     .bind("retired-review")
-    .bind(20_i64)
-    .bind(20_i64)
-    .bind(20_000_i64)
+    .bind(/*value*/ 20_i64)
+    .bind(/*value*/ 20_i64)
+    .bind(/*value*/ 20_000_i64)
     .bind("enteredReviewMode")
     .bind(retired_json)
     .execute(db)

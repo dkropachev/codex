@@ -166,7 +166,11 @@ async fn migrates_legacy_review_subagent_on_startup() {
     let rollout = fs::read_to_string(&path).expect("read rollout");
     fs::write(
         &path,
-        rollout.replacen(r#""source":"cli""#, r#""source":{"subagent":"review"}"#, 1),
+        rollout.replacen(
+            r#""source":"cli""#,
+            r#""source":{"subagent":"review"}"#,
+            /*count*/ 1,
+        ),
     )
     .expect("write legacy review source");
     let store = indexed_store(home.path()).await;
