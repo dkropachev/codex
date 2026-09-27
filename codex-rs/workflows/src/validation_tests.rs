@@ -43,6 +43,49 @@ fn workflow_validation_observes_cancellation_before_spawning_tools() {
 
 #[cfg(unix)]
 #[test]
+fn workflow_validation_propagates_cancellation_to_source_scan() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    let (_registry, root) = scaffold();
+    let fake_bun = root.join("fake-bun");
+    fs::write(
+        &fake_bun,
+        "#!/bin/sh\ntouch validation-scan-started\nsleep 60\n",
+    )
+    .expect("write fake Bun");
+    let mut permissions = fs::metadata(&fake_bun)
+        .expect("read fake Bun metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_bun, permissions).expect("make fake Bun executable");
+    let started_path = root.join("validation-scan-started");
+    let cancelled = AtomicBool::new(false);
+
+    let error = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let deadline = Instant::now() + Duration::from_secs(/*secs*/ 2);
+            while !started_path.exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "workflow source scan did not start"
+                );
+                std::thread::sleep(Duration::from_millis(/*millis*/ 10));
+            }
+            cancelled.store(true, Ordering::Relaxed);
+        });
+        validate_workflow_cancellable_with_bun(&root, &cancelled, &fake_bun)
+            .expect_err("workflow source scan must be cancelled")
+    });
+
+    assert_eq!(error.to_string(), "workflow validation was cancelled");
+}
+
+#[cfg(unix)]
+#[test]
 fn workflow_validation_command_observes_cancellation() {
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;

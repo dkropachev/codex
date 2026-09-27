@@ -81,6 +81,14 @@ pub(crate) fn validate_workflow_cancellable(
     root: &Path,
     cancelled: &AtomicBool,
 ) -> anyhow::Result<ValidationReport> {
+    validate_workflow_cancellable_with_bun(root, cancelled, Path::new("bun"))
+}
+
+fn validate_workflow_cancellable_with_bun(
+    root: &Path,
+    cancelled: &AtomicBool,
+    bun: &Path,
+) -> anyhow::Result<ValidationReport> {
     ensure_not_cancelled(cancelled)?;
     let mut findings = BTreeSet::new();
     validate_required_layout(root, &mut findings);
@@ -96,7 +104,8 @@ pub(crate) fn validate_workflow_cancellable(
     if let Some(package) = package.as_ref() {
         validate_package_json(package, &mut findings);
         ensure_not_cancelled(cancelled)?;
-        let sources = match crate::runner::scan_workflow_sources_cancellable(
+        let sources = match crate::runner::scan_workflow_sources_cancellable_with_bun(
+            bun,
             &package.root,
             crate::runner::CommandDeadline::after(crate::runner::INSPECTION_TIMEOUT),
             cancelled,

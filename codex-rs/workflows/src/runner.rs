@@ -626,8 +626,17 @@ pub(crate) fn scan_workflow_sources_cancellable(
     deadline: CommandDeadline,
     cancelled: &AtomicBool,
 ) -> anyhow::Result<Vec<SourceInspection>> {
+    scan_workflow_sources_cancellable_with_bun(Path::new("bun"), workflow_dir, deadline, cancelled)
+}
+
+pub(crate) fn scan_workflow_sources_cancellable_with_bun(
+    bun: &Path,
+    workflow_dir: &Path,
+    deadline: CommandDeadline,
+    cancelled: &AtomicBool,
+) -> anyhow::Result<Vec<SourceInspection>> {
     run_json_operation_until(
-        Path::new("bun"),
+        bun,
         workflow_dir,
         RunnerOperation::Scan,
         /*payload*/ None,
