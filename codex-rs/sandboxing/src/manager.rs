@@ -520,6 +520,11 @@ impl SandboxManager {
     ) -> Result<SandboxExecRequest, SandboxTransformError> {
         #[cfg(target_os = "windows")]
         {
+            if request.transform.command.program.to_str().is_none() {
+                return Err(SandboxTransformError::WindowsSandboxPreparation(
+                    "Windows sandbox inner executable path is not valid Unicode".to_string(),
+                ));
+            }
             if request.transform.sandbox == SandboxType::WindowsRestrictedToken
                 && runtime.windows_sandbox_wrapper_executable.is_none()
             {
