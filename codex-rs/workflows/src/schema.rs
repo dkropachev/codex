@@ -708,6 +708,16 @@ pub fn load_workflow_contract(
     contract_from_inspection(&inspection)
 }
 
+pub(crate) fn load_workflow_contract_cancellable(
+    workflow_dir: &Path,
+    expected: &WorkflowManifest,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> anyhow::Result<WorkflowContract> {
+    let inspection =
+        crate::runner::inspect_workflow_cancellable(workflow_dir, expected, cancelled)?;
+    contract_from_inspection(&inspection)
+}
+
 pub(crate) fn contract_from_inspection(
     inspection: &ModuleInspection,
 ) -> anyhow::Result<WorkflowContract> {

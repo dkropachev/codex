@@ -601,6 +601,15 @@ pub(crate) fn inspect_workflow(
     )
 }
 
+pub(crate) fn inspect_workflow_cancellable(
+    workflow_dir: &Path,
+    expected: &WorkflowManifest,
+    cancelled: &AtomicBool,
+) -> anyhow::Result<ModuleInspection> {
+    inspect_workflow_with_bun(Path::new("bun"), workflow_dir, expected, Some(cancelled))
+}
+
+#[cfg(test)]
 pub(crate) fn scan_workflow_sources(workflow_dir: &Path) -> anyhow::Result<Vec<SourceInspection>> {
     run_json_operation(
         Path::new("bun"),
@@ -911,17 +920,17 @@ pub(crate) fn run_bounded_command_until(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child =
-        WorkflowChildGuard::spawn(&mut command).context("failed to start Bun workflow runner")?;
+        WorkflowChildGuard::spawn(&mut command).context("failed to start workflow subprocess")?;
     let stdout = child
         .child
         .stdout
         .take()
-        .context("Bun workflow runner stdout was not piped")?;
+        .context("workflow subprocess stdout was not piped")?;
     let stderr = child
         .child
         .stderr
         .take()
-        .context("Bun workflow runner stderr was not piped")?;
+        .context("workflow subprocess stderr was not piped")?;
     let stdout = capture_bounded(stdout, maximum_stdout_bytes);
     let stderr = capture_bounded(stderr, MAX_RUNNER_ERROR_BYTES);
     let status = loop {

@@ -32,6 +32,59 @@ fn executable_package_preflight_observes_cancellation_before_spawning_tools() {
 }
 
 #[test]
+fn workflow_validation_observes_cancellation_before_spawning_tools() {
+    let cancelled = std::sync::atomic::AtomicBool::new(true);
+
+    let error = validate_workflow_cancellable(Path::new("missing-workflow"), &cancelled)
+        .expect_err("pre-cancelled validation must stop");
+
+    assert_eq!(error.to_string(), "workflow validation was cancelled");
+}
+
+#[cfg(unix)]
+#[test]
+fn workflow_validation_command_observes_cancellation() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    let (_registry, root) = scaffold();
+    let started_path = root.join("validation-command-started");
+    let mut package = WorkflowPackage::load(&root).expect("load package");
+    package.manifest.validation.commands = vec![crate::ValidationCommand {
+        program: "sh".to_string(),
+        args: vec![
+            "-c".to_string(),
+            "touch \"$1\"; sleep 60".to_string(),
+            "workflow-validation-test".to_string(),
+            started_path.to_string_lossy().into_owned(),
+        ],
+    }];
+    let cancelled = AtomicBool::new(false);
+    let mut findings = BTreeSet::new();
+
+    let error = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let deadline = Instant::now() + Duration::from_secs(/*secs*/ 2);
+            while !started_path.exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "validation command did not start"
+                );
+                std::thread::sleep(Duration::from_millis(/*millis*/ 10));
+            }
+            cancelled.store(true, Ordering::Relaxed);
+        });
+        super::checks::validate_commands_cancellable(&package, &mut findings, &cancelled)
+            .expect_err("validation command must be cancelled")
+    });
+
+    assert_eq!(error.to_string(), "workflow validation was cancelled");
+    assert_eq!(findings, BTreeSet::new());
+}
+
+#[test]
 fn findings_are_deterministic_for_missing_and_legacy_packages() {
     let temp = TempDir::new().expect("tempdir");
     fs::write(

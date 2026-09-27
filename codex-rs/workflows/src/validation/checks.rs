@@ -147,11 +147,23 @@ fn scan_coverage_markers(root: &Path, depth: usize, scan: &mut CoverageScan) {
     }
 }
 
+#[cfg(test)]
 pub(super) fn validate_commands(
     package: &WorkflowPackage,
     findings: &mut BTreeSet<ValidationFinding>,
 ) {
+    let _ = validate_commands_cancellable(package, findings, &AtomicBool::new(false));
+}
+
+pub(super) fn validate_commands_cancellable(
+    package: &WorkflowPackage,
+    findings: &mut BTreeSet<ValidationFinding>,
+    cancelled: &AtomicBool,
+) -> anyhow::Result<()> {
     for (index, command) in package.manifest.validation.commands.iter().enumerate() {
+        if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+            anyhow::bail!("workflow validation was cancelled");
+        }
         if command.program.trim().is_empty() {
             findings.insert(ValidationFinding::new(
                 "command",
@@ -165,7 +177,7 @@ pub(super) fn validate_commands(
             process,
             Duration::from_secs(/*secs*/ 60),
             64 * 1024,
-            Some(&AtomicBool::new(false)),
+            Some(cancelled),
         ) {
             Ok((status, _, _, _)) if status.success() => {}
             Ok((status, _, _, _)) => {
@@ -182,6 +194,9 @@ pub(super) fn validate_commands(
                 ));
             }
             Err(err) => {
+                if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                    anyhow::bail!("workflow validation was cancelled");
+                }
                 let outcome = if format!("{err:#}").contains("timed out") {
                     "timed out after 60000 ms"
                 } else {
@@ -197,6 +212,7 @@ pub(super) fn validate_commands(
             }
         }
     }
+    Ok(())
 }
 
 pub(super) fn validate_gitignore(root: &Path, findings: &mut BTreeSet<ValidationFinding>) {
@@ -221,6 +237,7 @@ pub(super) fn validate_gitignore(root: &Path, findings: &mut BTreeSet<Validation
     }
 }
 
+#[cfg(test)]
 pub(super) fn validate_git_layout(root: &Path, findings: &mut BTreeSet<ValidationFinding>) {
     validate_git_layout_until(
         root,
