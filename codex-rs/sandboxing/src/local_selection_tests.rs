@@ -97,7 +97,7 @@ fn selection_materializes_every_workspace_root_before_enforcement() {
 
 #[cfg(unix)]
 #[test]
-fn selection_rejects_lossy_workspace_root_glob_materialization() {
+fn selection_rejects_unrepresentable_workspace_root_materialization() {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
 
@@ -121,21 +121,14 @@ fn selection_rejects_lossy_workspace_root_glob_materialization() {
         ),
         LocalSandboxSelection::Unavailable
     );
-    let workspace_write = PermissionProfile::workspace_write();
-    let expected = workspace_write
-        .clone()
-        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&invalid));
     assert_eq!(
         select_local_sandbox_for_platform(
-            &workspace_write,
+            &PermissionProfile::workspace_write(),
             std::slice::from_ref(&invalid),
             LocalSandboxLaunchPolicy::FollowPermissionProfile,
             Some(SandboxType::LinuxSeccomp),
         ),
-        LocalSandboxSelection::Selected {
-            sandbox: SandboxType::LinuxSeccomp,
-            permissions: expected,
-        }
+        LocalSandboxSelection::Unavailable
     );
     assert_eq!(
         select_local_sandbox_for_platform(
@@ -147,6 +140,19 @@ fn selection_rejects_lossy_workspace_root_glob_materialization() {
         LocalSandboxSelection::Selected {
             sandbox: SandboxType::None,
             permissions: PermissionProfile::Disabled,
+        }
+    );
+    let read_only = PermissionProfile::read_only();
+    assert_eq!(
+        select_local_sandbox_for_platform(
+            &read_only,
+            &[invalid],
+            LocalSandboxLaunchPolicy::FollowPermissionProfile,
+            Some(SandboxType::LinuxSeccomp),
+        ),
+        LocalSandboxSelection::Selected {
+            sandbox: SandboxType::LinuxSeccomp,
+            permissions: read_only,
         }
     );
 }

@@ -3,6 +3,7 @@ use std::path::Path;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::project_roots_glob_pattern;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -53,18 +54,24 @@ fn select_local_sandbox_for_platform(
         .iter()
         .any(|root| root.as_path().to_str().is_none());
     let project_roots_glob_prefix = project_roots_glob_pattern(Path::new(""));
-    let has_symbolic_project_roots_glob = permissions
-        .file_system_sandbox_policy()
-        .entries
-        .iter()
-        .any(|entry| {
-            matches!(
-                &entry.path,
-                FileSystemPath::GlobPattern { pattern }
-                    if pattern.starts_with(&project_roots_glob_prefix)
-            )
-        });
-    if has_non_utf8_workspace_root && has_symbolic_project_roots_glob {
+    let has_symbolic_project_roots =
+        permissions
+            .file_system_sandbox_policy()
+            .entries
+            .iter()
+            .any(|entry| {
+                matches!(
+                    &entry.path,
+                    FileSystemPath::GlobPattern { pattern }
+                        if pattern.starts_with(&project_roots_glob_prefix)
+                ) || matches!(
+                    &entry.path,
+                    FileSystemPath::Special {
+                        value: FileSystemSpecialPath::ProjectRoots { .. },
+                    }
+                )
+            });
+    if has_non_utf8_workspace_root && has_symbolic_project_roots {
         return LocalSandboxSelection::Unavailable;
     }
     let permissions = permissions
