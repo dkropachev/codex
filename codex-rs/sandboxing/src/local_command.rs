@@ -16,8 +16,15 @@ impl SandboxExecRequest {
             cwd,
             mut env,
             arg0,
+            sandbox,
             ..
         } = self;
+        #[cfg(target_os = "windows")]
+        if sandbox == crate::SandboxType::WindowsRestrictedToken {
+            bail!("native Windows sandbox request must be wrapped before command conversion");
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = sandbox;
         let Some((program, args)) = argv.split_first() else {
             bail!("sandbox command was empty after preparation");
         };

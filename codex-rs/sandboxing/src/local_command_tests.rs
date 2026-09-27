@@ -74,6 +74,36 @@ fn conversion_rejects_empty_argv() {
     );
 }
 
+#[test]
+fn conversion_rejects_foreign_host_cwd() {
+    #[cfg(unix)]
+    let cwd = PathUri::parse("file:///C:/foreign").expect("Windows URI");
+    #[cfg(windows)]
+    let cwd = PathUri::parse("file:///tmp/foreign").expect("POSIX URI");
+    let error = request(vec!["tool".to_string()], cwd)
+        .into_std_command()
+        .expect_err("foreign cwd must fail");
+    assert_eq!(
+        error.to_string(),
+        "prepared sandbox cwd is not valid on this host"
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn conversion_rejects_unwrapped_native_windows_sandbox_request() {
+    let cwd = AbsolutePathBuf::current_dir().expect("current directory");
+    let mut request = request(vec!["tool".to_string()], PathUri::from_abs_path(&cwd));
+    request.sandbox = SandboxType::WindowsRestrictedToken;
+    let error = request
+        .into_std_command()
+        .expect_err("native Windows request must fail");
+    assert_eq!(
+        error.to_string(),
+        "native Windows sandbox request must be wrapped before command conversion"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn converted_command_clears_ambient_environment() {
