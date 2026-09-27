@@ -1,5 +1,5 @@
 ---
-source: tui/src/chatwidget/tests/review_mode.rs
+source: tui/src/chatwidget/tests/interrupts.rs
 expression: last
 ---
 ■ Goal budget reached - the turn was stopped.

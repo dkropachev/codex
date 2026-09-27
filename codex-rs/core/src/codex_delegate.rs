@@ -13,8 +13,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadSource;
-use codex_protocol::user_input::UserInput;
-use serde_json::Value;
 use std::time::Duration;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -35,10 +33,6 @@ use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::MultiAgentVersion;
-use codex_protocol::turn_input::TurnInputMode;
-use codex_protocol::turn_input::TurnInputRequest;
-use codex_protocol::turn_input::TurnInputSubmission;
-use codex_protocol::turn_input::TurnStartOptions;
 
 #[cfg(test)]
 use crate::session::completed_session_loop_termination;
@@ -172,111 +166,6 @@ pub(crate) async fn run_codex_thread_interactive(
     });
 
     Ok((session, caller_io))
-}
-
-/// Convenience wrapper for one-time use with an initial prompt.
-///
-/// Internally calls the interactive variant, then immediately submits the provided input.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn run_codex_thread_one_shot(
-    config: Config,
-    auth_manager: Arc<AuthManager>,
-    models_manager: SharedModelsManager,
-    input: Vec<UserInput>,
-    parent_session: Arc<Session>,
-    parent_ctx: Arc<TurnContext>,
-    cancel_token: CancellationToken,
-    subagent_source: SubAgentSource,
-    final_output_json_schema: Option<Value>,
-    initial_history: Option<InitialHistory>,
-    thread_extension_init: ExtensionDataInit,
-) -> Result<(Arc<Session>, SessionIo), CodexErr> {
-    // Use a child token so we can stop the delegate after completion without
-    // requiring the caller to cancel the parent token.
-    let child_cancel = cancel_token.child_token();
-    let parent_turn_id = parent_ctx.sub_id.clone();
-    let parent_environments = parent_ctx.environments.clone();
-    let root_turn_id = parent_ctx.turn_metadata_state.root_turn_id();
-    let (session, io) = Box::pin(run_codex_thread_interactive(
-        config,
-        auth_manager,
-        models_manager,
-        parent_session,
-        parent_ctx,
-        parent_environments,
-        child_cancel.clone(),
-        subagent_source,
-        initial_history,
-        thread_extension_init,
-        GitEnrichmentPolicy::Fresh,
-        codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
-    ))
-    .await?;
-
-    // Send the initial input to kick off the one-shot turn.
-    let submission = io
-        .submit_turn_input(
-            TurnInputRequest::user_input(input).on_start(TurnStartOptions {
-                final_output_json_schema,
-                parent_turn_id: Some(parent_turn_id),
-                root_turn_id,
-            }),
-            TurnInputMode::StartIfIdle,
-        )
-        .await?;
-    match submission {
-        TurnInputSubmission::Started { .. } => {}
-        submission => {
-            return Err(CodexErr::InvalidRequest(format!(
-                "delegate turn input was not started: {submission:?}"
-            )));
-        }
-    }
-
-    // Bridge events so we can observe completion and shut down automatically.
-    let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
-    let ops_tx = io.tx_sub.clone();
-    let agent_status = io.agent_status.clone();
-    let session_loop_termination = io.session_loop_termination.clone();
-    let io_for_bridge = io;
-    tokio::spawn(async move {
-        while let Ok(event) = io_for_bridge.next_event().await {
-            let should_shutdown = matches!(
-                event.msg,
-                EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
-            );
-            let _ = tx_bridge.send(event).await;
-            if should_shutdown {
-                let _ = ops_tx
-                    .send(Submission {
-                        id: "shutdown".to_string(),
-                        op: Op::Shutdown {},
-                        trace: None,
-                        parent_turn_id: None,
-                        root_turn_id: None,
-                    })
-                    .await;
-                child_cancel.cancel();
-                break;
-            }
-        }
-    });
-
-    // For one-shot usage, return a closed `tx_sub` so callers cannot submit
-    // additional ops after the initial request. Create a channel and drop the
-    // receiver to close it immediately.
-    let (tx_closed, rx_closed) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
-    drop(rx_closed);
-
-    Ok((
-        session,
-        SessionIo {
-            rx_event: rx_bridge,
-            tx_sub: tx_closed,
-            agent_status,
-            session_loop_termination,
-        },
-    ))
 }
 
 async fn forward_events(

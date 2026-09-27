@@ -21,7 +21,6 @@ impl ModelPolicySource {
         match self {
             ModelPolicySource::SubAgent(source) => {
                 let specifics = match source {
-                    SubAgentSource::Review => vec!["review".to_string()],
                     SubAgentSource::Compact => vec!["compact".to_string()],
                     SubAgentSource::MemoryConsolidation => {
                         vec!["memory_consolidation".to_string()]
@@ -203,7 +202,7 @@ mod tests {
 
         apply_model_policy(
             &mut config,
-            ModelPolicySource::SubAgent(SubAgentSource::Review),
+            ModelPolicySource::SubAgent(SubAgentSource::Other("review".to_string())),
             /*prompt_bytes*/ 80,
         )
         .expect("policy should apply");
@@ -239,7 +238,7 @@ mod tests {
 
         apply_model_policy(
             &mut config,
-            ModelPolicySource::SubAgent(SubAgentSource::Review),
+            ModelPolicySource::SubAgent(SubAgentSource::Other("review".to_string())),
             /*prompt_bytes*/ 101,
         )
         .expect("policy should not fail");
@@ -391,7 +390,7 @@ mod tests {
 
         let err = apply_model_policy(
             &mut config,
-            ModelPolicySource::SubAgent(SubAgentSource::Review),
+            ModelPolicySource::SubAgent(SubAgentSource::Other("review".to_string())),
             /*prompt_bytes*/ 1,
         )
         .expect_err("unknown account pool should fail");

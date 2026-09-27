@@ -42,7 +42,7 @@ struct PendingTextSuggestion {
     applied_label: String,
 }
 
-/// Minimal multi-line text input view to collect custom review instructions.
+/// Minimal multi-line text input view to collect custom instructions.
 pub(crate) struct CustomPromptView {
     title: String,
     placeholder: String,

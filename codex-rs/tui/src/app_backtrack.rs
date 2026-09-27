@@ -500,8 +500,8 @@ impl App {
 
 /// Find the persisted turn that contains a selected transcript prompt.
 ///
-/// Replay hides review prompts and other display-empty inputs, so the selected ordinal must be
-/// resolved against the same visible projection before restoring its canonical mention bindings.
+/// Display-empty inputs are skipped, so the selected ordinal must be resolved against the same
+/// visible projection before restoring its canonical mention bindings.
 ///
 /// A turn can contain multiple user messages when it was steered. Only its initial prompt can be
 /// reopened independently because app-server cannot fork in the middle of a turn.
@@ -511,36 +511,17 @@ pub(crate) fn backtrack_fork_before_turn_id(
     prompt: &mut UserMessage,
 ) -> Result<Option<String>> {
     let mut visible_user_messages_seen = 0_usize;
-    let mut review_mode = false;
     for (turn_index, turn) in turns.iter().enumerate() {
-        let hidden_nested_review_turn = turn_index
-            .checked_sub(/*rhs*/ 1)
-            .and_then(|index| turns.get(index))
-            .is_some_and(|previous| is_hidden_nested_review_turn(previous, turn));
         let mut user_messages_in_turn = 0_usize;
         for item in &turn.items {
             let content = match item {
-                ThreadItem::EnteredReviewMode { .. } => {
-                    review_mode = true;
-                    continue;
-                }
-                ThreadItem::ExitedReviewMode { .. } => {
-                    review_mode = false;
-                    continue;
-                }
                 ThreadItem::UserMessage { content, .. } => content,
                 _ => continue,
             };
             let is_steer = user_messages_in_turn > 0;
             user_messages_in_turn = user_messages_in_turn.saturating_add(/*rhs*/ 1);
-            if review_mode {
-                continue;
-            }
 
             let display = ChatWidget::user_message_display_from_inputs(content);
-            if hidden_nested_review_turn {
-                continue;
-            }
             if display.message.trim().is_empty()
                 && display.text_elements.is_empty()
                 && display.local_images.is_empty()
@@ -576,37 +557,6 @@ pub(crate) fn backtrack_fork_before_turn_id(
     }
 
     bail!("the selected prompt was not found in the persisted thread")
-}
-
-/// Returns whether a turn is the reconstructed inline-review child with duplicated prompt inputs.
-pub(crate) fn is_hidden_nested_review_turn(previous: &Turn, turn: &Turn) -> bool {
-    if previous.status != TurnStatus::Completed
-        || turn.status != TurnStatus::Interrupted
-        || turn.completed_at.is_some()
-        || !previous
-            .items
-            .iter()
-            .any(|item| matches!(item, ThreadItem::EnteredReviewMode { .. }))
-        || !previous
-            .items
-            .iter()
-            .any(|item| matches!(item, ThreadItem::ExitedReviewMode { .. }))
-    {
-        return false;
-    }
-
-    let mut user_messages = turn.items.iter().filter_map(|item| match item {
-        ThreadItem::UserMessage { content, .. } => Some(content),
-        _ => None,
-    });
-    matches!(
-        (
-            user_messages.next(),
-            user_messages.next(),
-            user_messages.next(),
-        ),
-        (Some(first), Some(second), None) if first == second
-    )
 }
 
 pub(crate) fn user_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> usize {
@@ -825,112 +775,6 @@ mod tests {
             .expect_err("a stale transcript prompt cannot be branched")
             .to_string(),
             "the selected transcript prompt no longer matches the persisted thread"
-        );
-    }
-
-    #[test]
-    fn backtrack_fork_before_turn_id_skips_hidden_review_prompts() {
-        let mut review_turn = turn(
-            "turn-review",
-            TurnStatus::Completed,
-            /*user_messages*/ 1,
-        );
-        review_turn.items.insert(
-            /*index*/ 0,
-            ThreadItem::EnteredReviewMode {
-                id: "review-start".to_string(),
-                review: "changes against main".to_string(),
-            },
-        );
-        review_turn.items.push(ThreadItem::ExitedReviewMode {
-            id: "review-end".to_string(),
-            review: "review complete".to_string(),
-            finding_count: 0,
-        });
-        let turns = vec![
-            turn("turn-1", TurnStatus::Completed, /*user_messages*/ 1),
-            review_turn,
-            turn("turn-2", TurnStatus::Completed, /*user_messages*/ 1),
-        ];
-
-        assert_eq!(
-            backtrack_fork_before_turn_id(
-                &turns,
-                /*nth_user_message*/ 1,
-                &mut prompt("turn-2-prompt-0"),
-            )
-            .expect("the visible prompt after review should resolve"),
-            Some("turn-2".to_string())
-        );
-    }
-
-    #[test]
-    fn backtrack_fork_before_turn_id_skips_hidden_nested_review_prompts() {
-        let review_hint = "current changes";
-        let review_prompt =
-            "Review the current code changes (staged, unstaged, and untracked files).";
-        let review_turn = Turn {
-            items: vec![
-                ThreadItem::EnteredReviewMode {
-                    id: "review-start".to_string(),
-                    review: review_hint.to_string(),
-                },
-                ThreadItem::ExitedReviewMode {
-                    id: "review-end".to_string(),
-                    review: "review complete".to_string(),
-                    finding_count: 0,
-                },
-            ],
-            ..turn(
-                "turn-review",
-                TurnStatus::Completed,
-                /*user_messages*/ 0,
-            )
-        };
-        let review_child_turn = Turn {
-            items: (0..2)
-                .map(|index| ThreadItem::UserMessage {
-                    id: format!("review-prompt-{index}"),
-                    client_id: None,
-                    content: vec![UserInput::Text {
-                        text: review_prompt.to_string(),
-                        text_elements: Vec::new(),
-                    }],
-                })
-                .collect(),
-            ..turn(
-                "turn-review-child",
-                TurnStatus::Interrupted,
-                /*user_messages*/ 0,
-            )
-        };
-        let interrupted_steered_turn = Turn {
-            items: review_child_turn.items.clone(),
-            completed_at: Some(1),
-            ..turn(
-                "turn-interrupted-steer",
-                TurnStatus::Interrupted,
-                /*user_messages*/ 0,
-            )
-        };
-        assert!(!is_hidden_nested_review_turn(
-            &review_turn,
-            &interrupted_steered_turn,
-        ));
-        let turns = vec![
-            review_turn,
-            review_child_turn,
-            turn("turn-2", TurnStatus::Completed, /*user_messages*/ 1),
-        ];
-
-        assert_eq!(
-            backtrack_fork_before_turn_id(
-                &turns,
-                /*nth_user_message*/ 0,
-                &mut prompt("turn-2-prompt-0"),
-            )
-            .expect("the visible prompt after a nested review should resolve"),
-            Some("turn-2".to_string())
         );
     }
 

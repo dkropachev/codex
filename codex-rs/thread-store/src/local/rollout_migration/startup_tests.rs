@@ -9,6 +9,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_rollout::RolloutConfig;
@@ -154,6 +155,39 @@ async fn records_and_advances_checked_thread() {
             .expect("last checked thread")
             .thread_id,
         newer_thread_id.to_string()
+    );
+}
+
+#[tokio::test]
+async fn migrates_legacy_review_subagent_on_startup() {
+    let home = TempDir::new().expect("create Codex home");
+    let thread_id = ThreadId::new();
+    let path = write_rollout(home.path(), thread_id, ThreadHistoryMode::Legacy);
+    let rollout = fs::read_to_string(&path).expect("read rollout");
+    fs::write(
+        &path,
+        rollout.replacen(
+            r#""source":"cli""#,
+            r#""source":{"subagent":"review"}"#,
+            /*count*/ 1,
+        ),
+    )
+    .expect("write legacy review source");
+    let store = indexed_store(home.path()).await;
+
+    store
+        .migrate_rollouts_on_startup()
+        .await
+        .expect("migrate legacy review rollout at startup");
+
+    let metadata = codex_rollout::read_session_meta_line(&path)
+        .await
+        .expect("read migrated metadata")
+        .meta;
+    assert_eq!(metadata.history_mode, ThreadHistoryMode::Paginated);
+    assert_eq!(
+        metadata.source,
+        SessionSource::SubAgent(SubAgentSource::Other("review".to_string()))
     );
 }
 

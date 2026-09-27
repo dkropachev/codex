@@ -72,8 +72,6 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 use crate::resume_picker::SessionTarget;
-use crate::review_scope::AppServerReviewScopeResolver;
-use crate::review_scope::SharedReviewScopeResolver;
 use crate::session_state::ThreadSessionState;
 use crate::startup_draft::StartupDraftPump;
 #[cfg(test)]
@@ -530,7 +528,6 @@ pub(crate) struct App {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
     workspace_command_runner: Option<WorkspaceCommandRunner>,
-    review_scope_resolver: Option<SharedReviewScopeResolver>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     launch_cwd: PathBuf,
@@ -723,7 +720,6 @@ impl App {
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
             workspace_command_runner: self.workspace_command_runner.clone(),
-            review_scope_resolver: self.review_scope_resolver.clone(),
             initial_user_message,
             enhanced_keys_supported: self.enhanced_keys_supported,
             has_chatgpt_account: self.chat_widget.has_chatgpt_account(),

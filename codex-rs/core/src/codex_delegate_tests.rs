@@ -201,7 +201,7 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
             parent_ctx,
             parent_environments,
             cancel_token,
-            SubAgentSource::Review,
+            SubAgentSource::Other("worker".to_string()),
             /*initial_history*/ None,
             codex_extension_api::ExtensionDataInit::default(),
             crate::session::GitEnrichmentPolicy::Fresh,
@@ -236,7 +236,11 @@ async fn guardian_delegates_do_not_inherit_parent_extensions() {
             0,
             ThreadSource::GuardianReview,
         ),
-        (SubAgentSource::Review, 1, ThreadSource::Subagent),
+        (
+            SubAgentSource::Other("worker".to_string()),
+            1,
+            ThreadSource::Subagent,
+        ),
     ] {
         let mut config = parent_ctx.config.as_ref().clone();
         config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
@@ -292,7 +296,7 @@ async fn run_codex_thread_interactive_rejects_approval_policy_that_can_prompt() 
         parent_ctx,
         parent_environments,
         CancellationToken::new(),
-        SubAgentSource::Review,
+        SubAgentSource::Other("worker".to_string()),
         /*initial_history*/ None,
         codex_extension_api::ExtensionDataInit::default(),
         crate::session::GitEnrichmentPolicy::Fresh,

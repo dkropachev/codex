@@ -12,7 +12,6 @@ mod multi_agent_usage_hint;
 mod permissions;
 mod personality;
 mod plugins_instructions;
-mod pull_request_context;
 mod realtime;
 #[cfg(test)]
 mod test_support;
@@ -52,7 +51,6 @@ pub(crate) use multi_agent_usage_hint::MultiAgentUsageHintState;
 pub(crate) use permissions::PermissionsState;
 pub(crate) use personality::PersonalityState;
 pub(crate) use plugins_instructions::PluginsInstructionsState;
-pub(crate) use pull_request_context::PullRequestContextState;
 pub(crate) use realtime::RealtimeState;
 pub(crate) use tools::ToolsState;
 

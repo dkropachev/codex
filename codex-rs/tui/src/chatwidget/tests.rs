@@ -97,7 +97,6 @@ pub(super) use codex_app_server_protocol::RateLimitReachedType;
 pub(super) use codex_app_server_protocol::RateLimitSnapshot;
 pub(super) use codex_app_server_protocol::RateLimitWindow;
 pub(super) use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
-pub(super) use codex_app_server_protocol::ReviewTarget;
 pub(super) use codex_app_server_protocol::ServerNotification;
 pub(super) use codex_app_server_protocol::SkillMetadata;
 pub(super) use codex_app_server_protocol::SkillSummary;
@@ -124,7 +123,6 @@ pub(super) use codex_config::types::WindowsSandboxModeToml;
 pub(super) use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 pub(super) use codex_features::FEATURES;
 pub(super) use codex_features::Feature;
-pub(super) use codex_git_utils::CommitLogEntry;
 pub(super) use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 pub(super) use codex_models_manager::test_support::get_model_offline_for_tests;
 pub(super) use codex_otel::RuntimeMetricsSummary;
@@ -244,6 +242,8 @@ mod goal_validation;
 mod guardian;
 pub(crate) mod helpers;
 mod history_replay;
+mod input_queue;
+mod interrupts;
 #[path = "tests/mcp_startup.rs"]
 mod mcp_startup;
 #[path = "tests/misalignment_policy_tests.rs"]
@@ -257,9 +257,6 @@ mod plugin_catalog;
 #[path = "tests/plugins__popups.rs"]
 mod plugins_popups;
 mod popups_and_settings;
-#[path = "tests/review_flow.rs"]
-mod review_flow;
-mod review_mode;
 mod side;
 mod slash_commands;
 mod status_and_layout;

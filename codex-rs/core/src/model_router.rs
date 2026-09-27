@@ -84,7 +84,6 @@ impl ModelRouterSource {
             }
             ModelRouterSource::SubAgent(source) => {
                 let suffix = match source {
-                    SubAgentSource::Review => "review".to_string(),
                     SubAgentSource::Compact => "compact".to_string(),
                     SubAgentSource::MemoryConsolidation => "memory_consolidation".to_string(),
                     SubAgentSource::ThreadSpawn { agent_role, .. } => agent_role
@@ -1661,7 +1660,7 @@ mod tests {
 
         apply_model_router(
             &mut config,
-            ModelRouterSource::SubAgent(SubAgentSource::Review),
+            ModelRouterSource::SubAgent(SubAgentSource::Other("review".to_string())),
             /*prompt_bytes*/ 80,
             &[],
         )
@@ -1906,7 +1905,7 @@ mod tests {
 
         apply_model_router(
             &mut config,
-            ModelRouterSource::SubAgent(SubAgentSource::Review),
+            ModelRouterSource::SubAgent(SubAgentSource::Other("review".to_string())),
             /*prompt_bytes*/ 80,
             &[],
         )
@@ -1938,7 +1937,7 @@ mod tests {
 
         let err = apply_model_router(
             &mut config,
-            ModelRouterSource::SubAgent(SubAgentSource::Review),
+            ModelRouterSource::SubAgent(SubAgentSource::Other("review".to_string())),
             /*prompt_bytes*/ 80,
             &[],
         )
@@ -2400,7 +2399,7 @@ mod tests {
 
         apply_model_router(
             &mut config,
-            ModelRouterSource::SubAgent(SubAgentSource::Review),
+            ModelRouterSource::SubAgent(SubAgentSource::Other("review".to_string())),
             /*prompt_bytes*/ 80,
             &[],
         )
@@ -2452,7 +2451,7 @@ mod tests {
 
         let err = apply_model_router(
             &mut config,
-            ModelRouterSource::SubAgent(SubAgentSource::Review),
+            ModelRouterSource::SubAgent(SubAgentSource::Other("review".to_string())),
             /*prompt_bytes*/ 1,
             &[],
         )
@@ -2590,7 +2589,7 @@ mod tests {
 
         apply_model_router_with_state(
             &mut config,
-            ModelRouterSource::SubAgent(SubAgentSource::Review),
+            ModelRouterSource::SubAgent(SubAgentSource::Other("review".to_string())),
             /*prompt_bytes*/ 80,
             &[],
             Some(runtime.as_ref()),

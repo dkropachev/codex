@@ -402,8 +402,7 @@ impl TurnContext {
                 self.session_source,
                 SessionSource::Internal(_)
                     | SessionSource::SubAgent(
-                        SubAgentSource::Review
-                            | SubAgentSource::Compact
+                        SubAgentSource::Compact
                             | SubAgentSource::MemoryConsolidation
                             | SubAgentSource::Other(_)
                     )

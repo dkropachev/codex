@@ -270,12 +270,6 @@ fn fallback_transcript_cell(item: &ThreadItem) -> Option<PlainHistoryCell> {
                     .into(),
             ]
         }
-        ThreadItem::EnteredReviewMode { review, .. } => {
-            vec![vec!["review started: ".dim(), review.clone().into()].into()]
-        }
-        ThreadItem::ExitedReviewMode { review, .. } => {
-            vec![vec!["review finished: ".dim(), review.clone().into()].into()]
-        }
         ThreadItem::ContextCompaction { .. } => {
             vec!["context compacted".dim().into()]
         }

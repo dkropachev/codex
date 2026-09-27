@@ -199,7 +199,6 @@ pub(super) async fn make_chatwidget_manual_with_auth(
         frame_requester,
         app_event_tx,
         workspace_command_runner: None,
-        review_scope_resolver: None,
         initial_user_message: None,
         enhanced_keys_supported: false,
         has_chatgpt_account,
@@ -554,60 +553,6 @@ pub(super) fn handle_agent_reasoning_final(chat: &mut ChatWidget) {
                 id: "reasoning-1".to_string(),
                 summary: Vec::new(),
                 content: Vec::new(),
-            },
-        }),
-        /*replay_kind*/ None,
-    );
-}
-
-pub(super) fn handle_entered_review_mode(chat: &mut ChatWidget, review: impl Into<String>) {
-    chat.handle_server_notification(
-        ServerNotification::ItemStarted(ItemStartedNotification {
-            thread_id: thread_id(chat),
-            turn_id: chat
-                .turn_lifecycle
-                .last_turn_id
-                .clone()
-                .unwrap_or_else(|| "turn-1".to_string()),
-            started_at_ms: 0,
-            item: AppServerThreadItem::EnteredReviewMode {
-                id: "review-start".to_string(),
-                review: review.into(),
-            },
-        }),
-        /*replay_kind*/ None,
-    );
-}
-
-pub(super) fn replay_entered_review_mode(chat: &mut ChatWidget, review: impl Into<String>) {
-    chat.replay_thread_item(
-        AppServerThreadItem::EnteredReviewMode {
-            id: "review-start".to_string(),
-            review: review.into(),
-        },
-        "turn-1".to_string(),
-        ReplayKind::ThreadSnapshot,
-    );
-}
-
-pub(super) fn handle_exited_review_mode(chat: &mut ChatWidget) {
-    handle_exited_review_mode_with_findings(chat, /*finding_count*/ 0);
-}
-
-pub(super) fn handle_exited_review_mode_with_findings(chat: &mut ChatWidget, finding_count: usize) {
-    chat.handle_server_notification(
-        ServerNotification::ItemCompleted(ItemCompletedNotification {
-            thread_id: thread_id(chat),
-            turn_id: chat
-                .turn_lifecycle
-                .last_turn_id
-                .clone()
-                .unwrap_or_else(|| "turn-1".to_string()),
-            completed_at_ms: 0,
-            item: AppServerThreadItem::ExitedReviewMode {
-                id: "review-end".to_string(),
-                review: String::new(),
-                finding_count,
             },
         }),
         /*replay_kind*/ None,
@@ -1218,28 +1163,6 @@ pub(super) async fn assert_shift_left_edits_most_recent_queued_message_for_termi
         chat.input_queue.queued_user_messages.front().unwrap().text,
         "first queued"
     );
-}
-
-pub(super) fn render_bottom_first_row(chat: &ChatWidget, width: u16) -> String {
-    let height = chat.desired_height(width);
-    let area = Rect::new(0, 0, width, height);
-    let mut buf = Buffer::empty(area);
-    chat.render(area, &mut buf);
-    for y in 0..area.height {
-        let mut row = String::new();
-        for x in 0..area.width {
-            let s = buf[(x, y)].symbol();
-            if s.is_empty() {
-                row.push(' ');
-            } else {
-                row.push_str(s);
-            }
-        }
-        if !row.trim().is_empty() {
-            return row;
-        }
-    }
-    String::new()
 }
 
 pub(crate) fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {

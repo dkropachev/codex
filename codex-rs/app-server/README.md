@@ -165,7 +165,7 @@ Example with notification opt-out:
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it. Accepts the same permission override rules as `thread/start`.
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; pass an optional `lastTurnId` to copy history only through that turn, inclusive, and drop later turns from the fork. An in-progress `lastTurnId` boundary is rejected. Experimental `beforeTurnId` instead copies history strictly before the referenced turn, including when that turn is in progress, and cannot be combined with `lastTurnId`. If both boundaries are null while the source thread is mid-turn, the fork records the same interruption marker as `turn/interrupt` instead of inheriting an unmarked partial turn suffix. The returned `thread.forkedFromId` points at the source thread when known. Accepts `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread. Experimental clients can pass `excludeTurns: true` when they plan to page fork history via `thread/turns/list` instead of receiving the full turn array immediately, or `deferGoalContinuation: true` to carry the source thread's current goal into the fork and run an explicit turn before automatic continuation resumes. Deferred goal continuation is persisted until that turn starts and cannot be combined with `ephemeral: true`. Accepts the same permission override rules as `thread/start`.
 - `thread/start`, `thread/resume`, and `thread/fork` responses include the legacy `sandbox` compatibility projection. `instructionSources` lists loaded instruction files using each source environment's native absolute path syntax, including files loaded from remote environments. Experimental clients can read `runtimeWorkspaceRoots` for the thread-scoped runtime roots and `activePermissionProfile` for the named or implicit built-in profile identity/provenance when known. Their deprecated experimental `multiAgentMode` field, and the corresponding thread setting, always report `explicitRequestOnly`; Ultra reasoning effort is the source of proactive multi-agent behavior.
-- `thread/list` — page through stored threads; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `sectionId`, `cwd`, and `searchTerm` filters. Experimental `projectId` filters one project, while `null` selects unassigned threads. Set `sortKey` to `"section_position"` when listing a section in its persisted manual order. Experimental clients can use `parentThreadId` for direct spawned children or `ancestorThreadId` for spawned descendants at any depth; the two filters are mutually exclusive. Review and Guardian threads are not included because they do not participate in that spawn-edge lifecycle. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded. Subagent threads also include `parentThreadId` when the immediate parent is known.
+- `thread/list` — page through stored threads; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `sectionId`, `cwd`, and `searchTerm` filters. Experimental `projectId` filters one project, while `null` selects unassigned threads. Set `sortKey` to `"section_position"` when listing a section in its persisted manual order. Experimental clients can use `parentThreadId` for direct spawned children or `ancestorThreadId` for spawned descendants at any depth; the two filters are mutually exclusive. Guardian threads are not included because they do not participate in that spawn-edge lifecycle. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded. Subagent threads also include `parentThreadId` when the immediate parent is known.
 - `project/list`, `project/read`, `project/create`, `project/import`, `project/update`, `project/move`, and `project/delete` — experimental SQLite-backed project APIs. Projects have canonical server-generated IDs, persisted manual positions, ordered absolute roots, and an opaque string metadata bag. `project/move` places a project before another project or appends it when `beforeProjectId` is `null`. Create and import require an opaque `idempotencyKey`; clients should generate a UUID for ordinary creates and may use a stable namespaced legacy ID for migration. Reusing a key returns the original project without emitting notifications or repeating thread assignments, and keys remain reserved after deletion. Import can atomically assign existing thread IDs. Delete clears assignments but never deletes threads, directories, or files.
 - `project/changed` and `thread/project/updated` — experimental notifications emitted after committed project or assignment changes. Reconnect with `project/list` and `thread/list` to recover authoritative state.
 - `threadSection/list` — page through independently persisted thread sections, including their display names and optional `appearance` (`icon` and `color`).
@@ -212,7 +212,7 @@ Example with notification opt-out:
 - `thread/revert` — experimental. Replace a loaded paginated thread's durable history with the prefix strictly before `beforeTurnId` while preserving its thread id. The operation interrupts an active turn if needed, leaves older rollout files immutable, reloads the thread, returns updated thread metadata with empty `turns` plus pagination cursors, and emits `thread/reverted`. It does not revert local file changes. Parent-owned Multi-Agent V2 subagents reject direct revert requests.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. `clientUserMessageId` is optional; when supplied, the corresponding `userMessage` item echoes it as `clientId`. Experimental `runtimeWorkspaceRoots` supplies the default roots for newly resolved environment selections. Explicit `environments[].runtimeWorkspaceRoots` override that fallback with environment-native absolute paths. Prefer experimental `permissions` profile selection by id for permission overrides; the legacy `sandboxPolicy` field is still accepted but cannot be combined with `permissions`. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode". Deprecated experimental `multiAgentMode` is ignored; Ultra reasoning effort selects proactive behavior. Parent-owned Multi-Agent V2 subagents reject direct turns.
 - `thread/inject_items` — append raw Responses API items to a loaded thread’s model-visible history without starting a user turn; returns `{}` on success. Parent-owned Multi-Agent V2 subagents reject direct item injection.
-- `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. `clientUserMessageId` is optional; when supplied, the corresponding `userMessage` item echoes it as `clientId`. Review and manual compaction turns reject `turn/steer`. Parent-owned Multi-Agent V2 subagents reject direct steering.
+- `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. `clientUserMessageId` is optional; when supplied, the corresponding `userMessage` item echoes it as `clientId`. Manual compaction turns reject `turn/steer`. Parent-owned Multi-Agent V2 subagents reject direct steering.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`. Also available for parent-owned Multi-Agent V2 subagents.
 - `thread/realtime/start` — start a thread-scoped realtime session (experimental); pass `outputModality: "text"` or `outputModality: "audio"` to choose model output, optionally pass `model` and `version` to override configured realtime selection for this session only, pass `includeStartupContext: false` to omit Codex's generated startup context, and optionally pass `initialItems` to seed V3 with complete role-bearing text messages at session creation. Pass `realtimeStartInstructions` and `realtimeEndInstructions` to control the developer instructions given to the backing Codex model when this session starts and ends. Version `"v1"` uses legacy Bidi `conversation.handoff.*`, `"v2"` uses the Realtime Voice API, and `"v3"` preserves V1 Codex Voice behavior while using Frameless Bidi `delegation.*`. For V3 automatic Codex text, `codexResponseHandoffMode` accepts `"thinking"` (the default; all output uses channel-less thinking appends), `"commentary"` (all output uses the commentary channel), or `"bemTags"` (the raw BEM envelope selects the API channel: BEM `analysis` and `commentary` use `commentary`, while BEM `final` and unparsable output use `speakable`). The BEM envelope remains in the appended text for the frontend model to interpret. V1 and V2 ignore this setting. For V3, pass `delegationAckFiller: false` to suppress the Realtime API's delegation acknowledgement filler or `true` to restore it; omitting the field preserves the Realtime API's default. V1 and V2 ignore `delegationAckFiller`. V3 handoffs do not prepend the legacy `"Agent Final Message"` label. Pass `clientManagedHandoffs: true` to disable automatic Codex response delivery so only the client's explicit append calls produce handoffs. Pass `codexResponsesAsItems: true` to send automatic Codex responses as realtime conversation items instead, and optionally pass `codexResponseItemPrefix` to prepend experiment instructions to those items. Returns `{}` and streams `thread/realtime/*` notifications. Omit `transport` for the websocket transport, or pass `{ "type": "webrtc", "sdp": "..." }` to create a Bidi WebRTC session from a browser-generated SDP offer; the remote answer SDP is emitted as `thread/realtime/sdp`. Conversation `version: "v2"` requests remain unsupported for WebRTC. Parent-owned Multi-Agent V2 subagents reject this request.
 - `thread/realtime/appendAudio` — append an input audio chunk to the active realtime session (experimental); returns `{}`. Parent-owned Multi-Agent V2 subagents reject this request.
@@ -220,8 +220,6 @@ Example with notification opt-out:
 - `thread/realtime/appendSpeech` — append text that the realtime model should speak to the user (experimental); returns `{}`. Parent-owned Multi-Agent V2 subagents reject this request.
 - `thread/realtime/stop` — stop the active realtime session for the thread (experimental); returns `{}`. Parent-owned Multi-Agent V2 subagents reject this request.
 - `thread/timeline/list` — page ordinary turn items, durable realtime facts, and turn boundaries together in rollout order (experimental). Entries are tagged `item`, `realtime`, `turnStarted`, or `turnCompleted`. Turn boundaries carry lifecycle metadata without duplicating the turn's items; completed boundaries also cover interrupted and failed turns. Each response contains an opaque continuation cursor and `activeRealtimeSessionAtPageStart`, allowing clients to render any bounded page without loading earlier thread history. Entries at the same rollout position have stable ordering and can span pages. Existing `thread/items/list` remains unchanged.
-- `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start`. Inline reviews emit `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review. Detached reviews stream ordinary turn items on the new review thread. Parent-owned Multi-Agent V2 subagents reject both inline and detached reviews.
-- `review/resolveScope` — inspect the selected thread environment for pull-request and branch review targets without starting a turn or modifying thread history.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `command/exec/write` — write base64-decoded stdin bytes to a running `command/exec` session or close stdin; returns `{}`.
 - `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.
@@ -477,7 +475,7 @@ When `nextCursor` is `null`, you’ve reached the final page.
 
 ### Example: List descendant threads
 
-Enable `capabilities.experimentalApi` during initialization, then use `thread/list` with `ancestorThreadId` to page through every spawned descendant of a thread from persisted spawn-edge state. The ancestor itself is excluded, and each result's `parentThreadId` remains its immediate parent. Use `parentThreadId` instead when only direct children are wanted; sending both filters is invalid. Review and Guardian threads are not included because they do not participate in the spawn-edge lifecycle. When `modelProviders` or `sourceKinds` is omitted, relationship-filtered requests include every provider or source kind, respectively. Explicit filters retain the ordinary `thread/list` behavior, including the interactive-only default for an empty `sourceKinds` list.
+Enable `capabilities.experimentalApi` during initialization, then use `thread/list` with `ancestorThreadId` to page through every spawned descendant of a thread from persisted spawn-edge state. The ancestor itself is excluded, and each result's `parentThreadId` remains its immediate parent. Use `parentThreadId` instead when only direct children are wanted; sending both filters is invalid. Guardian threads are not included because they do not participate in the spawn-edge lifecycle. When `modelProviders` or `sourceKinds` is omitted, relationship-filtered requests include every provider or source kind, respectively. Explicit filters retain the ordinary `thread/list` behavior, including the interactive-only default for an empty `sourceKinds` list.
 
 ```json
 { "method": "thread/list", "id": 21, "params": {
@@ -532,7 +530,7 @@ Gauges register when first used. Depending on process activity, the snapshot can
 
 - Includes `threadId` and the new `status`.
 - Status can be `notLoaded`, `idle`, `systemError`, or `active` (with `activeFlags`; `active` implies running).
-- `thread/start`, `thread/fork`, and detached review threads do not emit a separate initial `thread/status/changed`; their `thread/started` notification already carries the current `thread.status`.
+- `thread/start` and `thread/fork` do not emit a separate initial `thread/status/changed`; their `thread/started` notification already carries the current `thread.status`.
 
 ```json
 {
@@ -1291,112 +1289,8 @@ not emit `turn/started` and does not accept thread settings overrides.
 ```
 
 `expectedTurnId` is required. If there is no active turn, `expectedTurnId` does not match the
-active turn, or the active turn kind does not accept same-turn steering (for example review or
-manual compaction), the request fails with an `invalid request` error.
-
-### Example: Request a code review
-
-Before opening a review target picker, use `review/resolveScope` to inspect the checkout selected by
-the thread. Resolution runs in the thread's primary environment, so remote threads report branches
-from the remote checkout rather than the app-server host. Missing Git or GitHub metadata is returned
-as `null` or an empty list rather than making the request fail.
-
-```json
-{ "method": "review/resolveScope", "id": 39, "params": {
-    "threadId": "thr_123"
-} }
-{ "id": 39, "result": {
-    "pullRequest": {
-        "number": 123,
-        "url": "https://github.com/openai/codex/pull/123",
-        "baseBranch": "main",
-        "baseBranchTarget": "refs/remotes/origin/main"
-    },
-    "defaultBranch": {
-        "displayName": "main",
-        "target": "refs/remotes/origin/main"
-    },
-    "currentBranch": "feature/review-picker",
-    "branches": ["refs/remotes/origin/main", "refs/heads/feature/review-picker"]
-} }
-```
-
-`pullRequest` is the open pull request associated with the current branch or `HEAD`, if one can be
-resolved. Its `baseBranchTarget` is the exact ref for the base when local and remote refs resolve
-unambiguously. `defaultBranch` carries both a user-facing branch name and the exact ref to pass in
-a `baseBranch` review target. `currentBranch` is `null` for a detached head, and `branches`
-contains the available explicit base-branch targets with the preferred target first.
-
-Use `review/start` to run Codex’s reviewer on the currently checked-out project. The request takes the thread id plus a `target` describing what should be reviewed:
-
-- `{"type":"uncommittedChanges"}` — staged, unstaged, and untracked files.
-- `{"type":"baseBranch","branch":"main"}` — diff against the provided branch’s upstream (see prompt for the exact `git merge-base`/`git diff` instructions Codex will run).
-- `{"type":"commit","sha":"abc1234","title":"Optional subject"}` — review a specific commit.
-- `{"type":"pullRequest","url":"https://github.com/openai/codex/pull/123"}` — resolve the pull request metadata in the selected thread environment and review that checkout against its base. The pull request title and body provide scope context only.
-- `{"type":"custom","instructions":"Free-form reviewer instructions"}` — fallback prompt equivalent to the legacy manual review request.
-- `delivery` (`"inline"` or `"detached"`, default `"inline"`) — where the review runs:
-  - `"inline"`: run the review as a new turn on the existing thread. The response’s `reviewThreadId` equals the original `threadId`, and no new `thread/started` notification is emitted.
-  - `"detached"`: fork a new review thread from the parent conversation and run the review there. The response’s `reviewThreadId` is the id of this new review thread, and the server emits a `thread/started` notification for it before streaming review items.
-
-Example request/response:
-
-```json
-{ "method": "review/start", "id": 40, "params": {
-    "threadId": "thr_123",
-    "delivery": "inline",
-    "target": { "type": "commit", "sha": "1234567deadbeef", "title": "Polish tui colors" }
-} }
-{ "id": 40, "result": {
-    "turn": {
-        "id": "turn_900",
-        "status": "inProgress",
-        "items": [
-            { "type": "userMessage", "id": "turn_900", "content": [ { "type": "text", "text": "Review commit 1234567: Polish tui colors" } ] }
-        ],
-        "error": null
-    },
-    "reviewThreadId": "thr_123"
-} }
-```
-
-For a detached review, use `"delivery": "detached"`. The response is the same shape, but `reviewThreadId` will be the id of the new review thread (different from the original `threadId`). The server also emits a `thread/started` notification for that new thread before streaming the review turn. Internally, this is a normal forked thread and turn whose prompt mentions the bundled `$review-agent` skill, so normal turn steering, tool, permission, and item-stream behavior applies.
-
-Detached review is unsupported when the parent thread is paginated.
-
-For an inline review, Codex streams the usual `turn/started` notification followed by an `item/started`
-with an `enteredReviewMode` item so clients can show progress:
-
-```json
-{
-  "method": "item/started",
-  "params": {
-    "item": {
-      "type": "enteredReviewMode",
-      "id": "turn_900",
-      "review": "current changes"
-    }
-  }
-}
-```
-
-When the reviewer finishes, the server emits `item/started` and `item/completed`
-containing an `exitedReviewMode` item with the final review text:
-
-```json
-{
-  "method": "item/completed",
-  "params": {
-    "item": {
-      "type": "exitedReviewMode",
-      "id": "turn_900",
-      "review": "Looks solid overall...\n\n- Prefer Stylize helpers — app.rs:10-20\n  ...",
-      "findingCount": 1
-    }
-  }
-}
-```
-
-The `review` string is plain text that already bundles the overall explanation plus a bullet list for each structured finding (matching `ThreadItem::ExitedReviewMode` in the generated schema). `findingCount` is the number of structured findings and is zero when none are available. Use this notification to render the reviewer output in your client.
+active turn, or the active turn kind does not accept same-turn steering (for example manual
+compaction), the request fails with an `invalid request` error.
 
 ### Example: One-off command execution
 
@@ -1732,8 +1626,6 @@ The app-server streams JSON-RPC notifications while a turn is running. Each turn
 - `imageGeneration` — `{id, status, revisedPrompt, result, transparentBackground, savedPath?}` for a generated image. `transparentBackground` is `true` when the Images API reports a transparent background, `false` when it reports an opaque background, and `null` when the background is automatic, unavailable, or the item has not completed. The field is always present on v2 item payloads, including persisted and resumed items.
 - `imageView` — `{id, path}` emitted when the agent invokes the image viewer tool.
 - `sleep` — `{id, durationMs}` emitted while the agent waits for a duration or new input.
-- `enteredReviewMode` — `{id, review}` sent when the reviewer starts; `review` is a short user-facing label such as `"current changes"` or the requested target description.
-- `exitedReviewMode` — `{id, review, findingCount}` emitted when the reviewer finishes; `review` is the full plain-text review (usually, overall notes plus bullet point findings), and `findingCount` is the number of structured findings.
 - `contextCompaction` — `{id}` emitted when codex compacts the conversation history. This can happen automatically.
 - `compacted` - `{threadId, turnId}` when codex compacts the conversation history. This can happen automatically. **Deprecated:** Use `contextCompaction` instead.
 
@@ -1790,7 +1682,7 @@ Ownership rejections for parent-owned Multi-Agent V2 subagents return JSON-RPC e
 - `ResponseStreamDisconnected { httpStatusCode? }`: disconnect of the response SSE stream in the middle of a turn before completion
 - `ResponseTooManyFailedAttempts { httpStatusCode? }`
 - `ActiveTurnNotSteerable { turnKind }`: `turn/start` or `turn/steer` was submitted while the
-  current active turn was not steerable, for example `/review` or manual `/compact`
+  current active turn was not steerable, for example manual `/compact`
 - `BadRequest`
 - `Unauthorized`
 - `SandboxError`

@@ -1591,17 +1591,6 @@ async fn thread_list_filters_by_subagent_variant() -> Result<()> {
 
     let parent_thread_id = ThreadId::from_string(&Uuid::new_v4().to_string())?;
 
-    let review_id = create_fake_parented_rollout_with_source(
-        codex_home.path(),
-        "2025-02-02T09-00-00",
-        "2025-02-02T09:00:00Z",
-        "Review",
-        Some("mock_provider"),
-        /*git_info*/ None,
-        CoreSessionSource::SubAgent(SubAgentSource::Review),
-        parent_thread_id.into(),
-        parent_thread_id,
-    )?;
     let compact_id = create_fake_rollout_with_source(
         codex_home.path(),
         "2025-02-02T10-00-00",
@@ -1637,26 +1626,6 @@ async fn thread_list_filters_by_subagent_variant() -> Result<()> {
     )?;
 
     let mut mcp = init_mcp(codex_home.path()).await?;
-
-    let review = list_threads(
-        &mut mcp,
-        /*cursor*/ None,
-        Some(10),
-        Some(vec!["mock_provider".to_string()]),
-        Some(vec![ThreadSourceKind::SubAgentReview]),
-        /*archived*/ None,
-    )
-    .await?;
-    let review_ids: Vec<_> = review
-        .data
-        .iter()
-        .map(|thread| thread.id.as_str())
-        .collect();
-    assert_eq!(review_ids, vec![review_id.as_str()]);
-    assert_eq!(
-        review.data[0].parent_thread_id,
-        Some(parent_thread_id.to_string())
-    );
 
     let compact = list_threads(
         &mut mcp,

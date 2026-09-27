@@ -697,10 +697,10 @@ impl App {
                                     }) if !retried_after_turn_mismatch
                                         && actual_turn_id != steer_turn_id =>
                                     {
-                                        // Review flows can swap the active turn before the TUI
-                                        // processes the corresponding notification. Retry once with
-                                        // the server-reported turn id so non-steerable review turns
-                                        // still fall through to the existing queueing behavior.
+                                        // The active turn can change before the TUI processes the
+                                        // corresponding notification. Retry once with the
+                                        // server-reported turn id so non-steerable turns still fall
+                                        // through to the existing queueing behavior.
                                         if let Some(channel) =
                                             self.thread_event_channels.get(&thread_id)
                                         {
@@ -785,29 +785,6 @@ impl App {
                 let name = name.to_string();
                 app_server.thread_set_name(thread_id, name.clone()).await?;
                 self.chat_widget.expect_manual_thread_name(thread_id, name);
-                Ok(true)
-            }
-            AppCommand::Review { target } => {
-                let response = match app_server.review_start(thread_id, target.clone()).await {
-                    Ok(response) => response,
-                    Err(err) => {
-                        if self.chat_widget.thread_id() == Some(thread_id) {
-                            self.chat_widget.clear_review_action();
-                        }
-                        return Err(err);
-                    }
-                };
-                if self.chat_widget.thread_id() == Some(thread_id) {
-                    self.chat_widget.bind_live_review_action(
-                        &response.review_thread_id,
-                        response.turn.id.clone(),
-                    );
-                }
-                let review_thread_id = ThreadId::from_string(&response.review_thread_id)
-                    .wrap_err("review/start returned invalid review thread id")?;
-                let store = Arc::clone(&self.ensure_thread_channel(review_thread_id).store);
-                let mut store = store.lock().await;
-                store.active_turn_id = Some(response.turn.id);
                 Ok(true)
             }
             AppCommand::CleanBackgroundTerminals => {

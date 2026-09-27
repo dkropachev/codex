@@ -7058,10 +7058,6 @@
       "description": "Bounded, product-owned metadata attached to every Responses API request.",
       "type": "object"
     },
-    "review_model": {
-      "description": "Review model override used by the `/review` feature.",
-      "type": "string"
-    },
     "sandbox_mode": {
       "allOf": [
         {

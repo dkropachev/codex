@@ -208,58 +208,6 @@ async fn queued_slash_compact_dispatches_after_active_turn() {
 }
 
 #[tokio::test]
-async fn queued_slash_review_with_args_dispatches_after_active_turn() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.thread_id = Some(ThreadId::new());
-    handle_turn_started(&mut chat, "turn-1");
-
-    queue_composer_text_with_tab(&mut chat, "/review check regressions");
-
-    complete_turn_with_message(&mut chat, "turn-1", Some("done"));
-
-    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Choose a review action"));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    let (thread_id, cwd, target, action) = loop {
-        if let AppEvent::StartReview {
-            thread_id,
-            cwd,
-            target,
-            action,
-        } = rx.try_recv().expect("review action event")
-        {
-            break (thread_id, cwd, target, action);
-        }
-    };
-    assert_eq!(action, ReviewAction::Report);
-    chat.start_review_for_thread(thread_id, cwd, target, action);
-
-    match op_rx.try_recv() {
-        Ok(Op::Review { target }) => assert_eq!(
-            target,
-            ReviewTarget::Custom {
-                instructions: "check regressions".to_string(),
-            }
-        ),
-        other => panic!("expected queued /review to submit review op, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn queued_slash_review_with_args_restores_for_edit() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.thread_id = Some(ThreadId::new());
-    handle_turn_started(&mut chat, "turn-1");
-
-    queue_composer_text_with_tab(&mut chat, "/review check regressions");
-    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
-
-    assert_eq!(
-        chat.bottom_pane.composer_text(),
-        "/review check regressions"
-    );
-}
-
-#[tokio::test]
 async fn queued_bang_shell_dispatches_after_active_turn() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
@@ -1750,7 +1698,7 @@ async fn unavailable_slash_command_is_available_from_local_recall() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_task_running(/*running*/ true);
 
-    submit_composer_text(&mut chat, "/review");
+    submit_composer_text(&mut chat, "/archive");
 
     let cells = drain_insert_history(&mut rx);
     let rendered = cells
@@ -1759,10 +1707,10 @@ async fn unavailable_slash_command_is_available_from_local_recall() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        rendered.contains("'/review' is disabled while a task is in progress."),
+        rendered.contains("'/archive' is disabled while a task is in progress."),
         "expected disabled-command message, got: {rendered:?}"
     );
-    assert_eq!(recall_latest_after_clearing(&mut chat), "/review");
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/archive");
 }
 
 #[tokio::test]

@@ -89,7 +89,7 @@ fn enterprise_layers_precede_user_and_override_system() {
             r#"
 model = "system"
 model_provider = "system"
-review_model = "system-review"
+service_tier = "system-tier"
 "#,
         ),
     )];
@@ -97,7 +97,7 @@ review_model = "system-review"
         cloud_config_layers_from_fragments(
             vec![
                 fragment("high", "High priority", "model_provider = \"cloud-high\""),
-                fragment("low", "Low priority", "review_model = \"cloud-low-review\""),
+                fragment("low", "Low priority", "service_tier = \"cloud-low\""),
             ],
             &base_dir,
         )
@@ -147,7 +147,7 @@ review_model = "system-review"
             r#"
 model = "user"
 model_provider = "cloud-high"
-review_model = "cloud-low-review"
+service_tier = "cloud-low"
 "#,
         )
     );

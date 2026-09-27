@@ -263,7 +263,7 @@ invalid = ["#,
                 ..LoaderOverrides::without_managed_config_for_tests()
             },
             cloud_config_bundle: CloudConfigBundleFixture::loader_with_enterprise_config(
-                r#"review_model = "from-cloud""#,
+                r#"service_tier = "from-cloud""#,
             ),
             ..Default::default()
         },
@@ -281,7 +281,7 @@ invalid = ["#,
         Some(&TomlValue::String("from-session".to_string()))
     );
     assert_eq!(
-        layers.effective_config().get("review_model"),
+        layers.effective_config().get("service_tier"),
         Some(&TomlValue::String("from-cloud".to_string()))
     );
     Ok(())
@@ -2553,7 +2553,7 @@ async fn load_config_layers_inserts_cloud_config_between_system_and_user() -> an
         &system_config_path,
         r#"model = "system"
 model_provider = "system-provider"
-review_model = "system-review"
+model_context_window = 1234
 "#,
     )
     .await?;
@@ -2588,8 +2588,8 @@ model_provider = "cloud-provider"
         Some(&TomlValue::String("cloud-provider".into()))
     );
     assert_eq!(
-        table.get("review_model"),
-        Some(&TomlValue::String("system-review".into()))
+        table.get("model_context_window"),
+        Some(&TomlValue::Integer(1234))
     );
     assert_eq!(
         layers

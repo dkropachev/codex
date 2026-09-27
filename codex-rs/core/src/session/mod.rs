@@ -98,10 +98,8 @@ use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
-use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_protocol::items::EnteredReviewModeItem;
 use codex_protocol::items::SubAgentActivityItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
@@ -225,8 +223,6 @@ mod mcp_refresh;
 mod mcp_runtime;
 mod model_router_turn;
 pub(crate) mod multi_agents;
-mod review;
-mod review_command_runner;
 mod rollout_budget;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
@@ -235,7 +231,6 @@ pub(crate) mod step_context;
 mod thread_settings;
 pub(crate) mod time_reminder;
 mod token_budget;
-pub(crate) use token_budget::apply_model_defaults as apply_token_budget_model_defaults;
 pub(crate) mod turn;
 pub(crate) mod turn_context;
 mod turn_input;
@@ -248,7 +243,6 @@ use self::handlers::submission_loop;
 pub(crate) use self::input_queue::InputQueueActivity;
 pub(crate) use self::input_queue::TurnInput;
 pub(crate) use self::input_queue::TurnInputQueue;
-use self::review::spawn_review_thread;
 use self::session::AppServerClientMetadata;
 use self::session::Session;
 use self::session::SessionConfiguration;
@@ -295,7 +289,6 @@ use crate::state::SessionState;
 use crate::stream_events_utils::HandleOutputCtx;
 #[cfg(test)]
 use crate::stream_events_utils::handle_output_item_done;
-use crate::tasks::ReviewTask;
 use crate::tools::ApprovalContext;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::network_approval::build_blocked_request_observer;
@@ -665,7 +658,6 @@ impl Session {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let configured_config = Arc::clone(&config);
         let multi_agent_version = config.multi_agent_version_override().or_else(|| {
             resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version)
         });
@@ -799,7 +791,7 @@ impl Session {
         // This task will run until Op::Shutdown is received.
         let session_for_loop = Arc::clone(&session);
         let session_loop_handle = tokio::spawn(async move {
-            submission_loop(session_for_loop, configured_config, rx_sub)
+            submission_loop(session_for_loop, rx_sub)
                 .instrument(info_span!("session_loop", thread_id = %thread_id))
                 .await;
         });

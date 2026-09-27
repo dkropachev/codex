@@ -267,7 +267,6 @@ impl ChatWidget {
     fn slash_command_blocked_by_active_task(&self, cmd: SlashCommand) -> bool {
         (!cmd.available_during_task()
             && (self.turn_lifecycle.agent_turn_running
-                || self.review.is_review_mode
                 || (self.bottom_pane.is_task_running()
                     && (self.mcp_startup_status.is_none()
                         || self.input_queue.user_turn_pending_start))))
@@ -280,9 +279,6 @@ impl ChatWidget {
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
         self.flush_completed_command_activity();
         if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
-            return;
-        }
-        if !self.ensure_side_command_allowed_outside_review(cmd) {
             return;
         }
         if self.slash_command_blocked_by_active_task(cmd) {
@@ -405,12 +401,6 @@ impl ChatWidget {
                 }
                 self.input_queue.user_turn_pending_start = true;
                 self.app_event_tx.compact();
-            }
-            SlashCommand::Review => {
-                self.open_review_popup();
-                if self.mcp_startup_status.is_some() {
-                    self.defer_input_until_settings_applied();
-                }
             }
             SlashCommand::Rename => {
                 self.session_telemetry
@@ -716,9 +706,6 @@ impl ChatWidget {
         text_elements: Vec<TextElement>,
     ) {
         if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
-            return;
-        }
-        if !self.ensure_side_command_allowed_outside_review(cmd) {
             return;
         }
         if !cmd.supports_inline_args() {
@@ -1127,13 +1114,6 @@ impl ChatWidget {
                 );
                 self.request_side_conversation(parent_thread_id, Some(user_message));
             }
-            SlashCommand::Review if !trimmed.is_empty() => {
-                self.show_review_action_picker(
-                    self.thread_id,
-                    self.config.cwd.to_path_buf(),
-                    ReviewTarget::Custom { instructions: args },
-                );
-            }
             SlashCommand::Resume if !trimmed.is_empty() => {
                 self.app_event_tx
                     .send(AppEvent::ResumeSessionByIdOrName(args));
@@ -1358,7 +1338,6 @@ impl ChatWidget {
             | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact
-            | SlashCommand::Review
             | SlashCommand::Model
             | SlashCommand::Personality
             | SlashCommand::Plan
@@ -1444,19 +1423,6 @@ impl ChatWidget {
         self.add_error_message(format!(
             "'/{}' is unavailable in side conversations. {SIDE_SLASH_COMMAND_UNAVAILABLE_HINT}",
             cmd.command()
-        ));
-        self.bottom_pane.drain_pending_submission_state();
-        false
-    }
-
-    fn ensure_side_command_allowed_outside_review(&mut self, cmd: SlashCommand) -> bool {
-        if !matches!(cmd, SlashCommand::Side | SlashCommand::Btw) || !self.review.is_review_mode {
-            return true;
-        }
-
-        let command = cmd.command();
-        self.add_error_message(format!(
-            "'/{command}' is unavailable while code review is running."
         ));
         self.bottom_pane.drain_pending_submission_state();
         false

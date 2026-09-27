@@ -3269,7 +3269,9 @@ impl ThreadRequestProcessor {
                 .await
                 .map_err(paginated_history_list_error)?;
             for item in page.items {
-                items.push(deserialize_stored_thread_item(item)?);
+                if let Some(item) = deserialize_stored_thread_item(item)? {
+                    items.push(item);
+                }
             }
             let Some(next_cursor) = page.next_cursor else {
                 return Ok(items);
@@ -3433,10 +3435,13 @@ impl ThreadRequestProcessor {
         let data = page
             .items
             .into_iter()
-            .map(|stored_item| {
+            .filter_map(|stored_item| {
                 let turn_id = stored_item.turn_id.clone();
-                let item = deserialize_stored_thread_item(stored_item)?;
-                Ok(ThreadItemEntry { turn_id, item })
+                match deserialize_stored_thread_item(stored_item) {
+                    Ok(Some(item)) => Some(Ok(ThreadItemEntry { turn_id, item })),
+                    Ok(None) => None,
+                    Err(err) => Some(Err(err)),
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -5655,8 +5660,26 @@ fn paginated_history_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
 
 fn deserialize_stored_thread_item(
     item: codex_thread_store::StoredThreadItem,
-) -> Result<ThreadItem, JSONRPCErrorError> {
-    serde_json::from_slice::<ThreadItem>(&item.item_json).map_err(|err| {
+) -> Result<Option<ThreadItem>, JSONRPCErrorError> {
+    let value = serde_json::from_slice::<serde_json::Value>(&item.item_json).map_err(|err| {
+        internal_error(format!(
+            "failed to deserialize stored thread item {}: {err}",
+            item.item_id
+        ))
+    })?;
+    if value
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|item_type| {
+            matches!(
+                item_type,
+                "enteredReviewMode" | "exitedReviewMode" | "EnteredReviewMode" | "ExitedReviewMode"
+            )
+        })
+    {
+        return Ok(None);
+    }
+    serde_json::from_value(value).map(Some).map_err(|err| {
         internal_error(format!(
             "failed to deserialize stored thread item {}: {err}",
             item.item_id
@@ -5682,7 +5705,11 @@ fn stored_turn_to_api_turn(
     let items = turn
         .items
         .into_iter()
-        .map(deserialize_stored_thread_item)
+        .filter_map(|item| match deserialize_stored_thread_item(item) {
+            Ok(Some(item)) => Some(Ok(item)),
+            Ok(None) => None,
+            Err(err) => Some(Err(err)),
+        })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Turn {
         id: turn.turn_id,

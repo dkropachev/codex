@@ -57,7 +57,7 @@ fn mcp_contribution_context_identifies_the_running_thread() {
     let config = ();
     let thread_init = ExtensionDataInit::new();
     let thread_store = ExtensionData::new("child-thread");
-    let session_source = SessionSource::SubAgent(SubAgentSource::Review);
+    let session_source = SessionSource::SubAgent(SubAgentSource::Compact);
 
     let thread_context = McpServerContributionContext::for_step(
         &config,

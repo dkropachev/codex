@@ -100,7 +100,6 @@ use codex_app_server_protocol::ModelVerification as AppServerModelVerification;
 use codex_app_server_protocol::RateLimitReachedType;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
-use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillMetadata;
@@ -125,10 +124,7 @@ use codex_config::types::WindowsSandboxModeToml;
 use codex_connectors::AppInfo;
 use codex_features::FEATURES;
 use codex_features::Feature;
-#[cfg(test)]
-use codex_git_utils::CommitLogEntry;
 use codex_git_utils::get_git_repo_root;
-use codex_git_utils::recent_commits;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_plugin::PluginCapabilitySummary;
@@ -404,12 +400,6 @@ pub(crate) use self::rate_limits::limit_label_for_window;
 mod reasoning_shortcuts;
 mod rendering;
 mod replay;
-mod review;
-mod review_popups;
-pub(crate) use self::review::ReviewAction;
-use self::review::ReviewState;
-#[cfg(test)]
-pub(crate) use self::review_popups::show_review_commit_picker_with_entries;
 mod safety_buffering;
 mod service_tiers;
 mod settings;
@@ -467,7 +457,6 @@ use self::user_messages::user_message_preview_text;
 mod warnings;
 use self::warnings::WarningDisplayState;
 pub(crate) use crate::branch_summary::StatusLineGitSummary;
-use crate::review_scope::SharedReviewScopeResolver;
 use crate::streaming::chunking::AdaptiveChunkingPolicy;
 use crate::streaming::commit_tick::CommitTickScope;
 use crate::streaming::commit_tick::run_commit_tick;
@@ -508,8 +497,6 @@ pub(crate) struct ChatWidgetInit {
     /// Tests that do not exercise git status-line refreshes may leave this unset. Production TUI
     /// construction provides a runner for the active app-server session.
     pub(crate) workspace_command_runner: Option<WorkspaceCommandRunner>,
-    /// Thread-scoped app-server resolver used by the review picker.
-    pub(crate) review_scope_resolver: Option<SharedReviewScopeResolver>,
     pub(crate) initial_user_message: Option<UserMessage>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) has_chatgpt_account: bool,
@@ -655,7 +642,7 @@ pub(crate) struct ChatWidget {
     // Preserves reasoning-summary part boundaries for transcript-only recording.
     reasoning_summary_parts: Vec<String>,
     status_state: StatusState,
-    review: ReviewState,
+    recent_auto_review_denials: auto_review_denials::RecentAutoReviewDenials,
     // Active hook runs render in a dedicated live cell so they can run alongside tools.
     active_hook_cell: Option<HookCell>,
     // Reused for built-in pet CDN requests so redirects remain route-aware.
@@ -722,8 +709,6 @@ pub(crate) struct ChatWidget {
     current_cwd: Option<PathBuf>,
     // App-server-backed command runner for status-line workspace metadata lookups.
     workspace_command_runner: Option<WorkspaceCommandRunner>,
-    // Thread-scoped repository metadata resolver for the review picker.
-    review_scope_resolver: Option<SharedReviewScopeResolver>,
     // Instruction source files loaded for the current session, supplied by app-server.
     instruction_source_paths: Vec<PathUri>,
     // Runtime network proxy bind addresses from SessionConfigured.
@@ -1179,19 +1164,6 @@ impl ChatWidget {
         Some(info.total_token_usage.tokens_in_context_window())
     }
 
-    fn restore_pre_review_token_info(&mut self) {
-        if let Some(saved) = self.review.pre_review_token_info.take() {
-            match saved {
-                Some(info) => self.apply_token_info(info),
-                None => {
-                    self.bottom_pane
-                        .set_context_window(/*percent*/ None, /*used_tokens*/ None);
-                    self.token_info = None;
-                }
-            }
-        }
-    }
-
     pub(crate) fn handle_history_entry_response(&mut self, event: HistoryLookupResponse) {
         self.bottom_pane.on_history_lookup_response(event);
     }
@@ -1281,37 +1253,9 @@ impl ChatWidget {
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
 
-    fn enter_review_mode_with_hint(&mut self, hint: String, from_replay: bool) {
-        if self.review.pre_review_token_info.is_none() {
-            self.review.pre_review_token_info = Some(self.token_info.clone());
-        }
-        if !from_replay && !self.bottom_pane.is_task_running() {
-            self.bottom_pane.set_task_running(/*running*/ true);
-        }
-        self.review.is_review_mode = true;
-        let banner = format!(">> Code review started: {hint} <<");
-        self.add_to_history(history_cell::new_review_status_line(banner));
-        self.request_redraw();
-    }
-
-    fn exit_review_mode_after_item(&mut self) {
-        self.flush_answer_stream_with_separator();
-        self.flush_interrupt_queue();
-        self.flush_active_cell();
-        self.review.is_review_mode = false;
-        self.restore_pre_review_token_info();
-        self.add_to_history(history_cell::new_review_status_line(
-            "<< Code review finished >>".to_string(),
-        ));
-        self.request_redraw();
-    }
-
     fn on_committed_user_message(&mut self, items: &[UserInput], from_replay: bool) {
         let display = Self::user_message_display_from_inputs(items);
         if from_replay {
-            if self.review.is_review_mode {
-                return;
-            }
             self.bottom_pane
                 .record_replayed_user_message_history(HistoryEntry {
                     text: display.message.clone(),
@@ -1343,9 +1287,7 @@ impl ChatWidget {
                 );
                 self.on_user_message_display(display);
             }
-        } else if !self.review.is_review_mode
-            && self.last_rendered_user_message_display.as_ref() != Some(&display)
-        {
+        } else if self.last_rendered_user_message_display.as_ref() != Some(&display) {
             self.on_user_message_display(display);
         }
     }
@@ -1795,18 +1737,12 @@ impl ChatWidget {
             return false;
         }
         if self.blocks_direct_input
-            && matches!(
-                &op,
-                AppCommand::UserTurn { .. } | AppCommand::Review { .. } | AppCommand::Compact
-            )
+            && matches!(&op, AppCommand::UserTurn { .. } | AppCommand::Compact)
         {
             self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());
             return false;
         }
         self.prepare_local_op_submission(&op);
-        if op.is_review() && !self.bottom_pane.is_task_running() {
-            self.bottom_pane.set_task_running(/*running*/ true);
-        }
         match &self.codex_op_target {
             CodexOpTarget::Direct(codex_op_tx) => {
                 crate::session_log::log_outbound_op(&op);
@@ -1834,9 +1770,7 @@ impl ChatWidget {
     pub(crate) fn prepare_local_op_submission(&mut self, op: &AppCommand) {
         if matches!(
             op,
-            AppCommand::Compact
-                | AppCommand::Review { .. }
-                | AppCommand::RunUserShellCommand { .. }
+            AppCommand::Compact | AppCommand::RunUserShellCommand { .. }
         ) {
             self.input_queue.user_turn_pending_start = true;
         }

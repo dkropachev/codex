@@ -63,6 +63,9 @@ async fn hidden_shell_paste_recalled_from_history_submits_literal_prompt() {
 async fn hidden_shell_paste_queued_during_turn_submits_literal_prompt() {
     for key in [KeyCode::Tab, KeyCode::Enter] {
         let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.queued_message_edit_hint_binding = Some(crate::key_hint::alt(KeyCode::Up).into());
+        chat.bottom_pane
+            .set_queued_message_edit_binding(chat.queued_message_edit_hint_binding);
         chat.thread_id = Some(ThreadId::new());
         handle_turn_started(&mut chat, "turn-1");
         let payload = paste_hidden_shell_payload(&mut chat);
@@ -216,7 +219,6 @@ async fn parent_owned_thread_blocks_all_direct_input_entry_points() {
 
     for command in [
         "/init",
-        "/review check this",
         "/side inspect this",
         "/archive",
         "/rename",
@@ -792,7 +794,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
     let remote_url = "https://example.com/remote-only.png".to_string();
     chat.set_remote_image_urls(vec![remote_url.clone()]);
 
-    chat.open_review_popup();
+    chat.open_approvals_popup();
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert_eq!(chat.remote_image_urls(), vec![remote_url]);

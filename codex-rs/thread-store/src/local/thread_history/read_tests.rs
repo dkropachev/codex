@@ -390,6 +390,47 @@ INSERT INTO thread_realtime_items (
 }
 
 #[tokio::test]
+async fn timeline_skips_retired_review_items() {
+    let (_home, store, thread_id) = store_with_mode(ThreadHistoryMode::Paginated).await;
+    let db = history_db(&store).await;
+    insert_item(db, thread_id, "turn-1", "kept", /*rollout_ordinal*/ 10).await;
+    let retired_json = serde_json::json!({
+        "type": "enteredReviewMode",
+        "id": "retired-review",
+    })
+    .to_string();
+    sqlx::query(
+        "INSERT INTO thread_items (thread_id, turn_id, item_id, rollout_ordinal, updated_at_ordinal, created_at_ms, item_type, item_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(thread_id.to_string())
+    .bind("turn-1")
+    .bind("retired-review")
+    .bind(/*value*/ 20_i64)
+    .bind(/*value*/ 20_i64)
+    .bind(/*value*/ 20_000_i64)
+    .bind("enteredReviewMode")
+    .bind(retired_json)
+    .execute(db)
+    .await
+    .expect("insert retired review item");
+
+    let timeline = store
+        .list_timeline(ListTimelineParams {
+            thread_id,
+            cursor: None,
+            page_size: 10,
+        })
+        .await
+        .expect("list timeline with retired review item");
+
+    assert_eq!(timeline.items.len(), 1);
+    assert!(matches!(
+        &timeline.items[0],
+        ThreadTimelineEntry::Item { item, .. } if item.id() == "kept"
+    ));
+}
+
+#[tokio::test]
 async fn timeline_turn_boundaries_page_through_shared_ordinals() {
     let (_home, store, thread_id) = store_with_mode(ThreadHistoryMode::Paginated).await;
     let db = history_db(&store).await;

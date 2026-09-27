@@ -620,9 +620,6 @@ pub struct Config {
     /// `default` means the user explicitly selected standard routing.
     pub service_tier: Option<String>,
 
-    /// Model used specifically for review sessions.
-    pub review_model: Option<String>,
-
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
 
@@ -2576,7 +2573,6 @@ fn apply_managed_filesystem_constraints(
 #[derive(Default, Debug, Clone)]
 pub struct ConfigOverrides {
     pub model: Option<String>,
-    pub review_model: Option<String>,
     pub cwd: Option<PathBuf>,
     pub approval_policy: Option<AskForApproval>,
     pub approvals_reviewer: Option<ApprovalsReviewer>,
@@ -3242,7 +3238,6 @@ impl Config {
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
             model,
-            review_model: override_review_model,
             cwd,
             approval_policy: approval_policy_override,
             approvals_reviewer: approvals_reviewer_override,
@@ -3948,8 +3943,6 @@ impl Config {
             .or_else(|| InstallContext::current().bundled_zsh_path())
             .map(AbsolutePathBuf::into_path_buf);
 
-        let review_model = override_review_model.or(cfg.review_model);
-
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
         let model_catalog = load_model_catalog(cfg.model_catalog_json.clone())?;
 
@@ -4140,7 +4133,6 @@ impl Config {
         let config = Self {
             model,
             service_tier,
-            review_model,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
             model_auto_compact_token_limit_scope: cfg

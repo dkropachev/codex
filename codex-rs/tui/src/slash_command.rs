@@ -28,7 +28,6 @@ pub enum SlashCommand {
     Skills,
     Import,
     Hooks,
-    Review,
     Rename,
     New,
     Archive,
@@ -92,7 +91,6 @@ impl SlashCommand {
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
-            SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Archive => "archive this session and exit",
@@ -161,12 +159,11 @@ impl SlashCommand {
         self.into()
     }
 
-    /// Whether this command supports inline args (for example `/review ...`).
+    /// Whether this command supports inline args (for example `/rename ...`).
     pub fn supports_inline_args(self) -> bool {
         matches!(
             self,
-            SlashCommand::Review
-                | SlashCommand::Rename
+            SlashCommand::Rename
                 | SlashCommand::New
                 | SlashCommand::Clear
                 | SlashCommand::Fork
@@ -224,7 +221,6 @@ impl SlashCommand {
             | SlashCommand::Experimental
             | SlashCommand::Memories
             | SlashCommand::Import
-            | SlashCommand::Review
             | SlashCommand::Plan
             | SlashCommand::Workflow
             | SlashCommand::Config

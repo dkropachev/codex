@@ -181,7 +181,7 @@ async fn app_server_guardian_write_stdin_approval_and_timeout_clear_review_statu
         );
     }
     assert!(chat.status_state.pending_guardian_review_status.is_empty());
-    assert!(chat.review.recent_auto_review_denials.is_empty());
+    assert!(chat.recent_auto_review_denials.is_empty());
     assert_eq!(chat.status_state.current_status.header, "Working");
     let history = drain_insert_history(&mut rx);
     let [timeout] = history.as_slice() else {
@@ -204,6 +204,45 @@ async fn auto_review_denials_popup_lists_stored_auto_review_denials() {
 
     let popup = render_bottom_popup(&chat, /*width*/ 120);
     assert_chatwidget_snapshot!("auto_review_denials_popup", popup);
+}
+
+#[tokio::test]
+async fn auto_review_denials_are_scoped_to_thread() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    let mut session = crate::session_state::ThreadSessionState {
+        thread_id,
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "gpt-5.2".to_string(),
+        model_provider_id: "openai".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::AutoReview,
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_path_buf("/tmp/project").abs(),
+        runtime_workspace_roots: vec![test_path_buf("/tmp/project").abs()],
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: None,
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
+        network_proxy: None,
+        rollout_path: None,
+    };
+    chat.handle_thread_session(session.clone());
+    chat.on_guardian_assessment(auto_review_denial_event());
+    drain_insert_history(&mut rx);
+    assert!(!chat.recent_auto_review_denials.is_empty());
+
+    chat.handle_thread_session(session.clone());
+    assert!(!chat.recent_auto_review_denials.is_empty());
+
+    session.thread_id = ThreadId::new();
+    chat.handle_thread_session(session);
+    assert!(chat.recent_auto_review_denials.is_empty());
 }
 
 #[tokio::test]

@@ -99,7 +99,6 @@ use codex_app_server_protocol::TokenUsageBreakdown;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
-use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
@@ -552,7 +551,6 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         app_event_tx: app.app_event_tx.clone(),
         workspace_command_runner: None,
-        review_scope_resolver: None,
         initial_user_message: create_initial_user_message(
             Some(initial_prompt.clone()),
             Vec::new(),
@@ -5494,7 +5492,6 @@ async fn make_test_app() -> App {
         app_event_tx,
         chat_widget,
         workspace_command_runner: None,
-        review_scope_resolver: None,
         launch_cwd: config.cwd.to_path_buf(),
         runtime_working_directory_override: None,
         config,
@@ -5576,7 +5573,6 @@ async fn make_test_app_with_channels() -> (
             app_event_tx,
             chat_widget,
             workspace_command_runner: None,
-            review_scope_resolver: None,
             launch_cwd: config.cwd.to_path_buf(),
             runtime_working_directory_override: None,
             config,
@@ -6579,10 +6575,10 @@ fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
 
 #[test]
 fn active_turn_not_steerable_turn_error_extracts_structured_server_error() {
-    let turn_error = AppServerTurnError {
-        message: "cannot steer a review turn".to_string(),
+    let turn_error = codex_app_server_protocol::TurnError {
+        message: "cannot steer a compact turn".to_string(),
         codex_error_info: Some(AppServerCodexErrorInfo::ActiveTurnNotSteerable {
-            turn_kind: AppServerNonSteerableTurnKind::Review,
+            turn_kind: AppServerNonSteerableTurnKind::Compact,
         }),
         additional_details: None,
     };
@@ -7668,7 +7664,6 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         app_event_tx: app.app_event_tx.clone(),
         workspace_command_runner: None,
-        review_scope_resolver: None,
         initial_user_message: None,
         enhanced_keys_supported: app.enhanced_keys_supported,
         has_chatgpt_account: app.chat_widget.has_chatgpt_account(),

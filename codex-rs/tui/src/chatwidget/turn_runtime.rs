@@ -32,9 +32,7 @@ impl ChatWidget {
     /// both the agent turn lifecycle and MCP startup lifecycle.
     pub(super) fn update_task_running_state(&mut self) {
         self.bottom_pane.set_task_running(
-            self.turn_lifecycle.agent_turn_running
-                || self.review.is_review_mode
-                || self.mcp_startup_status.is_some(),
+            self.turn_lifecycle.agent_turn_running || self.mcp_startup_status.is_some(),
         );
         self.refresh_status_surfaces();
     }
@@ -196,11 +194,7 @@ impl ChatWidget {
         let had_pending_steers = !self.input_queue.pending_steers.is_empty();
         self.refresh_pending_input_preview();
 
-        if !from_replay
-            && !self.has_queued_follow_up_messages()
-            && !had_pending_steers
-            && !self.review.has_ready_follow_up()
-        {
+        if !from_replay && !self.has_queued_follow_up_messages() && !had_pending_steers {
             self.maybe_prompt_plan_implementation();
         }
         // Keep this flag for replayed completion events so a subsequent live TurnComplete can
@@ -470,7 +464,6 @@ impl ChatWidget {
         {
             return;
         }
-        self.clear_review_action();
         if codex_error_info == Some(AppServerCodexErrorInfo::MisalignmentPolicyViolation) {
             self.on_misalignment_policy_violation();
         } else if codex_error_info
