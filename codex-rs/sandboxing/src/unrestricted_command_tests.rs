@@ -82,3 +82,26 @@ fn prepared_command_does_not_inherit_ambient_environment() {
         "VISIBLE=yes\n"
     );
 }
+
+#[cfg(windows)]
+#[test]
+fn prepared_windows_command_does_not_inherit_ambient_environment() {
+    let cwd = AbsolutePathBuf::current_dir().expect("current directory");
+    let output = prepare_unrestricted_command(LocalProcessCommand {
+        program: "cmd.exe".into(),
+        args: ["/D", "/C", "set"].map(OsString::from).to_vec(),
+        cwd,
+        env: HashMap::from([("VISIBLE".into(), "yes".into())]),
+    })
+    .output()
+    .expect("run environment command");
+    let stdout = String::from_utf8(output.stdout).expect("UTF-8 output");
+
+    assert!(output.status.success());
+    assert!(stdout.lines().any(|line| line == "VISIBLE=yes"));
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.to_ascii_uppercase().starts_with("PATH="))
+    );
+}
