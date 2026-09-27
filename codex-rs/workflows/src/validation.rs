@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use serde_json::Value;
 use tree_sitter::Node;
@@ -19,10 +20,10 @@ use crate::manifest::read_bounded_utf8;
 
 mod checks;
 
-use checks::validate_commands;
+use checks::validate_commands_cancellable;
 use checks::validate_coverage;
-use checks::validate_git_layout;
 use checks::validate_git_layout_until;
+use checks::validate_git_layout_until_with_git;
 use checks::validate_gitignore;
 
 const REQUIRED_FILES: &[&str] = &[
@@ -70,6 +71,35 @@ impl ValidationReport {
 }
 
 pub fn validate_workflow(root: &Path) -> ValidationReport {
+    validate_workflow_cancellable(root, &AtomicBool::new(false)).unwrap_or_else(|err| {
+        ValidationReport {
+            findings: vec![ValidationFinding::new("validation", format!("{err:#}"))],
+        }
+    })
+}
+
+pub(crate) fn validate_workflow_cancellable(
+    root: &Path,
+    cancelled: &AtomicBool,
+) -> anyhow::Result<ValidationReport> {
+    validate_workflow_cancellable_with_bun(root, cancelled, Path::new("bun"))
+}
+
+fn validate_workflow_cancellable_with_bun(
+    root: &Path,
+    cancelled: &AtomicBool,
+    bun: &Path,
+) -> anyhow::Result<ValidationReport> {
+    validate_workflow_cancellable_with_tools(root, cancelled, bun, Path::new("git"))
+}
+
+fn validate_workflow_cancellable_with_tools(
+    root: &Path,
+    cancelled: &AtomicBool,
+    bun: &Path,
+    git: &Path,
+) -> anyhow::Result<ValidationReport> {
+    ensure_not_cancelled(cancelled)?;
     let mut findings = BTreeSet::new();
     validate_required_layout(root, &mut findings);
     validate_legacy_metadata(root, &mut findings);
@@ -83,9 +113,16 @@ pub fn validate_workflow(root: &Path) -> ValidationReport {
     };
     if let Some(package) = package.as_ref() {
         validate_package_json(package, &mut findings);
-        let sources = match crate::runner::scan_workflow_sources(&package.root) {
+        ensure_not_cancelled(cancelled)?;
+        let sources = match crate::runner::scan_workflow_sources_cancellable_with_bun(
+            bun,
+            &package.root,
+            crate::runner::CommandDeadline::after(crate::runner::INSPECTION_TIMEOUT),
+            cancelled,
+        ) {
             Ok(sources) => sources,
             Err(err) => {
+                ensure_not_cancelled(cancelled)?;
                 findings.insert(ValidationFinding::new(
                     "load",
                     format!("workflow source scan failed: {err:#}"),
@@ -93,17 +130,32 @@ pub fn validate_workflow(root: &Path) -> ValidationReport {
                 Vec::new()
             }
         };
-        validate_module_load(package, &mut findings);
+        validate_module_load_cancellable(package, &mut findings, cancelled, bun)?;
         validate_source_contract(package, &sources, &mut findings);
         validate_coverage(package, &mut findings);
-        validate_commands(package, &mut findings);
+        validate_commands_cancellable(package, &mut findings, cancelled)?;
     }
+    ensure_not_cancelled(cancelled)?;
     validate_gitignore(root, &mut findings);
-    validate_git_layout(root, &mut findings);
+    validate_git_layout_until_with_git(
+        git,
+        root,
+        &mut findings,
+        crate::runner::CommandDeadline::after(std::time::Duration::from_secs(/*secs*/ 2)),
+        Some(cancelled),
+    );
+    ensure_not_cancelled(cancelled)?;
 
-    ValidationReport {
+    Ok(ValidationReport {
         findings: findings.into_iter().collect(),
+    })
+}
+
+fn ensure_not_cancelled(cancelled: &AtomicBool) -> anyhow::Result<()> {
+    if cancelled.load(Ordering::Relaxed) {
+        anyhow::bail!("workflow validation was cancelled");
     }
+    Ok(())
 }
 
 pub(crate) fn validate_executable_package_cancellable(
@@ -178,16 +230,28 @@ fn validate_executable_package_with_limit(
     }
 }
 
-fn validate_module_load(package: &WorkflowPackage, findings: &mut BTreeSet<ValidationFinding>) {
-    match crate::schema::load_workflow_contract(&package.root, &package.manifest) {
+fn validate_module_load_cancellable(
+    package: &WorkflowPackage,
+    findings: &mut BTreeSet<ValidationFinding>,
+    cancelled: &AtomicBool,
+    bun: &Path,
+) -> anyhow::Result<()> {
+    match crate::schema::load_workflow_contract_cancellable_with_bun(
+        bun,
+        &package.root,
+        &package.manifest,
+        cancelled,
+    ) {
         Ok(_) => {}
         Err(err) => {
+            ensure_not_cancelled(cancelled)?;
             findings.insert(ValidationFinding::new(
                 "load",
                 format!("workflow module failed canonical import validation: {err:#}"),
             ));
         }
     }
+    Ok(())
 }
 
 fn validate_required_layout(root: &Path, findings: &mut BTreeSet<ValidationFinding>) {

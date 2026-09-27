@@ -601,15 +601,13 @@ pub(crate) fn inspect_workflow(
     )
 }
 
-pub(crate) fn scan_workflow_sources(workflow_dir: &Path) -> anyhow::Result<Vec<SourceInspection>> {
-    run_json_operation(
-        Path::new("bun"),
-        workflow_dir,
-        RunnerOperation::Scan,
-        /*payload*/ None,
-        /*expected*/ None,
-        /*cancelled*/ None,
-    )
+pub(crate) fn inspect_workflow_cancellable_with_bun(
+    bun: &Path,
+    workflow_dir: &Path,
+    expected: &WorkflowManifest,
+    cancelled: &AtomicBool,
+) -> anyhow::Result<ModuleInspection> {
+    inspect_workflow_with_bun(bun, workflow_dir, expected, Some(cancelled))
 }
 
 pub(crate) fn scan_workflow_sources_cancellable(
@@ -617,8 +615,17 @@ pub(crate) fn scan_workflow_sources_cancellable(
     deadline: CommandDeadline,
     cancelled: &AtomicBool,
 ) -> anyhow::Result<Vec<SourceInspection>> {
+    scan_workflow_sources_cancellable_with_bun(Path::new("bun"), workflow_dir, deadline, cancelled)
+}
+
+pub(crate) fn scan_workflow_sources_cancellable_with_bun(
+    bun: &Path,
+    workflow_dir: &Path,
+    deadline: CommandDeadline,
+    cancelled: &AtomicBool,
+) -> anyhow::Result<Vec<SourceInspection>> {
     run_json_operation_until(
-        Path::new("bun"),
+        bun,
         workflow_dir,
         RunnerOperation::Scan,
         /*payload*/ None,
@@ -911,17 +918,17 @@ pub(crate) fn run_bounded_command_until(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child =
-        WorkflowChildGuard::spawn(&mut command).context("failed to start Bun workflow runner")?;
+        WorkflowChildGuard::spawn(&mut command).context("failed to start workflow subprocess")?;
     let stdout = child
         .child
         .stdout
         .take()
-        .context("Bun workflow runner stdout was not piped")?;
+        .context("workflow subprocess stdout was not piped")?;
     let stderr = child
         .child
         .stderr
         .take()
-        .context("Bun workflow runner stderr was not piped")?;
+        .context("workflow subprocess stderr was not piped")?;
     let stdout = capture_bounded(stdout, maximum_stdout_bytes);
     let stderr = capture_bounded(stderr, MAX_RUNNER_ERROR_BYTES);
     let status = loop {

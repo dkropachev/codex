@@ -147,11 +147,15 @@ fn scan_coverage_markers(root: &Path, depth: usize, scan: &mut CoverageScan) {
     }
 }
 
-pub(super) fn validate_commands(
+pub(super) fn validate_commands_cancellable(
     package: &WorkflowPackage,
     findings: &mut BTreeSet<ValidationFinding>,
-) {
+    cancelled: &AtomicBool,
+) -> anyhow::Result<()> {
     for (index, command) in package.manifest.validation.commands.iter().enumerate() {
+        if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+            anyhow::bail!("workflow validation was cancelled");
+        }
         if command.program.trim().is_empty() {
             findings.insert(ValidationFinding::new(
                 "command",
@@ -165,7 +169,7 @@ pub(super) fn validate_commands(
             process,
             Duration::from_secs(/*secs*/ 60),
             64 * 1024,
-            Some(&AtomicBool::new(false)),
+            Some(cancelled),
         ) {
             Ok((status, _, _, _)) if status.success() => {}
             Ok((status, _, _, _)) => {
@@ -182,6 +186,9 @@ pub(super) fn validate_commands(
                 ));
             }
             Err(err) => {
+                if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                    anyhow::bail!("workflow validation was cancelled");
+                }
                 let outcome = if format!("{err:#}").contains("timed out") {
                     "timed out after 60000 ms"
                 } else {
@@ -197,6 +204,7 @@ pub(super) fn validate_commands(
             }
         }
     }
+    Ok(())
 }
 
 pub(super) fn validate_gitignore(root: &Path, findings: &mut BTreeSet<ValidationFinding>) {
@@ -221,16 +229,17 @@ pub(super) fn validate_gitignore(root: &Path, findings: &mut BTreeSet<Validation
     }
 }
 
-pub(super) fn validate_git_layout(root: &Path, findings: &mut BTreeSet<ValidationFinding>) {
-    validate_git_layout_until(
-        root,
-        findings,
-        crate::runner::CommandDeadline::after(GIT_LAYOUT_TIMEOUT),
-        /*cancelled*/ None,
-    );
+pub(super) fn validate_git_layout_until(
+    root: &Path,
+    findings: &mut BTreeSet<ValidationFinding>,
+    deadline: crate::runner::CommandDeadline,
+    cancelled: Option<&AtomicBool>,
+) {
+    validate_git_layout_until_with_git(Path::new("git"), root, findings, deadline, cancelled);
 }
 
-pub(super) fn validate_git_layout_until(
+pub(super) fn validate_git_layout_until_with_git(
+    git: &Path,
     root: &Path,
     findings: &mut BTreeSet<ValidationFinding>,
     deadline: crate::runner::CommandDeadline,
@@ -239,7 +248,7 @@ pub(super) fn validate_git_layout_until(
     if !root.join(".git").is_dir() {
         return;
     }
-    let mut command = Command::new("git");
+    let mut command = Command::new(git);
     command
         .arg("-C")
         .arg(root)

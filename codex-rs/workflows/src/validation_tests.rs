@@ -32,6 +32,205 @@ fn executable_package_preflight_observes_cancellation_before_spawning_tools() {
 }
 
 #[test]
+fn workflow_validation_observes_cancellation_before_spawning_tools() {
+    let cancelled = std::sync::atomic::AtomicBool::new(true);
+
+    let error = validate_workflow_cancellable(Path::new("missing-workflow"), &cancelled)
+        .expect_err("pre-cancelled validation must stop");
+
+    assert_eq!(error.to_string(), "workflow validation was cancelled");
+}
+
+#[cfg(unix)]
+#[test]
+fn workflow_validation_propagates_cancellation_to_source_scan() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    let (_registry, root) = scaffold();
+    let fake_bun = root.join("fake-bun");
+    fs::write(
+        &fake_bun,
+        "#!/bin/sh\ntouch validation-scan-started\nsleep 60\n",
+    )
+    .expect("write fake Bun");
+    make_executable(&fake_bun);
+    let started_path = root.join("validation-scan-started");
+    let cancelled = AtomicBool::new(false);
+    let started_at = Instant::now();
+
+    let error = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let deadline = Instant::now() + Duration::from_secs(/*secs*/ 2);
+            while !started_path.exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "workflow source scan did not start"
+                );
+                std::thread::sleep(Duration::from_millis(/*millis*/ 10));
+            }
+            cancelled.store(true, Ordering::Relaxed);
+        });
+        validate_workflow_cancellable_with_bun(&root, &cancelled, &fake_bun)
+            .expect_err("workflow source scan must be cancelled")
+    });
+
+    assert_eq!(error.to_string(), "workflow validation was cancelled");
+    assert!(
+        started_at.elapsed() < Duration::from_secs(/*secs*/ 3),
+        "workflow source scan waited for its timeout instead of cancellation"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn workflow_validation_propagates_cancellation_to_module_inspection() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    let (_registry, root) = scaffold();
+    let fake_bun = root.join("fake-bun");
+    fs::write(
+        &fake_bun,
+        "#!/bin/sh\ncase \"$5\" in\n  scan) printf '%s\\n' '[]' ;;\n  inspect) touch validation-inspect-started; sleep 60 ;;\n  *) exit 2 ;;\nesac\n",
+    )
+    .expect("write fake Bun");
+    make_executable(&fake_bun);
+    let started_path = root.join("validation-inspect-started");
+    let cancelled = AtomicBool::new(false);
+    let started_at = Instant::now();
+
+    let error = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let deadline = Instant::now() + Duration::from_secs(/*secs*/ 2);
+            while !started_path.exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "workflow module inspection did not start"
+                );
+                std::thread::sleep(Duration::from_millis(/*millis*/ 10));
+            }
+            cancelled.store(true, Ordering::Relaxed);
+        });
+        validate_workflow_cancellable_with_bun(&root, &cancelled, &fake_bun)
+            .expect_err("workflow module inspection must be cancelled")
+    });
+
+    assert_eq!(error.to_string(), "workflow validation was cancelled");
+    assert!(
+        started_at.elapsed() < Duration::from_secs(/*secs*/ 3),
+        "workflow module inspection waited for its timeout instead of cancellation"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn workflow_validation_command_observes_cancellation() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    let (_registry, root) = scaffold();
+    let started_path = root.join("validation-command-started");
+    let mut package = WorkflowPackage::load(&root).expect("load package");
+    package.manifest.validation.commands = vec![crate::ValidationCommand {
+        program: "sh".to_string(),
+        args: vec![
+            "-c".to_string(),
+            "touch \"$1\"; sleep 5".to_string(),
+            "workflow-validation-test".to_string(),
+            started_path.to_string_lossy().into_owned(),
+        ],
+    }];
+    fs::write(
+        root.join("workflow.yaml"),
+        serde_yaml::to_string(&package.manifest).expect("serialize workflow manifest"),
+    )
+    .expect("write workflow manifest");
+    let fake_bun = write_fake_validation_bun(&root);
+    let cancelled = AtomicBool::new(false);
+    let started_at = Instant::now();
+
+    let error = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let deadline = Instant::now() + Duration::from_secs(/*secs*/ 2);
+            while !started_path.exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "validation command did not start"
+                );
+                std::thread::sleep(Duration::from_millis(/*millis*/ 10));
+            }
+            cancelled.store(true, Ordering::Relaxed);
+        });
+        validate_workflow_cancellable_with_bun(&root, &cancelled, &fake_bun)
+            .expect_err("validation command must be cancelled")
+    });
+
+    assert_eq!(error.to_string(), "workflow validation was cancelled");
+    assert!(
+        started_at.elapsed() < Duration::from_secs(/*secs*/ 3),
+        "validation command ran to completion instead of observing cancellation"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn workflow_validation_propagates_cancellation_to_git_layout_inspection() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    let (_registry, root) = scaffold();
+    let mut package = WorkflowPackage::load(&root).expect("load package");
+    package.manifest.validation.commands.clear();
+    fs::write(
+        root.join("workflow.yaml"),
+        serde_yaml::to_string(&package.manifest).expect("serialize workflow manifest"),
+    )
+    .expect("write workflow manifest");
+    let fake_bun = write_fake_validation_bun(&root);
+    let fake_git = root.join("fake-git");
+    fs::write(
+        &fake_git,
+        "#!/bin/sh\ntouch \"$2/validation-git-started\"\nsleep 5\n",
+    )
+    .expect("write fake Git");
+    make_executable(&fake_git);
+    let started_path = root.join("validation-git-started");
+    let cancelled = AtomicBool::new(false);
+    let started_at = Instant::now();
+
+    let error = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let deadline = Instant::now() + Duration::from_secs(/*secs*/ 2);
+            while !started_path.exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "workflow Git layout inspection did not start"
+                );
+                std::thread::sleep(Duration::from_millis(/*millis*/ 10));
+            }
+            cancelled.store(true, Ordering::Relaxed);
+        });
+        validate_workflow_cancellable_with_tools(&root, &cancelled, &fake_bun, &fake_git)
+            .expect_err("workflow Git layout inspection must be cancelled")
+    });
+
+    assert_eq!(error.to_string(), "workflow validation was cancelled");
+    assert!(
+        started_at.elapsed() < Duration::from_millis(/*millis*/ 1_500),
+        "workflow Git layout inspection waited for its timeout instead of cancellation"
+    );
+}
+
+#[test]
 fn findings_are_deterministic_for_missing_and_legacy_packages() {
     let temp = TempDir::new().expect("tempdir");
     fs::write(
@@ -144,7 +343,7 @@ fn validation_commands_treat_shell_metacharacters_as_literal_arguments() {
     }];
 
     let mut findings = BTreeSet::new();
-    super::checks::validate_commands(&package, &mut findings);
+    validate_commands_for_test(&package, &mut findings);
 
     assert!(!side_effect.exists());
     assert!(
@@ -352,7 +551,7 @@ fn tracked_artifacts_are_rejected() {
         .expect("run git add");
     assert!(status.success());
     let mut findings = BTreeSet::new();
-    super::checks::validate_git_layout(&root, &mut findings);
+    validate_git_layout_for_test(&root, &mut findings);
     assert!(
         findings
             .iter()
@@ -376,7 +575,7 @@ fn oversized_tracked_file_listing_is_rejected_deterministically() {
     assert!(status.success());
     let mut findings = BTreeSet::new();
 
-    super::checks::validate_git_layout(&root, &mut findings);
+    validate_git_layout_for_test(&root, &mut findings);
 
     assert!(findings.iter().any(|finding| {
         finding.message
@@ -397,7 +596,7 @@ fn invalid_git_layout_and_unreadable_gitignore_are_rejected() {
 
     let mut findings = BTreeSet::new();
     super::checks::validate_gitignore(&root, &mut findings);
-    super::checks::validate_git_layout(&root, &mut findings);
+    validate_git_layout_for_test(&root, &mut findings);
 
     assert!(findings.iter().any(|finding| {
         finding.code == "gitignore" && finding.message.contains("65536-byte limit")
@@ -524,4 +723,68 @@ fn scaffold() -> (TempDir, std::path::PathBuf) {
     )
     .expect("scaffold workflow");
     (registry, root)
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path)
+        .expect("read executable metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).expect("make fixture executable");
+}
+
+#[cfg(unix)]
+fn write_fake_validation_bun(root: &Path) -> std::path::PathBuf {
+    let fake_bun = root.join("fake-bun");
+    let inspection = serde_json::to_string(&crate::runner::ModuleInspection {
+        api_version: 1,
+        id: "validate".to_string(),
+        title: "Validate".to_string(),
+        callable_name: "validate".to_string(),
+        input_schema: json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": { "workingDirectory": { "type": "string" } },
+            "additionalProperties": true,
+        }),
+        output_schema: json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+        }),
+        has_complete: false,
+    })
+    .expect("serialize workflow inspection");
+    fs::write(
+        &fake_bun,
+        format!(
+            "#!/bin/sh\ncase \"$5\" in\n  scan) printf '%s\\n' '[]' ;;\n  inspect) printf '%s\\n' '{inspection}' ;;\n  *) exit 2 ;;\nesac\n"
+        ),
+    )
+    .expect("write fake Bun");
+    make_executable(&fake_bun);
+    fake_bun
+}
+
+fn validate_commands_for_test(
+    package: &WorkflowPackage,
+    findings: &mut BTreeSet<ValidationFinding>,
+) {
+    super::checks::validate_commands_cancellable(
+        package,
+        findings,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .expect("validation command must complete");
+}
+
+fn validate_git_layout_for_test(root: &Path, findings: &mut BTreeSet<ValidationFinding>) {
+    super::checks::validate_git_layout_until(
+        root,
+        findings,
+        crate::runner::CommandDeadline::after(std::time::Duration::from_secs(/*secs*/ 2)),
+        /*cancelled*/ None,
+    );
 }
