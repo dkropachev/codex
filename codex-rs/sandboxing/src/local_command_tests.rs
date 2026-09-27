@@ -208,32 +208,41 @@ fn public_atomic_preparation_wraps_windows_restricted_command() {
     let wrapper = cwd.join("codex.exe");
     let inner = cwd.join("bun.exe");
     let permissions = PermissionProfile::read_only();
-    let command = SandboxManager::new()
-        .prepare_command_for_direct_spawn_with_runtime(
-            SandboxDirectSpawnTransformRequest {
-                transform: SandboxTransformRequest {
-                    command: SandboxCommand {
-                        program: inner.as_os_str().to_owned(),
-                        args: vec!["install".to_string()],
-                        cwd: cwd_uri.clone(),
-                        env: HashMap::new(),
-                        managed_network: None,
-                        additional_permissions: None,
-                    },
-                    permissions: &permissions,
-                    sandbox: SandboxType::WindowsRestrictedToken,
-                    enforce_managed_network: false,
-                    environment_id: None,
-                    network: None,
-                    sandbox_policy_cwd: &cwd_uri,
-                    codex_linux_sandbox_exe: None,
-                    use_legacy_landlock: false,
-                    windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
-                    windows_sandbox_private_desktop: false,
-                },
-                workspace_roots: std::slice::from_ref(&cwd),
-                windows_sandbox_proxy_settings_mode: WindowsSandboxProxySettingsMode::Preserve,
+    let launch_request = || SandboxDirectSpawnTransformRequest {
+        transform: SandboxTransformRequest {
+            command: SandboxCommand {
+                program: inner.as_os_str().to_owned(),
+                args: vec!["install".to_string()],
+                cwd: cwd_uri.clone(),
+                env: HashMap::new(),
+                managed_network: None,
+                additional_permissions: None,
             },
+            permissions: &permissions,
+            sandbox: SandboxType::WindowsRestrictedToken,
+            enforce_managed_network: false,
+            environment_id: None,
+            network: None,
+            sandbox_policy_cwd: &cwd_uri,
+            codex_linux_sandbox_exe: None,
+            use_legacy_landlock: false,
+            windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+            windows_sandbox_private_desktop: false,
+        },
+        workspace_roots: std::slice::from_ref(&cwd),
+        windows_sandbox_proxy_settings_mode: WindowsSandboxProxySettingsMode::Preserve,
+    };
+    let manager = SandboxManager::new();
+    let error = manager
+        .prepare_command_for_direct_spawn(launch_request())
+        .expect_err("restricted launch without runtime must fail");
+    assert_eq!(
+        error.to_string(),
+        "Windows restricted direct spawn requires explicit trusted runtime paths"
+    );
+    let command = manager
+        .prepare_command_for_direct_spawn_with_runtime(
+            launch_request(),
             SandboxDirectSpawnRuntime {
                 codex_home: &cwd,
                 windows_sandbox_wrapper_executable: Some(&wrapper),

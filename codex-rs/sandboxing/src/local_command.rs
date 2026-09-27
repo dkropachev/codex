@@ -15,6 +15,10 @@ impl SandboxManager {
         &self,
         request: SandboxDirectSpawnTransformRequest<'_>,
     ) -> anyhow::Result<Command> {
+        #[cfg(target_os = "windows")]
+        if request.transform.sandbox == SandboxType::WindowsRestrictedToken {
+            bail!("Windows restricted direct spawn requires explicit trusted runtime paths");
+        }
         command_from_direct_spawn_request(self.transform_for_direct_spawn(request)?)
     }
 
