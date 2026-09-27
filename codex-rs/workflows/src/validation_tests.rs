@@ -44,7 +44,6 @@ fn workflow_validation_observes_cancellation_before_spawning_tools() {
 #[cfg(unix)]
 #[test]
 fn workflow_validation_propagates_cancellation_to_source_scan() {
-    use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
     use std::time::Duration;
@@ -57,13 +56,10 @@ fn workflow_validation_propagates_cancellation_to_source_scan() {
         "#!/bin/sh\ntouch validation-scan-started\nsleep 60\n",
     )
     .expect("write fake Bun");
-    let mut permissions = fs::metadata(&fake_bun)
-        .expect("read fake Bun metadata")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&fake_bun, permissions).expect("make fake Bun executable");
+    make_executable(&fake_bun);
     let started_path = root.join("validation-scan-started");
     let cancelled = AtomicBool::new(false);
+    let started_at = Instant::now();
 
     let error = std::thread::scope(|scope| {
         scope.spawn(|| {
@@ -82,12 +78,58 @@ fn workflow_validation_propagates_cancellation_to_source_scan() {
     });
 
     assert_eq!(error.to_string(), "workflow validation was cancelled");
+    assert!(
+        started_at.elapsed() < Duration::from_secs(/*secs*/ 3),
+        "workflow source scan waited for its timeout instead of cancellation"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn workflow_validation_propagates_cancellation_to_module_inspection() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    let (_registry, root) = scaffold();
+    let fake_bun = root.join("fake-bun");
+    fs::write(
+        &fake_bun,
+        "#!/bin/sh\ncase \"$5\" in\n  scan) printf '%s\\n' '[]' ;;\n  inspect) touch validation-inspect-started; sleep 60 ;;\n  *) exit 2 ;;\nesac\n",
+    )
+    .expect("write fake Bun");
+    make_executable(&fake_bun);
+    let started_path = root.join("validation-inspect-started");
+    let cancelled = AtomicBool::new(false);
+    let started_at = Instant::now();
+
+    let error = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let deadline = Instant::now() + Duration::from_secs(/*secs*/ 2);
+            while !started_path.exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "workflow module inspection did not start"
+                );
+                std::thread::sleep(Duration::from_millis(/*millis*/ 10));
+            }
+            cancelled.store(true, Ordering::Relaxed);
+        });
+        validate_workflow_cancellable_with_bun(&root, &cancelled, &fake_bun)
+            .expect_err("workflow module inspection must be cancelled")
+    });
+
+    assert_eq!(error.to_string(), "workflow validation was cancelled");
+    assert!(
+        started_at.elapsed() < Duration::from_secs(/*secs*/ 3),
+        "workflow module inspection waited for its timeout instead of cancellation"
+    );
 }
 
 #[cfg(unix)]
 #[test]
 fn workflow_validation_command_observes_cancellation() {
-    use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
     use std::time::Duration;
@@ -100,7 +142,7 @@ fn workflow_validation_command_observes_cancellation() {
         program: "sh".to_string(),
         args: vec![
             "-c".to_string(),
-            "touch \"$1\"; sleep 60".to_string(),
+            "touch \"$1\"; sleep 5".to_string(),
             "workflow-validation-test".to_string(),
             started_path.to_string_lossy().into_owned(),
         ],
@@ -132,12 +174,9 @@ fn workflow_validation_command_observes_cancellation() {
         ),
     )
     .expect("write fake Bun");
-    let mut permissions = fs::metadata(&fake_bun)
-        .expect("read fake Bun metadata")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&fake_bun, permissions).expect("make fake Bun executable");
+    make_executable(&fake_bun);
     let cancelled = AtomicBool::new(false);
+    let started_at = Instant::now();
 
     let error = std::thread::scope(|scope| {
         scope.spawn(|| {
@@ -156,6 +195,10 @@ fn workflow_validation_command_observes_cancellation() {
     });
 
     assert_eq!(error.to_string(), "workflow validation was cancelled");
+    assert!(
+        started_at.elapsed() < Duration::from_secs(/*secs*/ 3),
+        "validation command ran to completion instead of observing cancellation"
+    );
 }
 
 #[test]
@@ -651,4 +694,15 @@ fn scaffold() -> (TempDir, std::path::PathBuf) {
     )
     .expect("scaffold workflow");
     (registry, root)
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path)
+        .expect("read executable metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).expect("make fixture executable");
 }
