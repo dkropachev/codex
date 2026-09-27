@@ -8,6 +8,7 @@ pub mod policy_transforms;
 #[cfg(target_os = "macos")]
 pub mod seatbelt;
 mod spawn;
+mod unrestricted_command;
 mod violation;
 mod windows;
 
@@ -33,6 +34,8 @@ pub use manager::with_managed_mitm_ca_readable_root;
 pub use spawn::SpawnRequest;
 pub use spawn::WindowsSandboxSpawnRequest;
 pub use spawn::spawn_process;
+pub use unrestricted_command::LocalProcessCommand;
+pub use unrestricted_command::prepare_unrestricted_command;
 pub use violation::FileSystemSandboxViolation;
 pub use violation::FileSystemSandboxViolationReason;
 pub use violation::NetworkSandboxViolation;
