@@ -2,6 +2,7 @@
 mod bwrap;
 mod denial;
 pub mod landlock;
+mod local_command;
 mod manager;
 pub mod policy_transforms;
 #[cfg(target_os = "macos")]
