@@ -157,6 +157,54 @@ fn selection_rejects_unrepresentable_workspace_root_materialization() {
     );
 }
 
+#[test]
+fn selection_rejects_workspace_root_glob_metacharacters() {
+    let root = AbsolutePathBuf::current_dir().expect("current directory");
+    let permissions = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+            FileSystemPath::GlobPattern {
+                pattern: project_roots_glob_pattern(std::path::Path::new("**/*.env")),
+            },
+            FileSystemAccessMode::Deny,
+        )]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let mut metacharacters = vec!["workspace*", "workspace?", "workspace[1]", "workspace{1}"];
+    if cfg!(unix) {
+        metacharacters.push("workspace\\1");
+    }
+    for component in metacharacters {
+        assert_eq!(
+            select_local_sandbox_for_platform(
+                &permissions,
+                &[root.join(component)],
+                LocalSandboxLaunchPolicy::FollowPermissionProfile,
+                Some(SandboxType::LinuxSeccomp),
+            ),
+            LocalSandboxSelection::Unavailable,
+            "workspace root component {component:?} must not alter the deny glob"
+        );
+    }
+
+    let workspace_write = PermissionProfile::workspace_write();
+    let metacharacter_root = root.join("workspace[1]");
+    let expected = workspace_write
+        .clone()
+        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&metacharacter_root));
+    assert_eq!(
+        select_local_sandbox_for_platform(
+            &workspace_write,
+            std::slice::from_ref(&metacharacter_root),
+            LocalSandboxLaunchPolicy::FollowPermissionProfile,
+            Some(SandboxType::LinuxSeccomp),
+        ),
+        LocalSandboxSelection::Selected {
+            sandbox: SandboxType::LinuxSeccomp,
+            permissions: expected,
+        }
+    );
+}
+
 #[cfg(target_os = "windows")]
 #[test]
 fn public_selection_observes_disabled_windows_sandbox() {
