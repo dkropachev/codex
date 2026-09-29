@@ -1331,7 +1331,7 @@ async fn remote_manual_compact_chatgpt_auth_reuses_service_tier_and_prompt_cache
     Ok(())
 }
 
-#[test_case(None; "default_preserves_images")]
+#[test_case(None; "default_trims_images")]
 #[test_case(Some(false); "disabled_preserves_images")]
 #[test_case(Some(true); "enabled_trims_images")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1443,7 +1443,7 @@ async fn remote_compact_v2_charges_retained_images_to_token_budget(
             follow_up.inputs_of_type("compaction")[0]["encrypted_content"],
             "IMAGE_BUDGET_SUMMARY"
         );
-        let mut expected_images = if image_budget_enabled == Some(true) {
+        let mut expected_images = if image_budget_enabled.unwrap_or(true) {
             // A retained ResponseItem is capped at 10,000 estimated tokens, so
             // the original seven-image message keeps its newest five images.
             prepared_images[2..].to_vec()
@@ -1476,7 +1476,7 @@ async fn remote_compact_v2_charges_retained_images_to_token_budget(
             follow_up
                 .message_input_texts("developer")
                 .contains(&initial_resize_notice),
-            image_budget_enabled != Some(true),
+            !image_budget_enabled.unwrap_or(true),
             "the original resize notice should remain only when all of its images remain"
         );
         assert!(

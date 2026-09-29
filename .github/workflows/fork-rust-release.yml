@@ -115,6 +115,10 @@ jobs:
           git fetch --no-tags https://github.com/openai/codex.git \
             "refs/tags/${tag}:${upstream_ref}"
           upstream_commit="$(git rev-parse "${upstream_ref}^{commit}")"
+          git merge-base --is-ancestor "$upstream_commit" "$tag_commit" || {
+            echo "$tag ($tag_commit) does not contain upstream release $upstream_commit" >&2
+            exit 1
+          }
           if [[ "$tag_commit" == "$upstream_commit" ]]; then
             echo "$tag resolves to the untouched upstream commit $upstream_commit" >&2
             exit 1
