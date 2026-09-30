@@ -253,23 +253,20 @@ fn bounded_command_reports_independent_stdout_and_stderr_overflow() {
     assert!(output.stderr_oversized);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
-fn bounded_command_rejects_pipe_held_by_escaped_descendant() {
-    let started = Instant::now();
-    let mut command = std::process::Command::new("sh");
-    command.args(["-c", "setsid sh -c 'sleep 1' &"]);
+fn bounded_capture_can_stop_an_open_unix_stream() {
+    use std::os::unix::net::UnixStream;
 
-    let error = run_bounded_command_until_with_limits(
-        command,
-        CommandDeadline::after(Duration::from_secs(/*secs*/ 2)),
-        CommandOutputLimits {
-            stdout_bytes: 16,
-            stderr_bytes: 16,
-        },
-        /*cancelled*/ None,
-    )
-    .expect_err("escaped descendant must not cause silent partial capture");
+    let (stdout, _stdout_writer) = UnixStream::pair().expect("stdout stream pair");
+    let (stderr, _stderr_writer) = UnixStream::pair().expect("stderr stream pair");
+    let stdout = capture_bounded(stdout, 16);
+    let stderr = capture_bounded(stderr, 16);
+    let started = Instant::now();
+
+    let error = finish_captures(stdout, stderr, Duration::from_millis(/*millis*/ 50))
+        .err()
+        .expect("open pipes must not leak capture threads");
 
     assert!(started.elapsed() < Duration::from_secs(1));
     assert!(error.to_string().contains("remained open"));
