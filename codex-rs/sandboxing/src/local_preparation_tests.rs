@@ -211,21 +211,28 @@ fn sandbox_preflight_rejects_non_unicode_paths() {
     preflight.runtime.linux_sandbox_executable = Some(&helper);
     assert_unrepresentable(preflight, "permission path");
 
-    let mut preflight = request(
-        &root,
-        selected(
-            sandbox,
-            permissions(
-                FileSystemPath::Special {
-                    value: FileSystemSpecialPath::project_roots(Some("invalid\0subpath".into())),
-                },
-                FileSystemAccessMode::Read,
+    for (access, expected) in [
+        (FileSystemAccessMode::Read, "resolved readable root"),
+        (FileSystemAccessMode::Deny, "resolved unreadable root"),
+    ] {
+        let mut preflight = request(
+            &root,
+            selected(
+                sandbox,
+                permissions(
+                    FileSystemPath::Special {
+                        value: FileSystemSpecialPath::project_roots(Some(
+                            "invalid\0subpath".into(),
+                        )),
+                    },
+                    access,
+                ),
             ),
-        ),
-        LocalSandboxLaunchPolicy::Required,
-    );
-    preflight.runtime.linux_sandbox_executable = Some(&helper);
-    assert_unrepresentable(preflight, "resolved readable root");
+            LocalSandboxLaunchPolicy::Required,
+        );
+        preflight.runtime.linux_sandbox_executable = Some(&helper);
+        assert_unrepresentable(preflight, expected);
+    }
 
     let mut preflight = request(
         &root,
