@@ -269,7 +269,10 @@ pub(in crate::managed) fn managed_bun_install_command_plan(
 ) -> anyhow::Result<ManagedBunCommandPlan> {
     reject_untrusted_candidate_bun_configuration(candidate)?;
     if paths_overlap(candidate, &environment.cache_dir)?
-        || paths_overlap(candidate, &absolute_from_path(environment.operation.path())?)?
+        || paths_overlap(
+            candidate,
+            &absolute_from_path(environment.operation.path())?,
+        )?
     {
         bail!("managed Bun environment and workflow candidate must not overlap");
     }
@@ -296,8 +299,12 @@ pub(in crate::managed) fn managed_bun_install_command_plan(
 }
 
 fn paths_overlap(left: &AbsolutePathBuf, right: &AbsolutePathBuf) -> anyhow::Result<bool> {
-    let left = fs::canonicalize(left.as_path())
-        .with_context(|| format!("failed to resolve managed path {}", left.as_path().display()))?;
+    let left = fs::canonicalize(left.as_path()).with_context(|| {
+        format!(
+            "failed to resolve managed path {}",
+            left.as_path().display()
+        )
+    })?;
     let right = fs::canonicalize(right.as_path()).with_context(|| {
         format!(
             "failed to resolve managed path {}",

@@ -117,8 +117,7 @@ fn rejects_overlapping_management_and_candidate_paths() {
         (root.join("candidate/tool/bun"), root.join("candidate")),
     ] {
         fs::create_dir_all(candidate.as_path()).expect("create candidate");
-        fs::create_dir_all(bun.as_path().parent().expect("Bun parent"))
-            .expect("create Bun parent");
+        fs::create_dir_all(bun.as_path().parent().expect("Bun parent")).expect("create Bun parent");
         fs::write(bun.as_path(), "bun").expect("write Bun executable");
         assert!(
             managed_bun_install_command_plan(
