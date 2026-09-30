@@ -9,8 +9,6 @@ use std::process::Child;
 use std::process::Command;
 use std::process::ExitStatus;
 use std::process::Stdio;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
@@ -949,21 +947,24 @@ pub(crate) fn run_bounded_command_until_with_limits(
     let stderr = capture_bounded(stderr, limits.stderr_bytes);
     let status = loop {
         if let Err(err) = deadline.check(cancelled) {
-            child.terminate();
-            return Err(err);
+            break Err(err);
         }
-        if let Some(status) = child
+        match child
             .try_wait()
-            .context("failed to wait for Bun workflow runner")?
+            .context("failed to wait for Bun workflow runner")
         {
-            break status;
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) => {}
+            Err(err) => break Err(err),
         }
         thread::sleep(Duration::from_millis(10));
     };
-    wait_for_capture(&stdout);
-    wait_for_capture(&stderr);
-    let stdout = capture_snapshot(&stdout);
-    let stderr = capture_snapshot(&stderr);
+    if status.is_err() {
+        child.terminate();
+    }
+    let captures = finish_captures(stdout, stderr);
+    let status = status?;
+    let (stdout, stderr) = captures?;
     Ok(BoundedCommandOutput {
         status,
         stdout: stdout.bytes,
@@ -1000,56 +1001,43 @@ pub(crate) fn run_bounded_command_until(
 struct BoundedCapture {
     bytes: Vec<u8>,
     oversized: bool,
-    done: bool,
 }
 
 fn capture_bounded(
     mut reader: impl Read + Send + 'static,
     maximum_bytes: usize,
-) -> Arc<Mutex<BoundedCapture>> {
-    let capture = Arc::new(Mutex::new(BoundedCapture::default()));
-    let task_capture = Arc::clone(&capture);
+) -> thread::JoinHandle<std::io::Result<BoundedCapture>> {
     thread::spawn(move || {
+        let mut capture = BoundedCapture::default();
         let mut buffer = [0_u8; 8 * 1024];
-        while let Ok(read) = reader.read(&mut buffer) {
+        loop {
+            let read = reader.read(&mut buffer)?;
             if read == 0 {
                 break;
             }
-            let Ok(mut capture) = task_capture.lock() else {
-                return;
-            };
             let remaining = maximum_bytes.saturating_sub(capture.bytes.len());
             capture
                 .bytes
                 .extend_from_slice(&buffer[..read.min(remaining)]);
             capture.oversized |= read > remaining;
         }
-        if let Ok(mut capture) = task_capture.lock() {
-            capture.done = true;
-        }
-    });
-    capture
+        Ok(capture)
+    })
 }
 
-fn wait_for_capture(capture: &Arc<Mutex<BoundedCapture>>) {
-    let deadline = Instant::now() + Duration::from_millis(250);
-    while Instant::now() < deadline {
-        if capture.lock().map(|capture| capture.done).unwrap_or(true) {
-            return;
-        }
-        thread::sleep(Duration::from_millis(5));
-    }
-}
-
-fn capture_snapshot(capture: &Arc<Mutex<BoundedCapture>>) -> BoundedCapture {
-    capture
-        .lock()
-        .map(|capture| BoundedCapture {
-            bytes: capture.bytes.clone(),
-            oversized: capture.oversized,
-            done: capture.done,
-        })
-        .unwrap_or_default()
+fn finish_captures(
+    stdout: thread::JoinHandle<std::io::Result<BoundedCapture>>,
+    stderr: thread::JoinHandle<std::io::Result<BoundedCapture>>,
+) -> anyhow::Result<(BoundedCapture, BoundedCapture)> {
+    let stdout = stdout
+        .join()
+        .map_err(|_| anyhow::anyhow!("workflow stdout capture thread panicked"))?
+        .context("failed to read workflow subprocess stdout");
+    let stderr = stderr
+        .join()
+        .map_err(|_| anyhow::anyhow!("workflow stderr capture thread panicked"))?
+        .context("failed to read workflow subprocess stderr");
+    Ok((stdout?, stderr?))
 }
 
 fn validate_inspection(
