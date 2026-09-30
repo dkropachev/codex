@@ -64,8 +64,8 @@ application path.
 - [codex-rs/core/src/tasks/workflow_command.rs](../core/src/tasks/workflow_command.rs)
 - [codex-rs/core/src/tasks/workflow_command/runtime.rs](../core/src/tasks/workflow_command/runtime.rs)
 - [codex-rs/core/src/agent/role.rs](../core/src/agent/role.rs)
-- [codex-rs/core/src/agent/builtins/workflow-coder.toml](../core/src/agent/builtins/workflow-coder.toml)
-- [codex-rs/core/src/agent/builtins/workflow-code-reviewer.toml](../core/src/agent/builtins/workflow-code-reviewer.toml)
+- [codex-rs/core/assets/agent/builtins/workflow-coder.toml](../core/assets/agent/builtins/workflow-coder.toml)
+- [codex-rs/core/assets/agent/builtins/workflow-code-reviewer.toml](../core/assets/agent/builtins/workflow-code-reviewer.toml)
 
 ## Subfeatures
 
@@ -92,11 +92,11 @@ application path.
 #### Entry Points
 
 - [codex-rs/core/src/agent/role.rs](../core/src/agent/role.rs)
-- [codex-rs/core/src/agent/builtins/workflow-architect.toml](../core/src/agent/builtins/workflow-architect.toml)
-- [codex-rs/core/src/agent/builtins/workflow-arch-reviewer.toml](../core/src/agent/builtins/workflow-arch-reviewer.toml)
-- [codex-rs/core/src/agent/builtins/workflow-coder.toml](../core/src/agent/builtins/workflow-coder.toml)
-- [codex-rs/core/src/agent/builtins/workflow-code-reviewer.toml](../core/src/agent/builtins/workflow-code-reviewer.toml)
-- [codex-rs/core/src/agent/builtins/workflow-resilience-reviewer.toml](../core/src/agent/builtins/workflow-resilience-reviewer.toml)
+- [codex-rs/core/assets/agent/builtins/workflow-architect.toml](../core/assets/agent/builtins/workflow-architect.toml)
+- [codex-rs/core/assets/agent/builtins/workflow-arch-reviewer.toml](../core/assets/agent/builtins/workflow-arch-reviewer.toml)
+- [codex-rs/core/assets/agent/builtins/workflow-coder.toml](../core/assets/agent/builtins/workflow-coder.toml)
+- [codex-rs/core/assets/agent/builtins/workflow-code-reviewer.toml](../core/assets/agent/builtins/workflow-code-reviewer.toml)
+- [codex-rs/core/assets/agent/builtins/workflow-resilience-reviewer.toml](../core/assets/agent/builtins/workflow-resilience-reviewer.toml)
 
 #### Invariants
 
