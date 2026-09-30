@@ -6,6 +6,10 @@ use std::path::PathBuf;
 use anyhow::Context;
 use anyhow::bail;
 
+mod lockfile;
+
+pub(in crate::managed) use lockfile::ManagedBunLockfile;
+
 const DEPENDENCY_SECTIONS: [&str; 4] = [
     "dependencies",
     "devDependencies",
@@ -15,13 +19,25 @@ const DEPENDENCY_SECTIONS: [&str; 4] = [
 const MAX_LOCAL_PACKAGES: usize = 128;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[allow(dead_code, reason = "used by managed dependency installation")]
 pub(in crate::managed) struct ValidatedDependencySources {
     pub(in crate::managed) has_dependencies: bool,
     pub(in crate::managed) local_packages: Vec<PathBuf>,
 }
 
-#[allow(dead_code, reason = "used by managed dependency installation")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::managed) struct ValidatedManagedDependencies {
+    pub(in crate::managed) sources: ValidatedDependencySources,
+    pub(in crate::managed) lockfile: ManagedBunLockfile,
+}
+
+pub(in crate::managed) fn validate_managed_dependencies(
+    package: &crate::WorkflowPackage,
+) -> anyhow::Result<ValidatedManagedDependencies> {
+    let sources = validate_managed_dependency_sources(package)?;
+    let lockfile = lockfile::validate(package, &sources)?;
+    Ok(ValidatedManagedDependencies { sources, lockfile })
+}
+
 pub(in crate::managed) fn validate_managed_dependency_sources(
     package: &crate::WorkflowPackage,
 ) -> anyhow::Result<ValidatedDependencySources> {
@@ -82,9 +98,13 @@ pub(in crate::managed) fn validate_managed_dependency_sources(
                 pending.push((local, value));
             }
         }
+        let mut override_field = None;
         for section in ["overrides", "resolutions"] {
             if let Some(value) = object.get(section) {
-                validate_override_tree(section, value)?;
+                let values = validate_override_map(section, value)?;
+                if !values.is_empty() && override_field.replace(section).is_some() {
+                    bail!("managed workflow may not combine `overrides` and `resolutions`");
+                }
             }
         }
     }
@@ -101,7 +121,13 @@ pub(in crate::managed) fn validate_managed_dependency_sources(
 fn reject_unsupported_package_features(
     object: &serde_json::Map<String, serde_json::Value>,
 ) -> anyhow::Result<()> {
-    for field in ["workspaces", "catalog", "catalogs", "patchedDependencies"] {
+    for field in [
+        "workspaces",
+        "catalog",
+        "catalogs",
+        "patchedDependencies",
+        "trustedDependencies",
+    ] {
         if object.get(field).is_some_and(|value| !value.is_null()) {
             bail!("managed workflow package field `{field}` is unsupported");
         }
@@ -109,17 +135,23 @@ fn reject_unsupported_package_features(
     Ok(())
 }
 
-fn validate_override_tree(name: &str, value: &serde_json::Value) -> anyhow::Result<()> {
-    match value {
-        serde_json::Value::String(specifier) => validate_registry_specifier(name, specifier),
-        serde_json::Value::Object(values) => {
-            for (name, value) in values {
-                validate_override_tree(name, value)?;
-            }
-            Ok(())
+fn validate_override_map<'a>(
+    field: &str,
+    value: &'a serde_json::Value,
+) -> anyhow::Result<&'a serde_json::Map<String, serde_json::Value>> {
+    let values = value
+        .as_object()
+        .with_context(|| format!("managed workflow `{field}` must be an object"))?;
+    for (name, value) in values {
+        if !valid_package_name(name) {
+            bail!("managed workflow override package `{name}` is invalid");
         }
-        _ => bail!("managed workflow override `{name}` must contain registry specifiers"),
+        let specifier = value.as_str().with_context(|| {
+            format!("managed workflow override `{name}` must use a registry specifier")
+        })?;
+        validate_registry_specifier(name, specifier)?;
     }
+    Ok(values)
 }
 
 fn validate_specifier(base: &Path, name: &str, specifier: &str) -> anyhow::Result<Option<PathBuf>> {

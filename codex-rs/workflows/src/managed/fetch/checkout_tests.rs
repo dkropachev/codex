@@ -99,6 +99,16 @@ fn checks_out_detached_tag_and_snapshot_packages() {
         .expect("stage release");
 
         assert_eq!(staged.release(), &expected);
+        assert_eq!(
+            staged.dependencies(),
+            &crate::managed::dependencies::ValidatedManagedDependencies {
+                sources: crate::managed::dependencies::ValidatedDependencySources {
+                    has_dependencies: false,
+                    local_packages: Vec::new(),
+                },
+                lockfile: crate::managed::dependencies::ManagedBunLockfile::NotRequired,
+            }
+        );
         assert!(staged.root().join("workflow.yaml").is_file());
         assert!(staged.root().join("state/.gitkeep").is_file());
         assert_eq!(
@@ -111,6 +121,65 @@ fn checks_out_detached_tag_and_snapshot_packages() {
                 .success()
         );
     }
+}
+
+#[test]
+fn validates_dependency_lock_policy_before_returning_a_staged_release() {
+    let repository = Repository::new(/*version*/ None);
+    fs::write(
+        repository.root().join("package.json"),
+        r#"{"name":"@test/workflow","private":true,"type":"module","dependencies":{"dep":"1.2.3"}}"#,
+    )
+    .expect("write dependency manifest");
+    fs::write(
+        repository.root().join("bun.lock"),
+        r#"{
+          "lockfileVersion": 1,
+          "configVersion": 1,
+          "workspaces": {"": {"dependencies": {"dep": "1.2.3"}}},
+          "packages": {"dep": ["dep@1.2.3", "", {}, ""]}
+        }"#,
+    )
+    .expect("write Bun lock");
+    git(repository.root(), ["add", "package.json", "bun.lock"]);
+    git(repository.root(), ["commit", "-qm", "add dependencies"]);
+
+    let (source, release) = repository.resolve(/*tag*/ None);
+    let staging = tempfile::tempdir().expect("temporary staging root");
+    let staged = super::super::stage_resolved_workflow_release_cancellable(
+        &absolute(staging.path()),
+        &source,
+        &release,
+        &AtomicBool::new(false),
+    )
+    .expect("stage dependency package");
+    assert_eq!(
+        staged.dependencies(),
+        &crate::managed::dependencies::ValidatedManagedDependencies {
+            sources: crate::managed::dependencies::ValidatedDependencySources {
+                has_dependencies: true,
+                local_packages: Vec::new(),
+            },
+            lockfile: crate::managed::dependencies::ManagedBunLockfile::TextSourcesValidated,
+        }
+    );
+
+    git(repository.root(), ["rm", "bun.lock"]);
+    git(repository.root(), ["commit", "-qm", "remove lock"]);
+    let (source, release) = repository.resolve(/*tag*/ None);
+    let staging = tempfile::tempdir().expect("temporary staging root");
+    let error = super::super::stage_resolved_workflow_release_cancellable(
+        &absolute(staging.path()),
+        &source,
+        &release,
+        &AtomicBool::new(false),
+    )
+    .err()
+    .expect("dependency package without lock must fail");
+    assert!(
+        format!("{error:#}").contains("dependencies require bun.lock or bun.lockb"),
+        "unexpected error: {error:#}"
+    );
 }
 
 #[test]
