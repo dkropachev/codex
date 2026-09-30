@@ -2,12 +2,14 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use codex_features::Feature;
 use codex_model_provider::create_model_provider;
 use tracing::warn;
 
 use super::TurnInput;
 use super::session::Session;
 use super::session::SessionConfiguration;
+use super::step_settings::ResolvedStepSettings;
 use super::turn_context::TurnContext;
 use crate::config::Config;
 use crate::model_router::ModelRouterPromptEstimate;
@@ -33,7 +35,7 @@ impl Session {
             .filter_map(|item| match item {
                 TurnInput::UserInput { content, .. } => Some(content.as_slice()),
                 TurnInput::InterAgentCommunication(_) => None,
-                TurnInput::ResponseItem(_) => None,
+                TurnInput::ResponseItem(_) | TurnInput::FunctionCallOutput(_) => None,
             })
             .flatten()
             .filter_map(|item| serde_json::to_vec(item).ok())
@@ -52,7 +54,7 @@ impl Session {
         input: &[TurnInput],
     ) -> Arc<TurnContext> {
         let prompt_estimate = self.model_router_prompt_estimate_for_turn(input).await;
-        let mode = turn_context.mode;
+        let mode = turn_context.mode();
         self.route_turn_context_for_model_router(
             turn_context,
             ModelRouterSource::Chat(mode),
@@ -150,23 +152,32 @@ impl Session {
             )
         };
         session_configuration.provider = Arc::clone(&provider);
-        let model = per_turn_config
-            .model
-            .clone()
-            .unwrap_or_else(|| session_configuration.collaboration_mode.model().to_string());
-        session_configuration.collaboration_mode =
-            session_configuration.collaboration_mode.with_updates(
-                Some(model.clone()),
-                Some(per_turn_config.model_reasoning_effort.clone()),
-                /*developer_instructions*/ None,
-            );
-        session_configuration.service_tier = per_turn_config.service_tier.clone();
+        let model = per_turn_config.model.clone().unwrap_or_else(|| {
+            session_configuration
+                .step_settings
+                .collaboration_mode
+                .model()
+                .to_string()
+        });
+        let step_settings = Arc::make_mut(&mut session_configuration.step_settings);
+        step_settings.collaboration_mode = step_settings.collaboration_mode.with_updates(
+            Some(model.clone()),
+            Some(per_turn_config.model_reasoning_effort.clone()),
+            /*developer_instructions*/ None,
+        );
+        step_settings.service_tier = per_turn_config.service_tier.clone();
 
-        let model_info = self
-            .services
-            .models_manager
-            .get_model_info(model.as_str(), &per_turn_config.to_models_manager_config())
-            .await;
+        let model_info = Arc::new(
+            self.services
+                .models_manager
+                .get_model_info(model.as_str(), &per_turn_config.to_models_manager_config())
+                .await,
+        );
+        let step_settings = Arc::new(ResolvedStepSettings::new(
+            Arc::clone(&session_configuration.step_settings),
+            model_info,
+            self.features.enabled(Feature::FastMode),
+        ));
         let plugin_outcome = self
             .services
             .plugins_manager
@@ -200,7 +211,7 @@ impl Session {
             self.services.shell_zsh_path.as_ref(),
             self.services.main_execve_wrapper_exe.as_ref(),
             per_turn_config,
-            model_info,
+            step_settings,
             &self.services.models_manager,
             previous.network.clone(),
             previous.environments.clone(),

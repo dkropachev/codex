@@ -47,7 +47,7 @@ impl SessionTask for RegularTask {
         input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
-        let previous_model = ctx.model_info.slug.clone();
+        let previous_model = ctx.model_info().slug.clone();
         let previous_provider_id = ctx.config.model_provider_id.clone();
         let previous_account_pool = config_account_pool_default(&ctx.config);
         let previous_service_tier = ctx.config.service_tier.clone();
@@ -64,7 +64,7 @@ impl SessionTask for RegularTask {
             ctx
         };
         let current_account_pool = config_account_pool_default(&ctx.config);
-        let model_router_route_changed = ctx.model_info.slug != previous_model
+        let model_router_route_changed = ctx.model_info().slug != previous_model
             || ctx.config.model_provider_id != previous_provider_id
             || current_account_pool != previous_account_pool
             || ctx.config.service_tier != previous_service_tier
@@ -78,11 +78,11 @@ impl SessionTask for RegularTask {
                 trace_id: ctx.trace_id.clone(),
                 started_at: ctx.turn_timing_state.started_at_unix_secs().await,
                 model_context_window: ctx.model_context_window(),
-                collaboration_mode_kind: ctx.mode,
+                collaboration_mode_kind: ctx.mode(),
             });
             sess.send_event(ctx.as_ref(), event).await;
             if model_router_route_changed {
-                let current_model = ctx.model_info.slug.clone();
+                let current_model = ctx.model_info().slug.clone();
                 if current_model != previous_model {
                     sess.send_event(
                         ctx.as_ref(),
@@ -176,6 +176,11 @@ impl SessionTask for RegularTask {
             )
             .instrument(run_turn_span.clone())
             .await?;
+            // Terminal errors are already reported. Let task completion preserve pending
+            // input instead of restarting the failed turn for that same input.
+            if ctx.terminal_error.lock().await.is_some() {
+                return Ok(last_agent_message);
+            }
             if !sess.input_queue.has_pending_input(&sess.active_turn).await {
                 return Ok(last_agent_message);
             }

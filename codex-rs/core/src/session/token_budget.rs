@@ -1,11 +1,12 @@
 use super::session::Session;
-use super::turn_context::TurnContext;
+use super::step_context::StepContext;
 use crate::config::Config;
 use crate::config::TokenBudgetConfig;
 use crate::context::ContextualUserFragment;
 use codex_features::Feature;
 use codex_protocol::openai_models::ModelInfo;
 
+/// Detects explicit preferences before model defaults are applied to the turn config.
 pub(super) fn has_explicit_settings(config: &Config) -> bool {
     config
         .config_layer_stack
@@ -29,9 +30,14 @@ pub(super) fn has_explicit_settings(config: &Config) -> bool {
         })
 }
 
-pub(crate) fn apply_model_defaults(config: &mut Config, model_info: &ModelInfo) {
-    if !config.features.enabled(Feature::TokenBudget) || has_explicit_settings(config) {
-        return;
+/// Resolves user-configured token-budget preferences against the current model's defaults.
+pub(super) fn resolve_token_budget(
+    configured_token_budget: Option<&TokenBudgetConfig>,
+    use_model_defaults: bool,
+    model_info: &ModelInfo,
+) -> Option<TokenBudgetConfig> {
+    if !use_model_defaults {
+        return configured_token_budget.cloned();
     }
 
     let Some(model_defaults) = model_info
@@ -39,18 +45,14 @@ pub(crate) fn apply_model_defaults(config: &mut Config, model_info: &ModelInfo) 
         .as_ref()
         .and_then(|messages| messages.token_budget.as_ref())
     else {
-        return;
+        return configured_token_budget.cloned();
     };
 
     let token_budget = TokenBudgetConfig {
-        mode: config
-            .token_budget
-            .as_ref()
+        mode: configured_token_budget
             .map(|token_budget| token_budget.mode)
             .unwrap_or_default(),
-        use_history_notes_extension: config
-            .token_budget
-            .as_ref()
+        use_history_notes_extension: configured_token_budget
             .is_some_and(|token_budget| token_budget.use_history_notes_extension),
         reminder_threshold_tokens: Some(model_defaults.reminder_threshold_tokens),
         reminder_message_template: model_defaults.reminder_message_template.clone(),
@@ -67,18 +69,19 @@ pub(crate) fn apply_model_defaults(config: &mut Config, model_info: &ModelInfo) 
             %error,
             "ignoring invalid model-owned token-budget defaults"
         );
-        return;
+        return configured_token_budget.cloned();
     }
 
-    config.token_budget = Some(token_budget);
+    Some(token_budget)
 }
 
 pub(super) async fn maybe_record(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     base_window_tokens_remaining: Option<i64>,
     allow_auto_compact_fallback: bool,
 ) {
+    let turn_context = step_context.turn.as_ref();
     if !turn_context.config.features.enabled(Feature::TokenBudget) {
         return;
     }
@@ -86,7 +89,7 @@ pub(super) async fn maybe_record(
         return;
     };
 
-    let Some(config) = turn_context.config.token_budget.as_ref() else {
+    let Some(config) = step_context.token_budget.as_ref() else {
         return;
     };
 

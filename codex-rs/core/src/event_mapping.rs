@@ -44,6 +44,7 @@ const CONTEXTUAL_DEVELOPER_PREFIXES: &[&str] = &[
     "<model_switch>",
     CYBER_POLICY_AUTO_RECOVERY_OPEN_TAG,
     "<managed_developer_instructions>",
+    "<persistent_mode>",
     APPS_INSTRUCTIONS_OPEN_TAG,
     COLLABORATION_MODE_OPEN_TAG,
     "<multi_agent_role>",
