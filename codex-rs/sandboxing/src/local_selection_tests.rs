@@ -5,6 +5,7 @@ use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::permissions::project_roots_glob_pattern;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -68,6 +69,52 @@ fn selection_matrix_never_falls_back_from_required_or_restricted() {
             /*platform_sandbox*/ None,
         ),
         LocalSandboxSelection::Unavailable
+    );
+}
+
+#[test]
+fn selection_rejects_required_linux_sandbox_that_would_apply_no_restrictions() {
+    let root = AbsolutePathBuf::current_dir().expect("current directory");
+    for permissions in [
+        PermissionProfile::Disabled,
+        PermissionProfile::External {
+            network: NetworkSandboxPolicy::Enabled,
+        },
+        PermissionProfile::from_runtime_permissions(
+            &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Write,
+            )]),
+            NetworkSandboxPolicy::Enabled,
+        ),
+    ] {
+        assert_eq!(
+            select_local_sandbox_for_platform(
+                &permissions,
+                std::slice::from_ref(&root),
+                LocalSandboxLaunchPolicy::Required,
+                Some(SandboxType::LinuxSeccomp),
+            ),
+            LocalSandboxSelection::Unavailable
+        );
+    }
+
+    let network_restricted = PermissionProfile::External {
+        network: NetworkSandboxPolicy::Restricted,
+    };
+    assert_eq!(
+        select_local_sandbox_for_platform(
+            &network_restricted,
+            std::slice::from_ref(&root),
+            LocalSandboxLaunchPolicy::Required,
+            Some(SandboxType::LinuxSeccomp),
+        ),
+        LocalSandboxSelection::Selected {
+            sandbox: SandboxType::LinuxSeccomp,
+            permissions: network_restricted,
+        }
     );
 }
 

@@ -147,6 +147,35 @@ fn linux_preparation_validates_inputs_and_preserves_selected_profile() {
     );
 
     let helper = root.join("codex-linux-sandbox");
+    for (permissions, policy, expected) in [
+        (
+            PermissionProfile::Disabled,
+            LocalSandboxLaunchPolicy::Required,
+            LocalSandboxUnavailableReason::PlatformPreparation,
+        ),
+        (
+            PermissionProfile::Disabled,
+            LocalSandboxLaunchPolicy::FollowPermissionProfile,
+            LocalSandboxUnavailableReason::SelectionUnavailable,
+        ),
+        (
+            PermissionProfile::External {
+                network: NetworkSandboxPolicy::Enabled,
+            },
+            LocalSandboxLaunchPolicy::Required,
+            LocalSandboxUnavailableReason::PlatformPreparation,
+        ),
+    ] {
+        let mut no_op = request(
+            &root,
+            selected(SandboxType::LinuxSeccomp, permissions),
+            policy,
+        );
+        no_op.runtime.linux_sandbox_executable = Some(&helper);
+        let outcome = prepare_local_sandbox_command(no_op).expect("reject no-op Linux sandbox");
+        assert_eq!(unavailable(outcome), expected);
+    }
+
     let materialized_permissions = PermissionProfile::workspace_write()
         .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&root));
     let mut valid = request(
@@ -210,19 +239,46 @@ fn macos_preparation_wraps_commands_and_classifies_backend_failures() {
 
     let directory = tempfile::tempdir().expect("temporary directory");
     let root = AbsolutePathBuf::from_absolute_path(directory.path()).expect("absolute root");
-    let LocalSandboxPreparation::Prepared(prepared) = prepare_local_sandbox_command(request(
+    let mut success = request(
         &root,
         selected(SandboxType::MacosSeatbelt, PermissionProfile::read_only()),
         LocalSandboxLaunchPolicy::Required,
-    ))
-    .expect("prepare macOS sandbox command") else {
+    );
+    success
+        .command
+        .env
+        .insert("SAFE_ENV".into(), "safe-value".into());
+    let LocalSandboxPreparation::Prepared(prepared) =
+        prepare_local_sandbox_command(success).expect("prepare macOS sandbox command")
+    else {
         panic!("expected prepared macOS sandbox command");
     };
     assert_eq!(prepared.sandbox(), SandboxType::MacosSeatbelt);
+    let command = prepared.into_command();
     assert_eq!(
-        prepared.into_command().get_program(),
+        command.get_program(),
         std::path::Path::new("/usr/bin/sandbox-exec")
     );
+    assert_eq!(command.get_current_dir(), Some(root.as_path()));
+    assert_eq!(
+        command
+            .get_envs()
+            .map(|(name, value)| (name.to_owned(), value.map(ToOwned::to_owned)))
+            .collect::<Vec<_>>(),
+        vec![("SAFE_ENV".into(), Some("safe-value".into()))]
+    );
+    let args = command
+        .get_args()
+        .map(|argument| argument.to_str().expect("Unicode sandbox argument"))
+        .collect::<Vec<_>>();
+    assert_eq!(args.first(), Some(&"-p"));
+    assert!(
+        args.get(1)
+            .expect("Seatbelt profile")
+            .contains("; allow read-only file operations\n(allow file-read*)")
+    );
+    let separator = args.iter().position(|arg| *arg == "--").expect("separator");
+    assert_eq!(&args[separator + 1..], &["tool", "argument"]);
 
     let outside = root.join("outside");
     let writable = root.join("writable-link");
@@ -293,6 +349,7 @@ fn sandbox_preflight_rejects_non_unicode_paths() {
 
     for (access, expected) in [
         (FileSystemAccessMode::Read, "resolved readable root"),
+        (FileSystemAccessMode::Write, "resolved writable root"),
         (FileSystemAccessMode::Deny, "resolved unreadable root"),
     ] {
         let mut preflight = request(
@@ -475,6 +532,7 @@ fn windows_preparation_uses_trusted_wrapper_and_scrubbed_inner_environment() {
     let root = AbsolutePathBuf::from_absolute_path(directory.path()).expect("absolute root");
     let wrapper = root.join("codex.exe");
     let inner = root.join("bun.exe");
+    let workspace_roots = [root.clone(), root.join("secondary-workspace")];
     let mut request = request(
         &root,
         selected(
@@ -483,6 +541,7 @@ fn windows_preparation_uses_trusted_wrapper_and_scrubbed_inner_environment() {
         ),
         LocalSandboxLaunchPolicy::Required,
     );
+    request.workspace_roots = &workspace_roots;
     request.command.program = inner.as_os_str().to_owned();
     request
         .command
@@ -513,6 +572,15 @@ fn windows_preparation_uses_trusted_wrapper_and_scrubbed_inner_environment() {
         .find_map(|args| (args[0] == "--windows-sandbox-level").then_some(args[1]))
         .expect("Windows sandbox level argument");
     assert_eq!(sandbox_level, "elevated");
+    assert_eq!(
+        args.windows(2)
+            .filter_map(|args| (args[0] == "--workspace-root").then_some(args[1]))
+            .collect::<Vec<_>>(),
+        workspace_roots
+            .iter()
+            .map(|root| root.as_path().to_str().expect("Unicode workspace root"))
+            .collect::<Vec<_>>()
+    );
     let environment = args
         .windows(2)
         .find_map(|args| (args[0] == "--env-json").then_some(args[1]))

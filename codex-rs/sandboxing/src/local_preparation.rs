@@ -20,6 +20,7 @@ use crate::SandboxablePreference;
 use crate::WindowsSandboxProxySettingsMode;
 use crate::get_platform_sandbox;
 use crate::local_command::command_from_direct_spawn_request;
+use crate::local_selection::linux_sandbox_would_apply_restrictions;
 use crate::prepare_sandbox_command;
 use crate::prepare_unrestricted_command;
 
@@ -98,9 +99,31 @@ pub fn prepare_local_sandbox_command(
             LocalSandboxUnavailableReason::SelectionUnavailable,
         ));
     };
+    let preference = match policy {
+        LocalSandboxLaunchPolicy::Required => SandboxablePreference::Require,
+        LocalSandboxLaunchPolicy::FollowPermissionProfile => SandboxablePreference::Auto,
+    };
+    let manager = SandboxManager::new();
+    let should_sandbox = manager.should_sandbox(
+        &permissions,
+        preference,
+        /*has_managed_network_requirements*/ false,
+    );
     if sandbox != SandboxType::None {
+        if !should_sandbox {
+            return Ok(LocalSandboxPreparation::Unavailable(
+                LocalSandboxUnavailableReason::SelectionUnavailable,
+            ));
+        }
         if get_platform_sandbox(runtime.windows_sandbox_level != WindowsSandboxLevel::Disabled)
             != Some(sandbox)
+        {
+            return Ok(LocalSandboxPreparation::Unavailable(
+                LocalSandboxUnavailableReason::PlatformPreparation,
+            ));
+        }
+        if sandbox == SandboxType::LinuxSeccomp
+            && !linux_sandbox_would_apply_restrictions(&permissions)
         {
             return Ok(LocalSandboxPreparation::Unavailable(
                 LocalSandboxUnavailableReason::PlatformPreparation,
@@ -142,7 +165,7 @@ pub fn prepare_local_sandbox_command(
             }
         };
         let sandbox_policy_cwd = PathUri::from_abs_path(sandbox_policy_cwd);
-        let transformed = SandboxManager::new().transform_for_direct_spawn_with_runtime(
+        let transformed = manager.transform_for_direct_spawn_with_runtime(
             SandboxDirectSpawnTransformRequest {
                 transform: SandboxTransformRequest {
                     command,
@@ -208,15 +231,7 @@ pub fn prepare_local_sandbox_command(
             },
         ));
     }
-    let preference = match policy {
-        LocalSandboxLaunchPolicy::Required => SandboxablePreference::Require,
-        LocalSandboxLaunchPolicy::FollowPermissionProfile => SandboxablePreference::Auto,
-    };
-    if SandboxManager::new().should_sandbox(
-        &permissions,
-        preference,
-        /*has_managed_network_requirements*/ false,
-    ) {
+    if should_sandbox {
         return Ok(LocalSandboxPreparation::Unavailable(
             LocalSandboxUnavailableReason::SelectionUnavailable,
         ));
