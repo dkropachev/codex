@@ -21,7 +21,8 @@ const MAX_BUN_LOCK_BYTES: u64 = 8 * 1024 * 1024;
 #[allow(dead_code, reason = "used by managed dependency installation")]
 pub(in crate::managed) enum ManagedBunLockfile {
     NotRequired,
-    TextValidated,
+    /// Explicit lock sources are safe; registry origin still needs trusted install configuration.
+    TextSourcesValidated,
     BinaryRequiresSandboxInspection,
 }
 
@@ -56,7 +57,7 @@ pub(super) fn validate(
             let contents = crate::manifest::read_bounded_utf8(&path, MAX_BUN_LOCK_BYTES)?;
             validate_text_lock(package, sources, &contents)
                 .with_context(|| format!("invalid managed Bun lockfile {}", path.display()))?;
-            Ok(ManagedBunLockfile::TextValidated)
+            Ok(ManagedBunLockfile::TextSourcesValidated)
         }
         LockFormat::Binary => Ok(ManagedBunLockfile::BinaryRequiresSandboxInspection),
     }

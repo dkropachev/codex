@@ -160,7 +160,7 @@ fn validates_dependency_lock_policy_before_returning_a_staged_release() {
                 has_dependencies: true,
                 local_packages: Vec::new(),
             },
-            lockfile: crate::managed::dependencies::ManagedBunLockfile::TextValidated,
+            lockfile: crate::managed::dependencies::ManagedBunLockfile::TextSourcesValidated,
         }
     );
 

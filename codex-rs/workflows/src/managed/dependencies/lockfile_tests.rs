@@ -102,7 +102,7 @@ fn accepts_jsonc_registry_alias_and_optional_peer_metadata() {
     );
     assert_eq!(
         validate(&package.1, &sources(&[])).expect("safe text lock"),
-        ManagedBunLockfile::TextValidated
+        ManagedBunLockfile::TextSourcesValidated
     );
 }
 
@@ -124,7 +124,7 @@ fn accepts_root_normalized_local_resolutions_and_relative_metadata() {
     );
     assert_eq!(
         validate(&package.1, &sources(&["vendor/a", "vendor/b"])).expect("local lock"),
-        ManagedBunLockfile::TextValidated
+        ManagedBunLockfile::TextSourcesValidated
     );
 }
 
