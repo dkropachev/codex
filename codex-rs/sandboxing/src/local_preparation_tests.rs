@@ -155,6 +155,7 @@ fn linux_preparation_validates_inputs_and_preserves_selected_profile() {
         LocalSandboxLaunchPolicy::Required,
     );
     valid.runtime.linux_sandbox_executable = Some(&helper);
+    valid.runtime.use_legacy_landlock = true;
     valid
         .command
         .env
@@ -182,6 +183,7 @@ fn linux_preparation_validates_inputs_and_preserves_selected_profile() {
         .get_args()
         .map(|argument| argument.to_str().expect("Unicode sandbox argument"))
         .collect::<Vec<_>>();
+    assert!(args.contains(&"--use-legacy-landlock"));
     let profile = args
         .windows(2)
         .find_map(|args| (args[0] == "--permission-profile").then_some(args[1]))
@@ -490,7 +492,8 @@ fn windows_preparation_uses_trusted_wrapper_and_scrubbed_inner_environment() {
         .runtime
         .direct_spawn
         .windows_sandbox_wrapper_executable = Some(&wrapper);
-    request.runtime.windows_sandbox_level = WindowsSandboxLevel::RestrictedToken;
+    request.runtime.windows_sandbox_level = WindowsSandboxLevel::Elevated;
+    request.runtime.windows_sandbox_private_desktop = true;
     let LocalSandboxPreparation::Prepared(prepared) =
         prepare_local_sandbox_command(request).expect("prepare Windows sandbox command")
     else {
@@ -504,6 +507,12 @@ fn windows_preparation_uses_trusted_wrapper_and_scrubbed_inner_environment() {
         .map(|argument| argument.to_str().expect("Unicode wrapper argument"))
         .collect::<Vec<_>>();
     assert!(args.contains(&"--preserve-proxy-settings"));
+    assert!(args.contains(&"--windows-sandbox-private-desktop"));
+    let sandbox_level = args
+        .windows(2)
+        .find_map(|args| (args[0] == "--windows-sandbox-level").then_some(args[1]))
+        .expect("Windows sandbox level argument");
+    assert_eq!(sandbox_level, "elevated");
     let environment = args
         .windows(2)
         .find_map(|args| (args[0] == "--env-json").then_some(args[1]))
@@ -520,6 +529,35 @@ fn windows_preparation_uses_trusted_wrapper_and_scrubbed_inner_environment() {
             inner.as_path().to_str().expect("Unicode inner path"),
             "argument"
         ]
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_preparation_classifies_unsupported_permissions_as_platform_failure() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let root = AbsolutePathBuf::from_absolute_path(directory.path()).expect("absolute root");
+    let wrapper = root.join("codex.exe");
+    let mut request = request(
+        &root,
+        selected(
+            SandboxType::WindowsRestrictedToken,
+            PermissionProfile::Disabled,
+        ),
+        LocalSandboxLaunchPolicy::Required,
+    );
+    request
+        .runtime
+        .direct_spawn
+        .windows_sandbox_wrapper_executable = Some(&wrapper);
+    request.runtime.windows_sandbox_level = WindowsSandboxLevel::RestrictedToken;
+
+    assert_eq!(
+        unavailable(
+            prepare_local_sandbox_command(request)
+                .expect("classify unsupported Windows permissions"),
+        ),
+        LocalSandboxUnavailableReason::PlatformPreparation
     );
 }
 
