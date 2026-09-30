@@ -95,7 +95,7 @@ fn validate_text_lock(
     if !matches!(
         object
             .get("lockfileVersion")
-            .and_then(|value| value.as_u64()),
+            .and_then(serde_json::Value::as_u64),
         Some(0..=2)
     ) {
         bail!("bun.lock uses an unsupported lockfile version");
@@ -295,8 +295,7 @@ fn validate_info_fields(
                 | "peerDependencies"
                 | "optionalPeers"
         );
-        if !base && !(kind == InfoKind::Package && matches!(field.as_str(), "os" | "cpu" | "libc"))
-        {
+        if !(base || kind == InfoKind::Package && matches!(field.as_str(), "os" | "cpu" | "libc")) {
             bail!("bun.lock metadata field `{field}` is unsupported");
         }
     }
