@@ -6,6 +6,7 @@ use std::path::Path;
 use codex_core::TurnInputRequest;
 use codex_core::shell::default_user_shell;
 use codex_features::Feature;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -208,7 +209,7 @@ async fn prompt_tools_are_consistent_across_requests(
     let mode_instructions = if custom_instructions {
         "## Plan tool\nPreserve this custom collaboration policy.\n".to_string()
     } else {
-        builtin_collaboration_mode_presets()
+        builtin_collaboration_mode_presets(CollaborationModesConfig::default())
             .into_iter()
             .find(|preset| preset.mode == Some(ModeKind::Plan))
             .and_then(|preset| preset.developer_instructions.flatten())

@@ -22,6 +22,10 @@ use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHa
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_config::config_toml::ModelPolicyReasoningEffortToml;
+use codex_config::config_toml::ModelPolicyRouteToml;
+use codex_config::config_toml::ModelPolicyRuleToml;
+use codex_config::config_toml::ModelPolicyToml;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_history::InitialHistory;
@@ -769,6 +773,150 @@ async fn multi_agent_v2_full_history_fork_inherits_root_service_tier() {
         snapshot.service_tier,
         Some(ServiceTier::Fast.request_value().to_string())
     );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_applies_model_policy_before_root_service_tier() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        task_name: String,
+    }
+
+    let (mut session, turn) = make_session_and_context().await;
+    let mut turn = turn
+        .with_model("gpt-5.4-mini".to_string(), &session.services.models_manager)
+        .await;
+    let mut config = (*turn.config).clone();
+    config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
+    config.model_policy = Some(ModelPolicyToml {
+        enabled: true,
+        rules: vec![ModelPolicyRuleToml {
+            source: Some(vec!["subagent.thread_spawn".to_string()]),
+            route: ModelPolicyRouteToml {
+                model: Some("gpt-5.6-sol".to_string()),
+                reasoning_effort: Some(ModelPolicyReasoningEffortToml::Low),
+                ..Default::default()
+            },
+            ..Default::default()
+        }],
+        default_route: None,
+    });
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = root.thread.session.services.agent_control.clone();
+    session.thread_id = root.thread_id;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let output = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "policy_routed",
+                "fork_turns": "none"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should apply model policy");
+    let (content, _) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    let child_thread_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(
+            session.thread_id,
+            &turn.session_source,
+            result.task_name.as_str(),
+        )
+        .await
+        .expect("spawned task name should resolve");
+    let snapshot = manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+
+    assert_eq!(snapshot.model, "gpt-5.6-sol");
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Low));
+    assert_eq!(
+        snapshot.service_tier,
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_explicit_model_override_skips_model_policy() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config.model_policy = Some(ModelPolicyToml {
+        enabled: true,
+        rules: vec![ModelPolicyRuleToml {
+            source: Some(vec!["subagent.thread_spawn".to_string()]),
+            route: ModelPolicyRouteToml {
+                model: Some("gpt-5.6-terra".to_string()),
+                reasoning_effort: Some(ModelPolicyReasoningEffortToml::Low),
+                ..Default::default()
+            },
+            ..Default::default()
+        }],
+        default_route: None,
+    });
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+    let manager = thread_manager();
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = root.thread.session.services.agent_control.clone();
+    session.thread_id = root.thread_id;
+
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "explicit_model",
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "high",
+                "fork_turns": "none"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should honor explicit model overrides");
+    let child_thread_id = manager
+        .captured_ops()
+        .into_iter()
+        .map(|(thread_id, _)| thread_id)
+        .find(|thread_id| *thread_id != root.thread_id)
+        .expect("spawned agent should receive an op");
+    let snapshot = manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+
+    assert_eq!(snapshot.model, "gpt-5.6-sol");
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::High));
 }
 
 #[tokio::test]

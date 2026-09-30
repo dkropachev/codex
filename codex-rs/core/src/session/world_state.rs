@@ -210,6 +210,7 @@ impl Session {
                     .and_then(|messages| messages.collaboration_modes.as_ref()),
                 turn_context.config.update_plan_enabled,
                 turn_context.config.model_catalog.is_some(),
+                crate::thread_manager::collaboration_modes_config(&turn_context.config),
             ));
         }
         if !crate::guardian::is_basic_session_source(&turn_context.session_source) {

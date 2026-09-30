@@ -45,6 +45,7 @@ fn instruction_updates_are_applied_once_in_retained_history() {
             /*catalog_messages*/ None,
             /*update_plan_enabled*/ true,
             /*custom_model_catalog*/ false,
+            CollaborationModesConfig::default(),
         ));
         let expected: ResponseItem = ContextualUserFragment::into(CollaborationModeInstructions {
             instructions: instructions.unwrap_or_default().to_string(),
@@ -88,6 +89,7 @@ fn catalog_collaboration_messages_select_mode_variant() {
             Some(&messages),
             /*update_plan_enabled*/ true,
             /*custom_model_catalog*/ false,
+            CollaborationModesConfig::default(),
         );
 
         assert_eq!(state.instructions.as_deref(), Some(expected));
@@ -105,6 +107,7 @@ fn empty_catalog_collaboration_message_suppresses_legacy_instructions() {
         Some(&messages),
         /*update_plan_enabled*/ true,
         /*custom_model_catalog*/ false,
+        CollaborationModesConfig::default(),
     );
 
     assert_eq!(
@@ -128,6 +131,7 @@ fn missing_catalog_collaboration_message_uses_configured_instructions() {
             Some(&messages),
             /*update_plan_enabled*/ true,
             /*custom_model_catalog*/ false,
+            CollaborationModesConfig::default(),
         );
 
         assert_eq!(
@@ -153,6 +157,7 @@ fn legacy_collaboration_mode_snapshots_refresh_catalog_messages_once() {
                 Some(&messages),
                 /*update_plan_enabled*/ true,
                 /*custom_model_catalog*/ false,
+                CollaborationModesConfig::default(),
             );
 
             assert_eq!(
@@ -190,5 +195,6 @@ fn collaboration_mode_state(mode: ModeKind, instructions: &str) -> Collaboration
         /*catalog_messages*/ None,
         /*update_plan_enabled*/ true,
         /*custom_model_catalog*/ false,
+        CollaborationModesConfig::default(),
     )
 }

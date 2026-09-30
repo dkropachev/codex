@@ -378,7 +378,7 @@ pub fn build_models_manager(
     )
 }
 
-fn collaboration_modes_config(config: &Config) -> CollaborationModesConfig {
+pub(crate) fn collaboration_modes_config(config: &Config) -> CollaborationModesConfig {
     CollaborationModesConfig {
         default_mode_request_user_input: config
             .features

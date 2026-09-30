@@ -3,6 +3,7 @@ use super::WorldStateHash;
 use super::WorldStateSection;
 use crate::context::ContextualUserFragment;
 use crate::context::without_update_plan_instructions;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -26,6 +27,7 @@ impl CollaborationModeState {
         catalog_messages: Option<&CollaborationModeMessages>,
         update_plan_enabled: bool,
         custom_model_catalog: bool,
+        collaboration_modes_config: CollaborationModesConfig,
     ) -> Self {
         let catalog_instructions =
             catalog_messages.and_then(|messages| match collaboration_mode.mode {
@@ -49,13 +51,15 @@ impl CollaborationModeState {
             // entire preset, never a heading that could also occur in custom text.
             let builtin = match catalog_instructions {
                 Some(_) => !custom_model_catalog,
-                None => builtin_collaboration_mode_presets().iter().any(|preset| {
-                    preset
-                        .developer_instructions
-                        .as_ref()
-                        .and_then(Option::as_ref)
-                        == Some(&instructions)
-                }),
+                None => builtin_collaboration_mode_presets(collaboration_modes_config)
+                    .iter()
+                    .any(|preset| {
+                        preset
+                            .developer_instructions
+                            .as_ref()
+                            .and_then(Option::as_ref)
+                            == Some(&instructions)
+                    }),
             };
             if builtin {
                 without_update_plan_instructions(&instructions)

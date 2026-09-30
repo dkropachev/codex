@@ -6,6 +6,8 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::codex_thread::ThreadConfigSnapshot;
+use crate::model_policy::ModelPolicySource;
+use crate::model_policy::apply_model_policy;
 use crate::session::multi_agents::resolve_usage_hints;
 use crate::tools::handlers::multi_agents::collab_tool_call_status;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
@@ -141,9 +143,6 @@ async fn handle_spawn_agent(
                 .clone_from(&turn.developer_instructions);
         }
     }
-    apply_spawn_agent_service_tier(&session, &mut config).await?;
-    apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
-
     // Remember an applied configured default so cold reload reapplies its restrictions.
     let persisted_role_name = role_name.or_else(|| {
         (!is_full_history_fork
@@ -160,6 +159,20 @@ async fn handle_spawn_agent(
         persisted_role_name,
         Some(args.task_name.clone()),
     )?;
+    if args.model.is_none()
+        && args.reasoning_effort.is_none()
+        && let codex_protocol::protocol::SessionSource::SubAgent(source) = spawn_source.clone()
+        && let Err(err) = apply_model_policy(
+            &mut config,
+            ModelPolicySource::SubAgent(source),
+            message.len(),
+        )
+    {
+        tracing::warn!("failed to apply spawn_agent model policy: {err}");
+    }
+    apply_spawn_agent_service_tier(&session, &mut config).await?;
+    apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
+
     let new_agent_path = spawn_source.get_agent_path().ok_or_else(|| {
         FunctionCallError::RespondToModel(
             "spawned agent is missing a canonical task name".to_string(),

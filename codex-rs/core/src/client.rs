@@ -579,7 +579,7 @@ impl ModelClient {
         provider_info: ModelProviderInfo,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
-        let client = Self::new(
+        let mut client = Self::new(
             auth_manager,
             self.agent_identity_policy,
             self.state.thread_id,
@@ -595,7 +595,10 @@ impl ModelClient {
             self.state.attestation_provider.clone(),
             self.http_client_factory.clone(),
         );
-        client.with_prompt_cache_key_override(self.prompt_cache_key_override.clone())
+        client.prompt_cache_key_override = self.prompt_cache_key_override.clone();
+        client.free_guardian_enabled = self.free_guardian_enabled;
+        client.event_sender = self.event_sender.clone();
+        client
     }
 
     fn take_cached_websocket_session(&self) -> WebsocketSession {

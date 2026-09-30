@@ -584,6 +584,8 @@ async fn active_model_switch_uses_destination_token_window_and_budget_defaults()
                     .as_mut()
                     .expect("model messages")
                     .token_budget = Some(ModelTokenBudgetConfig {
+                    enabled: false,
+                    use_history_notes_extension: false,
                     reminder_threshold_tokens: reminder_threshold,
                     reminder_message_template: format!(
                         "{} reminder: {{n_remaining}} tokens remain.",
