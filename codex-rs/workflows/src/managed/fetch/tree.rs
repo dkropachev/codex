@@ -153,7 +153,7 @@ fn is_windows_device_name(component: &str) -> bool {
         "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$"
     ) || stem.len() == 4
         && (stem.starts_with("COM") || stem.starts_with("LPT"))
-        && matches!(stem.as_bytes()[3], b'0'..=b'9')
+        && stem.as_bytes()[3].is_ascii_digit()
 }
 
 fn is_mutable_runtime_path(path: &str) -> bool {
