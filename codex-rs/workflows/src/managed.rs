@@ -1,5 +1,6 @@
 use std::sync::atomic::AtomicBool;
 
+mod fetch;
 mod git_command;
 mod release;
 mod source;
