@@ -34,6 +34,16 @@ impl Package {
     fn write_lock(&self, contents: impl AsRef<[u8]>) {
         fs::write(self.0.path().join("bun.lock"), contents).expect("write bun.lock");
     }
+
+    fn write_local_manifest(&self, path: &str, value: serde_json::Value) {
+        let directory = self.0.path().join(path);
+        fs::create_dir_all(&directory).expect("create local package");
+        fs::write(
+            directory.join("package.json"),
+            serde_json::to_vec(&value).expect("serialize local manifest"),
+        )
+        .expect("write local manifest");
+    }
 }
 
 fn sources(local: &[&str]) -> ValidatedDependencySources {
@@ -113,6 +123,11 @@ fn accepts_root_normalized_local_resolutions_and_relative_metadata() {
     let package = Package::new(serde_json::json!({
         "dependencies": {"a": "file:vendor/a"}
     }));
+    package.write_local_manifest(
+        "vendor/a",
+        serde_json::json!({"dependencies": {"b": "file:../b"}}),
+    );
+    package.write_local_manifest("vendor/b", serde_json::json!({}));
     package.write_lock(
         serde_json::to_vec(&serde_json::json!({
             "lockfileVersion": 1,
@@ -128,6 +143,24 @@ fn accepts_root_normalized_local_resolutions_and_relative_metadata() {
         validate(&package.1, &sources(&["vendor/a", "vendor/b"])).expect("local lock"),
         ManagedBunLockfile::TextSourcesValidated
     );
+
+    for (section, dependencies) in [
+        ("dependencies", serde_json::json!({"b": "2.0.0"})),
+        ("devDependencies", serde_json::json!({"dev": "1.0.0"})),
+        (
+            "optionalDependencies",
+            serde_json::json!({"optional": "1.0.0"}),
+        ),
+        ("peerDependencies", serde_json::json!({"peer": "1.0.0"})),
+    ] {
+        let mut manifest = serde_json::json!({"dependencies": {"b": "file:../b"}});
+        manifest[section] = dependencies;
+        package.write_local_manifest("vendor/a", manifest);
+        assert!(
+            validate(&package.1, &sources(&["vendor/a", "vendor/b"])).is_err(),
+            "accepted stale local {section}"
+        );
+    }
 }
 
 #[test]
@@ -186,6 +219,8 @@ fn rejects_manifest_mismatch_local_mismatch_duplicates_and_malformed_jsonc() {
     }
 
     let local = Package::new(serde_json::json!({"dependencies": {"a": "file:vendor/a"}}));
+    local.write_local_manifest("vendor/a", serde_json::json!({}));
+    local.write_local_manifest("vendor/missing", serde_json::json!({}));
     local.write_lock(
         serde_json::to_vec(&serde_json::json!({
             "lockfileVersion": 1,

@@ -54,13 +54,22 @@ pub(super) fn validate(
 
     match format {
         LockFormat::Text => {
-            let contents = crate::manifest::read_bounded_utf8(&path, MAX_BUN_LOCK_BYTES)?;
-            validate_text_lock(package, sources, &contents)
+            validate_text_lock_file(package, sources, &path)
                 .with_context(|| format!("invalid managed Bun lockfile {}", path.display()))?;
             Ok(ManagedBunLockfile::TextSourcesValidated)
         }
         LockFormat::Binary => Ok(ManagedBunLockfile::BinaryRequiresSandboxInspection),
     }
+}
+
+#[allow(dead_code, reason = "used by binary Bun lock inspection")]
+pub(super) fn validate_text_lock_file(
+    package: &crate::WorkflowPackage,
+    sources: &ValidatedDependencySources,
+    path: &Path,
+) -> anyhow::Result<()> {
+    let contents = crate::manifest::read_bounded_utf8(path, MAX_BUN_LOCK_BYTES)?;
+    validate_text_lock(package, sources, &contents)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -189,6 +198,7 @@ fn validate_text_lock(
                     format!("bun.lock local package `{key}` has invalid metadata")
                 })?;
                 validate_tuple_metadata(key, metadata, Some(&path), &allowed_local)?;
+                validate_local_manifest_metadata(package, key, &path, metadata)?;
                 resolved_local.insert(path);
             }
         }
@@ -197,6 +207,43 @@ fn validate_text_lock(
         bail!(
             "bun.lock local package targets do not match package.json: expected {allowed_local:?}, resolved {resolved_local:?}"
         );
+    }
+    Ok(())
+}
+
+fn validate_local_manifest_metadata(
+    package: &crate::WorkflowPackage,
+    key: &str,
+    local: &Path,
+    metadata: &serde_json::Map<String, serde_json::Value>,
+) -> anyhow::Result<()> {
+    let manifest_path = local.join("package.json");
+    if !crate::manifest::is_package_regular_file(&package.root, &manifest_path) {
+        bail!("bun.lock local package `{key}` has no regular package.json");
+    }
+    let contents = crate::manifest::read_bounded_utf8(
+        &package.root.join(&manifest_path),
+        crate::manifest::MAX_PACKAGE_JSON_BYTES,
+    )?;
+    let manifest = serde_json::from_str::<serde_json::Value>(&contents).with_context(|| {
+        format!(
+            "invalid local dependency manifest {}",
+            manifest_path.display()
+        )
+    })?;
+    let manifest = manifest.as_object().with_context(|| {
+        format!(
+            "local dependency manifest {} must contain an object",
+            manifest_path.display()
+        )
+    })?;
+    for section in DEPENDENCY_SECTIONS {
+        if dependency_object(metadata.get(section))? != dependency_object(manifest.get(section))? {
+            bail!(
+                "bun.lock local package `{key}` `{section}` does not match {}",
+                manifest_path.display()
+            );
+        }
     }
     Ok(())
 }
