@@ -462,14 +462,11 @@ async fn stale_thread_settings_do_not_clobber_a_user_selected_workflow_mode() {
     chat.set_collaboration_mask_from_user_action(workflow_mask);
 
     let mut stale = thread_settings_for_test("gpt-stale", thread_id);
-    stale.thread_settings.collaboration_mode.mode = ModeKind::Default;
+    stale.thread_settings.collaboration_mode.mode = ModeKind::Workflow;
     chat.on_thread_settings_updated(stale);
 
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Workflow);
-    assert_eq!(
-        chat.pending_user_collaboration_mode,
-        Some(ModeKind::Workflow)
-    );
+    assert!(chat.pending_user_collaboration_mode.is_none());
     assert!(
         chat.effective_collaboration_mode()
             .settings
@@ -484,8 +481,34 @@ async fn stale_thread_settings_do_not_clobber_a_user_selected_workflow_mode() {
     acknowledged.thread_settings.collaboration_mode = selected;
     chat.on_thread_settings_updated(acknowledged);
 
-    assert_eq!(chat.pending_user_collaboration_mode, None);
+    assert!(chat.pending_user_collaboration_mode.is_none());
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Workflow);
+}
+
+#[tokio::test]
+async fn pending_collaboration_mode_is_scoped_to_one_notification_and_thread() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    let first_thread = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(first_thread));
+    let workflow_mask = collaboration_modes::mask_for_kind_with_config(
+        chat.model_catalog.as_ref(),
+        ModeKind::Workflow,
+        chat.collaboration_modes_config(),
+    )
+    .expect("workflow mode");
+    chat.set_collaboration_mask_from_user_action(workflow_mask);
+
+    let second_thread = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(second_thread));
+    assert!(chat.pending_user_collaboration_mode.is_none());
+
+    let mut authoritative = thread_settings_for_test("gpt-5.4", second_thread);
+    authoritative.thread_settings.collaboration_mode.mode = ModeKind::Default;
+    chat.on_thread_settings_updated(authoritative);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.current_model(), "gpt-5.4");
 }
 
 #[tokio::test]

@@ -554,8 +554,8 @@ pub(crate) struct ChatWidget {
     current_collaboration_mode: CollaborationMode,
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
-    /// Latest user-selected mode awaiting its matching app-server settings notification.
-    pending_user_collaboration_mode: Option<ModeKind>,
+    /// Latest user-selected mode protected from one stale settings notification.
+    pending_user_collaboration_mode: Option<PendingCollaborationModeSelection>,
     has_chatgpt_account: bool,
     has_codex_backend_auth: bool,
     model_catalog: Arc<ModelCatalog>,
@@ -778,6 +778,11 @@ pub(crate) struct ChatWidget {
     external_editor_state: ExternalEditorState,
     last_rendered_user_message_display: Option<UserMessageDisplay>,
     last_non_retry_error: Option<(String, String)>,
+}
+
+struct PendingCollaborationModeSelection {
+    thread_id: ThreadId,
+    mode: CollaborationMode,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]

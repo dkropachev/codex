@@ -375,15 +375,13 @@ impl ChatWidget {
             return;
         }
 
-        if let Some(pending_mode) = self.pending_user_collaboration_mode {
-            if notification.thread_settings.collaboration_mode.mode == pending_mode {
-                self.pending_user_collaboration_mode = None;
-            } else {
-                let effective = self.effective_collaboration_mode();
-                notification.thread_settings.model = effective.settings.model.clone();
-                notification.thread_settings.effort = effective.settings.reasoning_effort.clone();
-                notification.thread_settings.collaboration_mode = effective;
-            }
+        if let Some(pending) = self.pending_user_collaboration_mode.take()
+            && pending.thread_id == thread_id
+            && notification.thread_settings.collaboration_mode != pending.mode
+        {
+            notification.thread_settings.model = pending.mode.settings.model.clone();
+            notification.thread_settings.effort = pending.mode.settings.reasoning_effort.clone();
+            notification.thread_settings.collaboration_mode = pending.mode;
         }
 
         self.apply_thread_settings(notification.thread_settings);
@@ -679,8 +677,13 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_collaboration_mask_from_user_action(&mut self, mask: CollaborationModeMask) {
-        self.pending_user_collaboration_mode = mask.mode;
         self.set_collaboration_mask(mask);
+        self.pending_user_collaboration_mode = self.thread_id.map(|thread_id| {
+            PendingCollaborationModeSelection {
+                thread_id,
+                mode: self.effective_collaboration_mode(),
+            }
+        });
         self.submit_collaboration_mode_settings_update();
     }
 
