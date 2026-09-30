@@ -182,8 +182,7 @@ impl<'de> Visitor<'de> for UniqueKeysVisitor {
     where
         A: SeqAccess<'de>,
     {
-        while sequence.next_element::<UniqueKeys>()?.is_some() {
-        }
+        while sequence.next_element::<UniqueKeys>()?.is_some() {}
         Ok(())
     }
 
