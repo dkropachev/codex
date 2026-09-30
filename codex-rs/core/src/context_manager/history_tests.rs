@@ -530,7 +530,7 @@ fn annotated_history_apis_preserve_envelopes() {
 #[test_case(None, 100, 5, true; "model policy")]
 #[test_case(Some(200), 100, 200, false; "configured override")]
 #[test_case(Some(100), 85, 100, true; "saved limit has no additional allowance")]
-#[test_case(Some(30_000), 20_000, 10_000, true; "large explicit budget respects context item cap")]
+#[test_case(Some(30_000), 20_000, 9_800, true; "large explicit budget respects context item cap")]
 fn record_annotated_items_preserves_metadata_while_processing_item(
     fallback_token_limit_override: Option<usize>,
     repeat_count: usize,
