@@ -20,7 +20,26 @@ fn parses_existing_local_path_and_file_url() {
         local
     );
     #[cfg(unix)]
-    assert_invalid(&format!("/{}", temp.path().display()));
+    {
+        use std::os::unix::fs::symlink;
+
+        let target = temp.path().join("target");
+        let link = temp.path().join("link");
+        std::fs::create_dir(&target).expect("create symlink target");
+        symlink(&target, &link).expect("create local source symlink");
+        let parsed = WorkflowGitSource::parse(link.to_str().expect("UTF-8 symlink path"))
+            .expect("symlinked local source");
+        let canonical = AbsolutePathBuf::from_absolute_path(&target)
+            .and_then(|path| path.canonicalize())
+            .expect("canonical symlink target");
+        assert_eq!(
+            parsed,
+            WorkflowGitSource(WorkflowGitSourceKind::Local(canonical))
+        );
+
+        assert_invalid(&format!("/{}", temp.path().display()));
+        assert_invalid(&format!("file:///{}", temp.path().display()));
+    }
 }
 
 #[test]
@@ -102,7 +121,8 @@ fn rejects_unsafe_or_malformed_sources_without_disclosing_credentials() {
     ] {
         assert_invalid(input);
     }
-    assert_invalid(&"x".repeat(MAX_SOURCE_LEN + 1));
+    let oversized = format!("https://example.com/{}.git", "x".repeat(MAX_SOURCE_LEN));
+    assert_invalid(&oversized);
     assert_invalid("https://user:do-not-print-this@github.com/openai/codex");
 }
 
@@ -115,6 +135,12 @@ fn validates_network_paths_and_host_boundaries() {
         r"\/server/share",
     ] {
         assert!(is_network_path(path), "missed network path {path:?}");
+        assert_eq!(
+            canonical_file_path(Path::new(path))
+                .expect_err("network file path should be rejected")
+                .to_string(),
+            INVALID_SOURCE
+        );
     }
     for path in [r"C:\repo", r"\\?\C:\repo", "/tmp/repo"] {
         assert!(!is_network_path(path), "rejected local path {path:?}");

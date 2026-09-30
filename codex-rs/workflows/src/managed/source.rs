@@ -97,12 +97,16 @@ impl WorkflowGitSource {
         match url.scheme() {
             "file" => {
                 ensure!(
-                    !raw_userinfo && url.host_str().is_none() && url.port().is_none(),
+                    !location.starts_with("//")
+                        && !raw_userinfo
+                        && url.host_str().is_none()
+                        && url.port().is_none(),
                     INVALID_SOURCE
                 );
                 let path = url.to_file_path().map_err(|()| anyhow!(INVALID_SOURCE))?;
-                ensure!(!path.to_str().is_some_and(is_network_path), INVALID_SOURCE);
-                Ok(Self(WorkflowGitSourceKind::Local(canonical_local(&path)?)))
+                Ok(Self(WorkflowGitSourceKind::Local(canonical_file_path(
+                    &path,
+                )?)))
             }
             "https" | "ssh" => {
                 let url_host_valid = match url.host() {
@@ -169,6 +173,11 @@ fn canonical_local(path: &Path) -> Result<AbsolutePathBuf> {
         .map_err(|_| anyhow!(INVALID_SOURCE))?;
     ensure!(path.as_path().to_str().is_some(), INVALID_SOURCE);
     Ok(path)
+}
+
+fn canonical_file_path(path: &Path) -> Result<AbsolutePathBuf> {
+    ensure!(!path.to_str().is_some_and(is_network_path), INVALID_SOURCE);
+    canonical_local(path)
 }
 
 fn is_network_path(path: &str) -> bool {
