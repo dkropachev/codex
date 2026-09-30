@@ -179,14 +179,22 @@ fn unrepresentable_path(
     }
     let file_system_policy = permissions.file_system_sandbox_policy();
     for entry in &file_system_policy.entries {
-        if let FileSystemPath::Path { path } = &entry.path
-            && path
-                .to_abs_path()
-                .ok()
-                .as_ref()
-                .is_none_or(|path| !valid(path))
-        {
-            return Some("permission path");
+        match &entry.path {
+            FileSystemPath::Path { path }
+                if path
+                    .to_abs_path()
+                    .ok()
+                    .as_ref()
+                    .is_none_or(|path| !valid(path)) =>
+            {
+                return Some("permission path");
+            }
+            FileSystemPath::GlobPattern { pattern } if pattern.contains('\0') => {
+                return Some("permission glob");
+            }
+            FileSystemPath::Path { .. }
+            | FileSystemPath::GlobPattern { .. }
+            | FileSystemPath::Special { .. } => {}
         }
     }
     for (label, paths) in [

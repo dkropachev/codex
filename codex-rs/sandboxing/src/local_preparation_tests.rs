@@ -200,13 +200,16 @@ fn sandbox_preflight_rejects_non_unicode_paths() {
     preflight.runtime.linux_sandbox_executable = Some(&helper);
     assert_unrepresentable(preflight, "permission path");
 
-    let mut preflight = request(
-        &root,
-        selected(sandbox, PermissionProfile::read_only()),
-        LocalSandboxLaunchPolicy::Required,
-    );
-    preflight.runtime.linux_sandbox_executable = Some(&invalid);
-    assert_unrepresentable(preflight, "Linux sandbox executable");
+    #[cfg(target_os = "linux")]
+    {
+        let mut preflight = request(
+            &root,
+            selected(sandbox, PermissionProfile::read_only()),
+            LocalSandboxLaunchPolicy::Required,
+        );
+        preflight.runtime.linux_sandbox_executable = Some(&invalid);
+        assert_unrepresentable(preflight, "Linux sandbox executable");
+    }
 
     let mut preflight = request(
         &root,
@@ -223,6 +226,22 @@ fn sandbox_preflight_rejects_non_unicode_paths() {
     );
     preflight.runtime.linux_sandbox_executable = Some(&helper);
     assert_unrepresentable(preflight, "resolved readable root");
+
+    let mut preflight = request(
+        &root,
+        selected(
+            sandbox,
+            permissions(
+                FileSystemPath::GlobPattern {
+                    pattern: "private\0/**".to_string(),
+                },
+                FileSystemAccessMode::Deny,
+            ),
+        ),
+        LocalSandboxLaunchPolicy::Required,
+    );
+    preflight.runtime.linux_sandbox_executable = Some(&helper);
+    assert_unrepresentable(preflight, "permission glob");
 }
 
 #[cfg(windows)]
