@@ -260,8 +260,8 @@ fn bounded_capture_can_stop_an_open_unix_stream() {
 
     let (stdout, _stdout_writer) = UnixStream::pair().expect("stdout stream pair");
     let (stderr, _stderr_writer) = UnixStream::pair().expect("stderr stream pair");
-    let stdout = capture_bounded(stdout, 16);
-    let stderr = capture_bounded(stderr, 16);
+    let stdout = capture_bounded(stdout, /*maximum_bytes*/ 16);
+    let stderr = capture_bounded(stderr, /*maximum_bytes*/ 16);
     let started = Instant::now();
 
     let error = finish_captures(stdout, stderr, Duration::from_millis(/*millis*/ 50))
