@@ -123,18 +123,21 @@ fn accepts_root_normalized_local_resolutions_and_relative_metadata() {
     let package = Package::new(serde_json::json!({
         "dependencies": {"a": "file:vendor/a"}
     }));
-    package.write_local_manifest(
-        "vendor/a",
-        serde_json::json!({"dependencies": {"b": "file:../b"}}),
-    );
+    let local_metadata = serde_json::json!({
+        "dependencies": {"b": "file:../b"},
+        "devDependencies": {"dev": "1.0.0"},
+        "optionalDependencies": {"optional": "1.0.0"},
+        "peerDependencies": {"peer": "1.0.0"}
+    });
+    package.write_local_manifest("vendor/a", local_metadata.clone());
     package.write_local_manifest("vendor/b", serde_json::json!({}));
     package.write_lock(
         serde_json::to_vec(&serde_json::json!({
             "lockfileVersion": 1,
             "workspaces": {"": {"dependencies": {"a": "file:vendor/a"}}},
             "packages": {
-                "a": ["a@file:vendor/a", {"dependencies": {"b": "file:../b"}}],
-                "alias": ["a@file:vendor/a", {"dependencies": {"b": "file:../b"}}],
+                "a": ["a@file:vendor/a", local_metadata.clone()],
+                "alias": ["a@file:vendor/a", local_metadata.clone()],
                 "b": ["b@file:vendor/b", {}]
             }
         }))
@@ -147,14 +150,14 @@ fn accepts_root_normalized_local_resolutions_and_relative_metadata() {
 
     for (section, dependencies) in [
         ("dependencies", serde_json::json!({"b": "2.0.0"})),
-        ("devDependencies", serde_json::json!({"dev": "1.0.0"})),
+        ("devDependencies", serde_json::json!({"dev": "2.0.0"})),
         (
             "optionalDependencies",
-            serde_json::json!({"optional": "1.0.0"}),
+            serde_json::json!({"optional": "2.0.0"}),
         ),
-        ("peerDependencies", serde_json::json!({"peer": "1.0.0"})),
+        ("peerDependencies", serde_json::json!({"peer": "2.0.0"})),
     ] {
-        let mut manifest = serde_json::json!({"dependencies": {"b": "file:../b"}});
+        let mut manifest = local_metadata.clone();
         manifest[section] = dependencies;
         package.write_local_manifest("vendor/a", manifest);
         assert!(
