@@ -448,6 +448,47 @@ async fn thread_settings_updated_preserves_default_settings_for_plan_mode() {
 }
 
 #[tokio::test]
+async fn stale_thread_settings_do_not_clobber_a_user_selected_workflow_mode() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+    let workflow_mask = collaboration_modes::mask_for_kind_with_config(
+        chat.model_catalog.as_ref(),
+        ModeKind::Workflow,
+        chat.collaboration_modes_config(),
+    )
+    .expect("workflow mode");
+    chat.set_collaboration_mask_from_user_action(workflow_mask);
+
+    let mut stale = thread_settings_for_test("gpt-stale", thread_id);
+    stale.thread_settings.collaboration_mode.mode = ModeKind::Default;
+    chat.on_thread_settings_updated(stale);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Workflow);
+    assert_eq!(
+        chat.pending_user_collaboration_mode,
+        Some(ModeKind::Workflow)
+    );
+    assert!(
+        chat.effective_collaboration_mode()
+            .settings
+            .developer_instructions
+            .as_deref()
+            .is_some_and(|instructions| instructions.contains("Workflow mode exists to design"))
+    );
+
+    let selected = chat.effective_collaboration_mode();
+    let mut acknowledged = thread_settings_for_test(selected.model(), thread_id);
+    acknowledged.thread_settings.effort = selected.reasoning_effort();
+    acknowledged.thread_settings.collaboration_mode = selected;
+    chat.on_thread_settings_updated(acknowledged);
+
+    assert_eq!(chat.pending_user_collaboration_mode, None);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Workflow);
+}
+
+#[tokio::test]
 async fn collab_spawn_end_shows_requested_model_and_effort() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     let sender_thread_id = ThreadId::new();

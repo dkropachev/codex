@@ -362,7 +362,7 @@ impl ChatWidget {
 
     pub(crate) fn on_thread_settings_updated(
         &mut self,
-        notification: ThreadSettingsUpdatedNotification,
+        mut notification: ThreadSettingsUpdatedNotification,
     ) {
         let Ok(thread_id) = ThreadId::from_string(&notification.thread_id) else {
             tracing::warn!(
@@ -373,6 +373,17 @@ impl ChatWidget {
         };
         if self.thread_id != Some(thread_id) {
             return;
+        }
+
+        if let Some(pending_mode) = self.pending_user_collaboration_mode {
+            if notification.thread_settings.collaboration_mode.mode == pending_mode {
+                self.pending_user_collaboration_mode = None;
+            } else {
+                let effective = self.effective_collaboration_mode();
+                notification.thread_settings.model = effective.settings.model.clone();
+                notification.thread_settings.effort = effective.settings.reasoning_effort.clone();
+                notification.thread_settings.collaboration_mode = effective;
+            }
         }
 
         self.apply_thread_settings(notification.thread_settings);
@@ -668,6 +679,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_collaboration_mask_from_user_action(&mut self, mask: CollaborationModeMask) {
+        self.pending_user_collaboration_mode = mask.mode;
         self.set_collaboration_mask(mask);
         self.submit_collaboration_mode_settings_update();
     }
