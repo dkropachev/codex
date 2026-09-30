@@ -3,6 +3,7 @@ use std::sync::atomic::AtomicBool;
 mod dependencies;
 mod fetch;
 mod git_command;
+mod jsonc;
 mod release;
 mod source;
 
