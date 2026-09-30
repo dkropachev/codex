@@ -1,6 +1,7 @@
 use std::process::Command;
 
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::permissions::FileSystemPath;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::LocalProcessCommand;
@@ -10,6 +11,8 @@ use crate::SandboxDirectSpawnRuntime;
 use crate::SandboxManager;
 use crate::SandboxType;
 use crate::SandboxablePreference;
+use crate::get_platform_sandbox;
+use crate::prepare_sandbox_command;
 use crate::prepare_unrestricted_command;
 
 /// Trusted host-local paths and platform settings used to prepare a sandboxed command.
@@ -75,9 +78,9 @@ pub fn prepare_local_sandbox_command(
         command,
         selection,
         policy,
-        sandbox_policy_cwd: _,
-        workspace_roots: _,
-        runtime: _,
+        sandbox_policy_cwd,
+        workspace_roots,
+        runtime,
     } = request;
     let LocalSandboxSelection::Selected {
         sandbox,
@@ -89,6 +92,45 @@ pub fn prepare_local_sandbox_command(
         ));
     };
     if sandbox != SandboxType::None {
+        if get_platform_sandbox(runtime.windows_sandbox_level != WindowsSandboxLevel::Disabled)
+            != Some(sandbox)
+        {
+            return Ok(LocalSandboxPreparation::Unavailable(
+                LocalSandboxUnavailableReason::PlatformPreparation,
+            ));
+        }
+        if sandbox == SandboxType::LinuxSeccomp && runtime.linux_sandbox_executable.is_none() {
+            return Ok(LocalSandboxPreparation::Unavailable(
+                LocalSandboxUnavailableReason::MissingLinuxSandboxExecutable,
+            ));
+        }
+        if sandbox == SandboxType::WindowsRestrictedToken
+            && runtime
+                .direct_spawn
+                .windows_sandbox_wrapper_executable
+                .is_none()
+        {
+            return Ok(LocalSandboxPreparation::Unavailable(
+                LocalSandboxUnavailableReason::MissingWindowsSandboxWrapper,
+            ));
+        }
+        if let Some(input) = unrepresentable_path(
+            &permissions,
+            sandbox_policy_cwd,
+            workspace_roots,
+            &runtime,
+            &command.cwd,
+            sandbox,
+        ) {
+            return Ok(LocalSandboxPreparation::Unavailable(
+                LocalSandboxUnavailableReason::UnrepresentableInput(input),
+            ));
+        }
+        if let Err(error) = prepare_sandbox_command(command) {
+            return Ok(LocalSandboxPreparation::Unavailable(
+                LocalSandboxUnavailableReason::UnrepresentableInput(error.input()),
+            ));
+        }
         return Ok(LocalSandboxPreparation::Unavailable(
             LocalSandboxUnavailableReason::PlatformPreparation,
         ));
@@ -112,6 +154,94 @@ pub fn prepare_local_sandbox_command(
             sandbox,
         },
     ))
+}
+
+fn unrepresentable_path(
+    permissions: &codex_protocol::models::PermissionProfile,
+    sandbox_policy_cwd: &AbsolutePathBuf,
+    workspace_roots: &[AbsolutePathBuf],
+    runtime: &LocalSandboxRuntime<'_>,
+    command_cwd: &AbsolutePathBuf,
+    sandbox: SandboxType,
+) -> Option<&'static str> {
+    let valid = |path: &AbsolutePathBuf| {
+        path.as_path()
+            .to_str()
+            .is_some_and(|path| !path.contains('\0'))
+    };
+    for (label, path) in [
+        ("command cwd", command_cwd),
+        ("sandbox policy cwd", sandbox_policy_cwd),
+    ] {
+        if !valid(path) {
+            return Some(label);
+        }
+    }
+    let file_system_policy = permissions.file_system_sandbox_policy();
+    for entry in &file_system_policy.entries {
+        match &entry.path {
+            FileSystemPath::Path { path }
+                if path
+                    .to_abs_path()
+                    .ok()
+                    .as_ref()
+                    .is_none_or(|path| !valid(path)) =>
+            {
+                return Some("permission path");
+            }
+            FileSystemPath::GlobPattern { pattern } if pattern.contains('\0') => {
+                return Some("permission glob");
+            }
+            FileSystemPath::Path { .. }
+            | FileSystemPath::GlobPattern { .. }
+            | FileSystemPath::Special { .. } => {}
+        }
+    }
+    for (label, paths) in [
+        (
+            "resolved readable root",
+            file_system_policy.get_readable_roots_with_cwd(sandbox_policy_cwd.as_path()),
+        ),
+        (
+            "resolved unreadable root",
+            file_system_policy.get_unreadable_roots_with_cwd(sandbox_policy_cwd.as_path()),
+        ),
+    ] {
+        if paths.iter().any(|path| !valid(path)) {
+            return Some(label);
+        }
+    }
+    for writable in file_system_policy.get_writable_roots_with_cwd(sandbox_policy_cwd.as_path()) {
+        if !valid(&writable.root) {
+            return Some("resolved writable root");
+        }
+        if writable.read_only_subpaths.iter().any(|path| !valid(path)) {
+            return Some("resolved writable carveout");
+        }
+    }
+    if sandbox == SandboxType::LinuxSeccomp
+        && runtime
+            .linux_sandbox_executable
+            .is_some_and(|path| !valid(path))
+    {
+        return Some("Linux sandbox executable");
+    }
+    if sandbox == SandboxType::WindowsRestrictedToken {
+        if !valid(runtime.direct_spawn.codex_home) {
+            return Some("Codex home");
+        }
+        if runtime
+            .direct_spawn
+            .windows_sandbox_wrapper_executable
+            .is_some_and(|path| !valid(path))
+        {
+            return Some("Windows sandbox wrapper");
+        }
+        if workspace_roots.iter().any(|path| !valid(path)) {
+            return Some("workspace root");
+        }
+    }
+    None
 }
 
 #[cfg(test)]
