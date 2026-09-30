@@ -134,6 +134,7 @@ fn accepts_root_normalized_local_resolutions_and_relative_metadata() {
             "workspaces": {"": {"dependencies": {"a": "file:vendor/a"}}},
             "packages": {
                 "a": ["a@file:vendor/a", {"dependencies": {"b": "file:../b"}}],
+                "alias": ["a@file:vendor/a", {"dependencies": {"b": "file:../b"}}],
                 "b": ["b@file:vendor/b", {}]
             }
         }))
