@@ -37,7 +37,7 @@ impl Package {
 }
 
 #[test]
-fn accepts_public_registry_grammar_and_nested_overrides() {
+fn accepts_public_registry_grammar_and_flat_overrides() {
     let empty = Package::new(serde_json::json!({"name": "test"}));
     assert_eq!(
         empty.validate().expect("dependency-free package"),
@@ -51,7 +51,7 @@ fn accepts_public_registry_grammar_and_nested_overrides() {
         "devDependencies": {"alias": "npm:@scope/package@1.2.x"},
         "optionalDependencies": {"optional": "*"},
         "peerDependencies": {"peer": ">=1.0.0 <3"},
-        "overrides": {"plain": {".": "2.0.0", "child": "~1.0.0"}},
+        "overrides": {"plain": "2.0.0", "child": "~1.0.0"},
         "resolutions": {"peer": "1.5.0"}
     }));
     assert_eq!(
@@ -227,6 +227,8 @@ fn rejects_malformed_dependency_and_override_shapes() {
         serde_json::json!({"devDependencies": {"bad": 1}}),
         serde_json::json!({"optionalDependencies": null}),
         serde_json::json!({"overrides": {"bad": 1}}),
+        serde_json::json!({"overrides": {"bad": {"child": "1.0.0"}}}),
+        serde_json::json!({"overrides": {"bad@1.x": "2.0.0"}}),
         serde_json::json!({"resolutions": ["1.0.0"]}),
     ] {
         let package = Package::new(package_json.clone());

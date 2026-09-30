@@ -12,7 +12,7 @@ use super::DEPENDENCY_SECTIONS;
 use super::ValidatedDependencySources;
 use super::resolve_local_path;
 use super::valid_package_name;
-use super::validate_override_tree;
+use super::validate_override_map;
 use super::validate_specifier;
 
 const MAX_BUN_LOCK_BYTES: u64 = 8 * 1024 * 1024;
@@ -115,7 +115,7 @@ fn validate_text_lock(
         }
     }
     if let Some(overrides) = object.get("overrides") {
-        validate_override_tree("overrides", overrides)?;
+        validate_override_map("overrides", overrides)?;
     }
     let allowed_local = sources
         .local_packages

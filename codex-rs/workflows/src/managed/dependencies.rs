@@ -100,7 +100,7 @@ pub(in crate::managed) fn validate_managed_dependency_sources(
         }
         for section in ["overrides", "resolutions"] {
             if let Some(value) = object.get(section) {
-                validate_override_tree(section, value)?;
+                validate_override_map(section, value)?;
             }
         }
     }
@@ -131,17 +131,20 @@ fn reject_unsupported_package_features(
     Ok(())
 }
 
-fn validate_override_tree(name: &str, value: &serde_json::Value) -> anyhow::Result<()> {
-    match value {
-        serde_json::Value::String(specifier) => validate_registry_specifier(name, specifier),
-        serde_json::Value::Object(values) => {
-            for (name, value) in values {
-                validate_override_tree(name, value)?;
-            }
-            Ok(())
+fn validate_override_map(field: &str, value: &serde_json::Value) -> anyhow::Result<()> {
+    let values = value
+        .as_object()
+        .with_context(|| format!("managed workflow `{field}` must be an object"))?;
+    for (name, value) in values {
+        if !valid_package_name(name) {
+            bail!("managed workflow override package `{name}` is invalid");
         }
-        _ => bail!("managed workflow override `{name}` must contain registry specifiers"),
+        let specifier = value.as_str().with_context(|| {
+            format!("managed workflow override `{name}` must use a registry specifier")
+        })?;
+        validate_registry_specifier(name, specifier)?;
     }
+    Ok(())
 }
 
 fn validate_specifier(base: &Path, name: &str, specifier: &str) -> anyhow::Result<Option<PathBuf>> {
