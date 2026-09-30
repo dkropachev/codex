@@ -163,7 +163,13 @@ fn rejects_non_registry_and_unsafe_local_specifiers() {
 
 #[test]
 fn rejects_unsupported_features_and_nested_local_escape() {
-    for field in ["workspaces", "catalog", "catalogs", "patchedDependencies"] {
+    for field in [
+        "workspaces",
+        "catalog",
+        "catalogs",
+        "patchedDependencies",
+        "trustedDependencies",
+    ] {
         let package = Package::new(serde_json::json!({(field): {"x": "1.0.0"}}));
         assert!(package.validate().unwrap_err().to_string().contains(field));
     }

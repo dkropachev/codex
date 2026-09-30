@@ -6,6 +6,10 @@ use std::path::PathBuf;
 use anyhow::Context;
 use anyhow::bail;
 
+mod lockfile;
+
+pub(in crate::managed) use lockfile::ManagedBunLockfile;
+
 const DEPENDENCY_SECTIONS: [&str; 4] = [
     "dependencies",
     "devDependencies",
@@ -15,13 +19,25 @@ const DEPENDENCY_SECTIONS: [&str; 4] = [
 const MAX_LOCAL_PACKAGES: usize = 128;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[allow(dead_code, reason = "used by managed dependency installation")]
 pub(in crate::managed) struct ValidatedDependencySources {
     pub(in crate::managed) has_dependencies: bool,
     pub(in crate::managed) local_packages: Vec<PathBuf>,
 }
 
-#[allow(dead_code, reason = "used by managed dependency installation")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::managed) struct ValidatedManagedDependencies {
+    pub(in crate::managed) sources: ValidatedDependencySources,
+    pub(in crate::managed) lockfile: ManagedBunLockfile,
+}
+
+pub(in crate::managed) fn validate_managed_dependencies(
+    package: &crate::WorkflowPackage,
+) -> anyhow::Result<ValidatedManagedDependencies> {
+    let sources = validate_managed_dependency_sources(package)?;
+    let lockfile = lockfile::validate(package, &sources)?;
+    Ok(ValidatedManagedDependencies { sources, lockfile })
+}
+
 pub(in crate::managed) fn validate_managed_dependency_sources(
     package: &crate::WorkflowPackage,
 ) -> anyhow::Result<ValidatedDependencySources> {
@@ -101,7 +117,13 @@ pub(in crate::managed) fn validate_managed_dependency_sources(
 fn reject_unsupported_package_features(
     object: &serde_json::Map<String, serde_json::Value>,
 ) -> anyhow::Result<()> {
-    for field in ["workspaces", "catalog", "catalogs", "patchedDependencies"] {
+    for field in [
+        "workspaces",
+        "catalog",
+        "catalogs",
+        "patchedDependencies",
+        "trustedDependencies",
+    ] {
         if object.get(field).is_some_and(|value| !value.is_null()) {
             bail!("managed workflow package field `{field}` is unsupported");
         }
