@@ -689,15 +689,37 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_collaboration_mask_from_user_action(&mut self, mask: CollaborationModeMask) {
+        let previous_mode = self.effective_collaboration_mode();
         self.set_collaboration_mask(mask);
         self.pending_user_collaboration_mode = self.thread_id.map(|thread_id| {
             PendingCollaborationModeSelection {
                 thread_id,
                 mode: self.effective_collaboration_mode(),
+                previous_mode,
                 expires_at: Instant::now() + COLLABORATION_MODE_ACK_TIMEOUT,
             }
         });
         self.submit_collaboration_mode_settings_update();
+    }
+
+    pub(crate) fn on_collaboration_mode_settings_update_result(
+        &mut self,
+        thread_id: ThreadId,
+        requested_mode: &CollaborationMode,
+        updated: bool,
+    ) {
+        if updated {
+            return;
+        }
+        let Some(pending) = self.pending_user_collaboration_mode.as_ref() else {
+            return;
+        };
+        if pending.thread_id != thread_id || &pending.mode != requested_mode {
+            return;
+        }
+        let previous_mode = pending.previous_mode.clone();
+        self.pending_user_collaboration_mode = None;
+        self.set_effective_collaboration_mode(previous_mode);
     }
 
     /// Update the active collaboration mask.

@@ -530,6 +530,32 @@ async fn pending_collaboration_mode_is_scoped_to_one_notification_and_thread() {
 }
 
 #[tokio::test]
+async fn rejected_collaboration_mode_update_reverts_latest_selection() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+    let initial = chat.effective_collaboration_mode();
+    let workflow_mask = collaboration_modes::mask_for_kind_with_config(
+        chat.model_catalog.as_ref(),
+        ModeKind::Workflow,
+        chat.collaboration_modes_config(),
+    )
+    .expect("workflow mode");
+    chat.set_collaboration_mask_from_user_action(workflow_mask);
+    let requested = chat.effective_collaboration_mode();
+
+    chat.on_collaboration_mode_settings_update_result(
+        thread_id,
+        &requested,
+        /*updated*/ false,
+    );
+
+    assert!(chat.pending_user_collaboration_mode.is_none());
+    assert_eq!(chat.effective_collaboration_mode(), initial);
+}
+
+#[tokio::test]
 async fn collab_spawn_end_shows_requested_model_and_effort() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     let sender_thread_id = ThreadId::new();

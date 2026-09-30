@@ -183,7 +183,16 @@ impl App {
             personality: *personality,
             ..ThreadSettingsUpdateParams::default()
         };
-        self.send_thread_settings_update(app_server, params).await;
+        let requested_mode = params.collaboration_mode.clone();
+        let updated = self.send_thread_settings_update(app_server, params).await;
+        if let Some(requested_mode) = requested_mode {
+            self.chat_widget
+                .on_collaboration_mode_settings_update_result(
+                    thread_id,
+                    &requested_mode,
+                    updated,
+                );
+        }
     }
 
     pub(super) async fn apply_thread_settings_to_cached_session(
