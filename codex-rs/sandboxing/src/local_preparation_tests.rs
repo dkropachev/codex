@@ -189,17 +189,6 @@ fn sandbox_preflight_rejects_non_unicode_paths() {
         assert_unrepresentable(preflight, expected);
     }
 
-    let mut preflight = request(
-        &root,
-        selected(
-            sandbox,
-            permissions(invalid.clone().into(), FileSystemAccessMode::Read),
-        ),
-        LocalSandboxLaunchPolicy::Required,
-    );
-    preflight.runtime.linux_sandbox_executable = Some(&helper);
-    assert_unrepresentable(preflight, "permission path");
-
     #[cfg(target_os = "linux")]
     {
         let mut preflight = request(
@@ -210,6 +199,17 @@ fn sandbox_preflight_rejects_non_unicode_paths() {
         preflight.runtime.linux_sandbox_executable = Some(&invalid);
         assert_unrepresentable(preflight, "Linux sandbox executable");
     }
+
+    let mut preflight = request(
+        &root,
+        selected(
+            sandbox,
+            permissions(invalid.into(), FileSystemAccessMode::Read),
+        ),
+        LocalSandboxLaunchPolicy::Required,
+    );
+    preflight.runtime.linux_sandbox_executable = Some(&helper);
+    assert_unrepresentable(preflight, "permission path");
 
     let mut preflight = request(
         &root,
