@@ -136,8 +136,8 @@ fn accepts_root_normalized_local_resolutions_and_relative_metadata() {
             "lockfileVersion": 1,
             "workspaces": {"": {"dependencies": {"a": "file:vendor/a"}}},
             "packages": {
-                "a": ["a@file:vendor/a", local_metadata.clone()],
-                "alias": ["a@file:vendor/a", local_metadata.clone()],
+                "a": ["a@file:vendor/a", local_metadata],
+                "alias": ["a@file:vendor/a", local_metadata],
                 "b": ["b@file:vendor/b", {}]
             }
         }))
