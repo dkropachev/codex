@@ -116,6 +116,23 @@ fn selection_rejects_required_linux_sandbox_that_would_apply_no_restrictions() {
             permissions: network_restricted,
         }
     );
+
+    let filesystem_restricted = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::read_only(),
+        NetworkSandboxPolicy::Enabled,
+    );
+    assert_eq!(
+        select_local_sandbox_for_platform(
+            &filesystem_restricted,
+            std::slice::from_ref(&root),
+            LocalSandboxLaunchPolicy::Required,
+            Some(SandboxType::LinuxSeccomp),
+        ),
+        LocalSandboxSelection::Selected {
+            sandbox: SandboxType::LinuxSeccomp,
+            permissions: filesystem_restricted,
+        }
+    );
 }
 
 #[test]
