@@ -23,6 +23,13 @@ fn fixture() -> (tempfile::TempDir, AbsolutePathBuf, ManagedBunEnvironment) {
     (temporary, root, environment)
 }
 
+fn sources(local_packages: &[&str]) -> ValidatedDependencySources {
+    ValidatedDependencySources {
+        has_dependencies: true,
+        local_packages: local_packages.iter().copied().map(Into::into).collect(),
+    }
+}
+
 #[test]
 fn materializes_private_configuration_and_isolated_directories() {
     let (_temporary, root, environment) = fixture();
@@ -89,10 +96,7 @@ fn command_plan_keeps_private_environment_alive() {
         &root.join("tools/bun"),
         &candidate,
         ManagedBunInstallLockfile::Text,
-        &ValidatedDependencySources {
-            has_dependencies: true,
-            local_packages: Vec::new(),
-        },
+        &sources(&[]),
         &environment,
     )
     .expect("install plan");
@@ -116,10 +120,7 @@ fn rejects_overlapping_management_and_candidate_paths() {
                 &bun,
                 &candidate,
                 ManagedBunInstallLockfile::Text,
-                &ValidatedDependencySources {
-                    has_dependencies: true,
-                    local_packages: Vec::new(),
-                },
+                &sources(&[]),
                 &environment,
             )
             .is_err()
@@ -132,10 +133,7 @@ fn rejects_overlapping_management_and_candidate_paths() {
         &root.join("tools/bun"),
         &candidate,
         ManagedBunInstallLockfile::Text,
-        &ValidatedDependencySources {
-            has_dependencies: true,
-            local_packages: Vec::new(),
-        },
+        &sources(&[]),
         &environment,
     )
     .expect("allow disjoint candidate beneath management root");
@@ -152,10 +150,7 @@ fn plans_install_and_inspection_with_exact_argv_environment_and_permissions() {
         &bun,
         &candidate,
         ManagedBunInstallLockfile::Text,
-        &ValidatedDependencySources {
-            has_dependencies: true,
-            local_packages: vec!["vendor/local".into()],
-        },
+        &sources(&["vendor/local"]),
         &environment,
     )
     .expect("install plan");
@@ -257,10 +252,7 @@ fn binary_install_protects_the_binary_lockfile() {
         &root.join("tools/bun"),
         &candidate,
         ManagedBunInstallLockfile::Binary,
-        &ValidatedDependencySources {
-            has_dependencies: true,
-            local_packages: Vec::new(),
-        },
+        &sources(&[]),
         &environment,
     )
     .expect("binary install plan");
@@ -282,10 +274,7 @@ fn required_sandbox_preparation_never_falls_back_to_unrestricted() {
         &root.join("tools/bun"),
         &candidate,
         ManagedBunInstallLockfile::Text,
-        &ValidatedDependencySources {
-            has_dependencies: true,
-            local_packages: Vec::new(),
-        },
+        &sources(&[]),
         &environment,
     )
     .expect("install plan");
