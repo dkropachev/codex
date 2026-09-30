@@ -160,7 +160,7 @@ impl WorkflowGitSource {
             None => (None, authority),
         };
         ensure!(
-            !user.is_some_and(|user| !valid_user(user)) && valid_host(host),
+            user.is_none_or(valid_user) && valid_host(host),
             INVALID_SOURCE
         );
         Ok(Self(WorkflowGitSourceKind::Ssh(source.to_string())))

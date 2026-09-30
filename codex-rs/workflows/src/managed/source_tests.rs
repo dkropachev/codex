@@ -12,7 +12,7 @@ fn parses_existing_local_path_and_file_url() {
 
     assert_eq!(
         WorkflowGitSource::parse(&format!("  {}  ", temp.path().display())).expect("local source"),
-        local.clone()
+        local
     );
     let file_url = Url::from_directory_path(temp.path()).expect("file URL");
     assert_eq!(
