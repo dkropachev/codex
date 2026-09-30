@@ -36,11 +36,25 @@ fn ls_remote_command_is_exact_and_noninteractive() {
         .filter_map(|args| (args[0] == "-c").then_some(args[1].as_str()))
         .collect::<Vec<_>>();
     let hooks = format!("core.hooksPath={DISABLED_GIT_CONFIG_PATH}");
-    assert_eq!(configurations.len(), GIT_CONFIG.len() + 1);
-    assert_eq!(&configurations[..GIT_CONFIG.len()], GIT_CONFIG);
     assert_eq!(
-        configurations.get(GIT_CONFIG.len()).copied(),
-        Some(hooks.as_str())
+        configurations,
+        [
+            "safe.bareRepository=explicit",
+            "core.fsmonitor=false",
+            "credential.helper=",
+            "credential.interactive=never",
+            "fetch.fsckObjects=true",
+            "fetch.writeCommitGraph=false",
+            "core.askPass=",
+            "http.followRedirects=false",
+            "protocol.allow=never",
+            "protocol.file.allow=always",
+            "protocol.https.allow=always",
+            "protocol.ssh.allow=always",
+            "submodule.recurse=false",
+            "transfer.fsckObjects=true",
+            hooks.as_str(),
+        ]
     );
     let environment = command.get_envs().collect::<BTreeMap<_, _>>();
     let env = |name| {
