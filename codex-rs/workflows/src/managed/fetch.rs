@@ -13,7 +13,10 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use super::ResolvedWorkflowRelease;
 use super::WorkflowGitSource;
 
+mod checkout;
 mod tree;
+
+pub(super) use checkout::StagedWorkflowRelease;
 
 const RELEASE_REF: &str = "refs/codex/workflow-release";
 const SOURCE_REMOTE: &str = "codex-workflow-source";
@@ -24,6 +27,7 @@ struct VerificationLimits {
     blob_bytes: u64,
     object_entries: usize,
     object_bytes: u64,
+    worktree_entries: usize,
     staging_entries: usize,
     staging_bytes: u64,
 }
@@ -32,30 +36,37 @@ const VERIFICATION_LIMITS: VerificationLimits = VerificationLimits {
     blob_bytes: 128 * 1024 * 1024,
     object_entries: 16_384, // Keeps `cat-file` metadata below the 1 MiB output cap.
     object_bytes: 256 * 1024 * 1024,
+    worktree_entries: 8_192,
     staging_entries: 200_000,
     staging_bytes: 256 * 1024 * 1024,
 };
 #[allow(dead_code, reason = "used by the managed installation stage")]
 pub(super) struct FetchedWorkflowRelease {
-    _temporary: tempfile::TempDir,
+    temporary: tempfile::TempDir,
     pub(super) repository: AbsolutePathBuf,
     pub(super) release: ResolvedWorkflowRelease,
 }
 
 #[allow(dead_code, reason = "used by the managed installation stage")]
-pub(super) fn fetch_resolved_workflow_release_cancellable(
+pub(super) fn stage_resolved_workflow_release_cancellable(
     staging_root: &AbsolutePathBuf,
     source: &WorkflowGitSource,
     release: &ResolvedWorkflowRelease,
     cancelled: &AtomicBool,
-) -> anyhow::Result<FetchedWorkflowRelease> {
-    fetch_with_options(
+) -> anyhow::Result<StagedWorkflowRelease> {
+    let fetched = fetch_with_options(
         OsStr::new("git"),
         staging_root,
         source,
         release,
         Some(cancelled),
         VERIFICATION_LIMITS,
+    )?;
+    checkout::checkout_fetched_release(
+        OsStr::new("git"),
+        fetched,
+        VERIFICATION_LIMITS,
+        Some(cancelled),
     )
 }
 
@@ -151,7 +162,7 @@ fn fetch_with_options(
     ensure_not_cancelled(cancelled)?;
 
     Ok(FetchedWorkflowRelease {
-        _temporary: temporary,
+        temporary,
         repository: AbsolutePathBuf::from_absolute_path_checked(repository)
             .context("workflow Git staging path was not absolute")?,
         release: release.clone(),
