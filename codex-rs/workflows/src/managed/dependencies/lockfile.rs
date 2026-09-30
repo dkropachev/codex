@@ -179,7 +179,7 @@ fn validate_text_lock(
                 tuple[3].as_str().with_context(|| {
                     format!("bun.lock registry package `{key}` has invalid integrity metadata")
                 })?;
-                validate_tuple_metadata(key, metadata, None, &allowed_local)?;
+                validate_tuple_metadata(key, metadata, /*local_base*/ None, &allowed_local)?;
             }
             PackageResolution::Local(path) => {
                 if tuple.len() != 2 {
