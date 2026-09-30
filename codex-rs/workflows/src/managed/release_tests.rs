@@ -118,7 +118,7 @@ fn validates_release_identities_before_fetch() {
     for release in [
         resolved(Some("v1.2.3"), FIRST),
         resolved(Some("1.2.3+build.7"), FIRST),
-        resolved(None, sha256),
+        resolved(/*tag*/ None, sha256),
     ] {
         assert_eq!(
             release
