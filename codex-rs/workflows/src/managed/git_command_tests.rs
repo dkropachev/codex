@@ -191,13 +191,21 @@ fn resolution_reports_bounded_command_failures_without_stderr_secrets() {
         .expect("parse workflow source");
 
     let missing = directory.path().join("missing-git");
-    let error = resolve_workflow_git_release_with_git(missing.as_os_str(), &source, None)
-        .expect_err("missing Git should fail");
+    let error = resolve_workflow_git_release_with_git(
+        missing.as_os_str(),
+        &source,
+        /*cancelled*/ None,
+    )
+    .expect_err("missing Git should fail");
     assert!(format!("{error:#}").contains("could not start or complete"));
 
     write_executable(&fake_git, "echo 'server-secret' >&2; exit 7");
-    let error = resolve_workflow_git_release_with_git(fake_git.as_os_str(), &source, None)
-        .expect_err("failed Git should fail resolution");
+    let error = resolve_workflow_git_release_with_git(
+        fake_git.as_os_str(),
+        &source,
+        /*cancelled*/ None,
+    )
+    .expect_err("failed Git should fail resolution");
     assert_eq!(
         error.to_string(),
         "Git release check failed with exit status 7"
@@ -205,8 +213,12 @@ fn resolution_reports_bounded_command_failures_without_stderr_secrets() {
     assert!(!error.to_string().contains("server-secret"));
 
     write_executable(&fake_git, "printf '\\377'");
-    let error = resolve_workflow_git_release_with_git(fake_git.as_os_str(), &source, None)
-        .expect_err("non-UTF-8 Git output should fail");
+    let error = resolve_workflow_git_release_with_git(
+        fake_git.as_os_str(),
+        &source,
+        /*cancelled*/ None,
+    )
+    .expect_err("non-UTF-8 Git output should fail");
     assert!(error.to_string().contains("non-UTF-8 release metadata"));
 }
 
