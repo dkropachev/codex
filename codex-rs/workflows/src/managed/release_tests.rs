@@ -95,6 +95,18 @@ fn rejects_invalid_listings() {
         format!("{HEAD}\trefs/tags/.hidden\n"),
         format!("{HEAD}\trefs/tags/bad..tag\n"),
         format!("{HEAD}\trefs/tags/v1.0.0^{{}}^{{}}\n"),
+        format!("{HEAD}\trefs/tags/trailing.\n"),
+        format!("{HEAD}\trefs/tags/bad@{{name\n"),
+        format!("{HEAD}\trefs/tags/dir//name\n"),
+        format!("{HEAD}\trefs/tags/dir/.hidden/name\n"),
+        format!("{HEAD}\trefs/tags/dir/name.lock\n"),
+        format!("{HEAD}\trefs/tags/bad\u{1}name\n"),
+        format!("{HEAD}\trefs/tags/bad~name\n"),
+        format!("{HEAD}\trefs/tags/bad:name\n"),
+        format!("{HEAD}\trefs/tags/bad?name\n"),
+        format!("{HEAD}\trefs/tags/bad*name\n"),
+        format!("{HEAD}\trefs/tags/bad[name\n"),
+        format!("{HEAD}\trefs/tags/bad\\name\n"),
     ] {
         assert!(resolve_workflow_release(&output).is_err(), "{output}");
     }

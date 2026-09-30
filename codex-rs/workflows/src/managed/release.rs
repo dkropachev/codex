@@ -59,14 +59,14 @@ pub(crate) fn resolve_workflow_release(output: &str) -> anyhow::Result<ResolvedW
             ),
         };
         if !valid_tag_name(tag) {
-            bail!("malformed tag ref `{reference}`");
+            bail!("Git returned a malformed tag reference");
         }
         record_oid(field, oid, reference)?;
     }
 
-    for (tag, oids) in &tags {
+    for oids in tags.values() {
         if oids.peeled.is_some() && oids.direct.is_none() {
-            bail!("peeled tag `{tag}` has no direct record");
+            bail!("Git returned a peeled tag without its direct reference");
         }
     }
 
@@ -112,11 +112,11 @@ pub(crate) fn resolve_workflow_release(output: &str) -> anyhow::Result<ResolvedW
     })
 }
 
-fn record_oid(slot: &mut Option<String>, oid: &str, reference: &str) -> anyhow::Result<()> {
+fn record_oid(slot: &mut Option<String>, oid: &str, _reference: &str) -> anyhow::Result<()> {
     if let Some(previous) = slot
         && previous != oid
     {
-        bail!("conflicting records for `{reference}`");
+        bail!("Git returned conflicting object IDs for one reference");
     }
     *slot = Some(oid.to_owned());
     Ok(())

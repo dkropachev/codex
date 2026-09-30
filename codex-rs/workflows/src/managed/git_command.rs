@@ -42,30 +42,38 @@ fn resolve_workflow_git_release_with_git(
     source: &WorkflowGitSource,
     cancelled: Option<&AtomicBool>,
 ) -> anyhow::Result<ResolvedWorkflowRelease> {
+    resolve_workflow_git_release_with_options(
+        git,
+        source,
+        cancelled,
+        GIT_COMMAND_TIMEOUT,
+        MAX_GIT_OUTPUT_BYTES,
+    )
+}
+
+fn resolve_workflow_git_release_with_options(
+    git: &OsStr,
+    source: &WorkflowGitSource,
+    cancelled: Option<&AtomicBool>,
+    timeout: Duration,
+    maximum_stdout_bytes: usize,
+) -> anyhow::Result<ResolvedWorkflowRelease> {
     if cancelled.is_some_and(|cancelled| cancelled.load(std::sync::atomic::Ordering::Relaxed)) {
         bail!("workflow release check was cancelled");
     }
     let working_directory = tempfile::tempdir().context("failed to isolate Git release check")?;
     let command = ls_remote_command(git, source.as_os_str(), working_directory.path());
-    let (status, stdout, stderr, stdout_oversized) = crate::runner::run_bounded_command(
-        command,
-        GIT_COMMAND_TIMEOUT,
-        MAX_GIT_OUTPUT_BYTES,
-        cancelled,
-    )
-    .context("Git release check could not start or complete")?;
+    let (status, stdout, _stderr, stdout_oversized) =
+        crate::runner::run_bounded_command(command, timeout, maximum_stdout_bytes, cancelled)
+            .context("Git release check could not start or complete")?;
     if stdout_oversized {
-        bail!("Git release metadata exceeded {MAX_GIT_OUTPUT_BYTES} bytes");
+        bail!("Git release metadata exceeded {maximum_stdout_bytes} bytes");
     }
     if !status.success() {
         let status = status
             .code()
             .map_or_else(|| "terminated".to_string(), |code| code.to_string());
-        let details = String::from_utf8_lossy(&stderr);
-        bail!(
-            "Git release check failed with exit status {status}: {}",
-            details.trim()
-        );
+        bail!("Git release check failed with exit status {status}");
     }
     let output = std::str::from_utf8(&stdout).context("Git returned non-UTF-8 release metadata")?;
     super::release::resolve_workflow_release(output)
@@ -82,11 +90,7 @@ fn ls_remote_command(git: &OsStr, source: &OsStr, working_directory: &Path) -> C
         .args(["ls-remote", "--"])
         .arg(source)
         .args(["HEAD", "refs/tags/*"]);
-    for (name, _) in std::env::vars_os() {
-        if is_git_environment_variable(&name) {
-            command.env_remove(name);
-        }
-    }
+    remove_git_environment_variables(&mut command, std::env::vars_os().map(|(name, _)| name));
     command
         .current_dir(working_directory)
         .env("GIT_ATTR_NOSYSTEM", "1")
@@ -110,6 +114,17 @@ fn is_git_environment_variable(name: &OsStr) -> bool {
         let name = name.to_ascii_uppercase();
         name.starts_with("GIT_") || name.starts_with("SSH_ASKPASS")
     })
+}
+
+fn remove_git_environment_variables(
+    command: &mut Command,
+    names: impl IntoIterator<Item = impl AsRef<OsStr>>,
+) {
+    for name in names {
+        if is_git_environment_variable(name.as_ref()) {
+            command.env_remove(name.as_ref());
+        }
+    }
 }
 
 #[cfg(test)]
