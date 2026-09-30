@@ -218,6 +218,17 @@ fn rejects_changed_and_non_commit_selected_refs() {
         VERIFICATION_LIMITS,
         "commit inspection failed",
     );
+
+    let mutable = Repository::new("sha1");
+    fs::create_dir(mutable.root().join("state")).expect("create state directory");
+    fs::write(mutable.root().join("state/session"), "runtime\n").expect("write runtime file");
+    git(mutable.root(), ["add", "state/session"]);
+    git(
+        mutable.root(),
+        ["commit", "--no-gpg-sign", "-qm", "runtime"],
+    );
+    let release = mutable.resolve();
+    assert_error(&mutable, &release, VERIFICATION_LIMITS, "runtime path");
 }
 
 #[test]

@@ -13,6 +13,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use super::ResolvedWorkflowRelease;
 use super::WorkflowGitSource;
 
+mod tree;
+
 const RELEASE_REF: &str = "refs/codex/workflow-release";
 const SOURCE_REMOTE: &str = "codex-workflow-source";
 const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
@@ -144,6 +146,7 @@ fn fetch_with_options(
         limits,
         cancelled,
     )?;
+    tree::verify_tracked_tree(git, temporary.path(), &repository, commit, cancelled)?;
     inspect_staging(temporary.path(), limits, cancelled)?;
     ensure_not_cancelled(cancelled)?;
 
