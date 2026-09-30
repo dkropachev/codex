@@ -820,10 +820,7 @@ async fn mcp_tool_call_output_custom_limit_respects_context_cap() -> Result<()> 
         config.tool_output_token_limit = Some(50_000);
     });
     let (_fixture, output) = call_mcp_echo(
-        &server,
-        builder,
-        /*output_token_limit*/ None,
-        /*message_bytes*/ 80_000,
+        &server, builder, /*output_token_limit*/ None, /*message_bytes*/ 80_000,
     )
     .await?;
 
