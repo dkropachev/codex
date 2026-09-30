@@ -4,6 +4,7 @@ use anyhow::ensure;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::normalize_windows_device_path;
 use std::ffi::OsStr;
+use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
 use std::path::Path;
 use url::Url;
@@ -41,11 +42,13 @@ impl WorkflowGitSource {
             INVALID_SOURCE
         );
 
-        let windows_drive = matches!(
-            source.as_bytes(),
-            [drive, b':', b'/' | b'\\', ..] if drive.is_ascii_alphabetic()
-        );
+        let windows_drive =
+            matches!(source.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic());
         if windows_drive {
+            ensure!(
+                matches!(source.as_bytes(), [_, _, b'/' | b'\\', ..]),
+                INVALID_SOURCE
+            );
             return canonical_local(Path::new(source))
                 .map(|path| Self(WorkflowGitSourceKind::Local(path)));
         }
@@ -76,9 +79,14 @@ impl WorkflowGitSource {
             !source.chars().any(char::is_whitespace) && !source.contains('\\'),
             INVALID_SOURCE
         );
-        let raw_authority = source
+        let (raw_scheme, location) = source
             .split_once("://")
-            .map_or("", |(_, rest)| rest.split('/').next().unwrap_or_default());
+            .ok_or_else(|| anyhow!(INVALID_SOURCE))?;
+        ensure!(
+            matches!(raw_scheme, "file" | "https" | "ssh"),
+            INVALID_SOURCE
+        );
+        let raw_authority = location.split('/').next().unwrap_or_default();
         let raw_userinfo = raw_authority.contains('@');
         let url = Url::parse(source).map_err(|_| anyhow!(INVALID_SOURCE))?;
         ensure!(
@@ -164,9 +172,16 @@ fn canonical_local(path: &Path) -> Result<AbsolutePathBuf> {
 }
 
 fn is_network_path(path: &str) -> bool {
-    path.starts_with("//")
-        || path.starts_with(r"\\")
-            && normalize_windows_device_path(path).is_none_or(|path| path.starts_with(r"\\"))
+    let two_separators = path
+        .as_bytes()
+        .get(..2)
+        .is_some_and(|pair| pair.iter().all(|byte| matches!(byte, b'/' | b'\\')));
+    two_separators
+        && normalize_windows_device_path(path).is_none_or(|path| {
+            path.as_bytes()
+                .get(..2)
+                .is_some_and(|pair| pair.iter().all(|byte| matches!(byte, b'/' | b'\\')))
+        })
 }
 
 fn valid_user(user: &str) -> bool {
@@ -185,13 +200,26 @@ fn valid_host(host: &str) -> bool {
     {
         return ipv6.parse::<Ipv6Addr>().is_ok();
     }
-    !host.is_empty()
-        && !host.starts_with(['.', '-'])
-        && !host.ends_with(['.', '-'])
-        && !host.contains("..")
+    if host.contains('.')
         && host
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+            .all(|byte| byte.is_ascii_digit() || byte == b'.')
+    {
+        return host.parse::<Ipv4Addr>().is_ok();
+    }
+    host.split('.').all(|label| {
+        label
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+            && label
+                .as_bytes()
+                .last()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    })
 }
 
 #[cfg(test)]

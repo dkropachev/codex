@@ -19,6 +19,8 @@ fn parses_existing_local_path_and_file_url() {
         WorkflowGitSource::parse(file_url.as_str()).expect("file source"),
         local
     );
+    #[cfg(unix)]
+    assert_invalid(&format!("/{}", temp.path().display()));
 }
 
 #[test]
@@ -59,12 +61,17 @@ fn rejects_unsafe_or_malformed_sources_without_disclosing_credentials() {
         "ftp://github.com/openai/codex",
         "git://github.com/openai/codex",
         "https:///openai/codex",
+        "HTTPS://github.com/openai/codex",
+        "SSH://git@github.com/openai/codex",
         "https://github.com/",
         "https://user@github.com/openai/codex",
         "ssh://git:secret@github.com/openai/codex",
         "ssh://@github.com/openai/codex",
         "ssh://-oProxyCommand/openai/codex",
         "ssh://github..com/openai/codex",
+        "ssh://git@foo.-bar.example/openai/codex",
+        "ssh://git@999.999.999.999/openai/codex",
+        "ssh://.git@github.com/openai/codex",
         "ssh://github.com/",
         "ssh://github.com/openai/codex?ref=main",
         "https://github.com/openai/codex#main",
@@ -74,6 +81,8 @@ fn rejects_unsafe_or_malformed_sources_without_disclosing_credentials() {
         "file:///%5C%5Cserver%5Cshare%5Cworkflow",
         r"\\server\share\workflow",
         r"\\?\UNC\server\share\workflow",
+        r"/\server\share\workflow",
+        r"\/server/share/workflow",
         "//server/share/workflow",
         "ext::sh -c exploit",
         "hg::https://github.com/openai/codex",
@@ -82,22 +91,50 @@ fn rejects_unsafe_or_malformed_sources_without_disclosing_credentials() {
         "git:secret@github.com:openai/codex",
         "-oProxyCommand@github.com:openai/codex",
         "git@github..com:openai/codex",
+        "git@foo.-bar.example:openai/codex",
+        "git@999.999.999.999:openai/codex",
+        ".git@github.com:openai/codex",
         "git@github.com:openai/codex?ref=main",
         "git@github.com:openai/codex#main",
         "C:/definitely/missing/workflow/repository",
+        "C:relative",
+        "C:",
     ] {
-        assert!(
-            WorkflowGitSource::parse(input).is_err(),
-            "accepted {input:?}"
-        );
+        assert_invalid(input);
     }
-    assert!(WorkflowGitSource::parse(&"x".repeat(MAX_SOURCE_LEN + 1)).is_err());
+    assert_invalid(&"x".repeat(MAX_SOURCE_LEN + 1));
+    assert_invalid("https://user:do-not-print-this@github.com/openai/codex");
+}
 
-    let secret = "do-not-print-this";
-    let error = WorkflowGitSource::parse(&format!("https://user:{secret}@github.com/openai/codex"))
-        .expect_err("credentials must be rejected")
-        .to_string();
-    assert!(!error.contains(secret));
+#[test]
+fn validates_network_paths_and_host_boundaries() {
+    for path in [
+        r"\\server\share",
+        "//server/share",
+        r"/\server\share",
+        r"\/server/share",
+    ] {
+        assert!(is_network_path(path), "missed network path {path:?}");
+    }
+    for path in [r"C:\repo", r"\\?\C:\repo", "/tmp/repo"] {
+        assert!(!is_network_path(path), "rejected local path {path:?}");
+    }
+    for source in [
+        "ssh://git@127.0.0.1/openai/codex",
+        "git@127.0.0.1:openai/codex",
+        "ssh://git@[::1]/openai/codex",
+        "git@foo-bar.example:openai/codex",
+        "user.name+ci@github.com:openai/codex",
+    ] {
+        WorkflowGitSource::parse(source).expect("valid host or username");
+    }
+}
+
+fn assert_invalid(source: &str) {
+    let Err(error) = WorkflowGitSource::parse(source) else {
+        panic!("accepted invalid source {source:?}");
+    };
+    assert_eq!(error.to_string(), INVALID_SOURCE);
 }
 
 #[cfg(windows)]
