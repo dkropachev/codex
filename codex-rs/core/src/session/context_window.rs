@@ -56,6 +56,20 @@ pub(crate) async fn context_window_token_status_for_step(
     .await
 }
 
+pub(crate) async fn context_window_token_status_for_model(
+    sess: &Session,
+    config: &Config,
+    turn_context: &TurnContext,
+    model_info: &ModelInfo,
+) -> ContextWindowTokenStatus {
+    let token_budget = super::token_budget::resolve_token_budget(
+        turn_context.configured_token_budget.as_ref(),
+        turn_context.use_model_token_budget_defaults,
+        model_info,
+    );
+    context_window_token_status_with_settings(sess, config, model_info, token_budget.as_ref()).await
+}
+
 async fn context_window_token_status_with_settings(
     sess: &Session,
     config: &Config,

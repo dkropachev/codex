@@ -93,9 +93,6 @@ async fn handle_spawn_agent(
         .await;
     let mut config =
         build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
-    if let Some(service_tier) = args.service_tier.as_ref() {
-        config.service_tier = Some(service_tier.clone());
-    }
     if args.fork_context {
         reject_full_fork_agent_type_override(role_name)?;
     }
@@ -119,7 +116,6 @@ async fn handle_spawn_agent(
     )?;
     if args.model.is_none()
         && args.reasoning_effort.is_none()
-        && args.service_tier.is_none()
         && let codex_protocol::protocol::SessionSource::SubAgent(source) = spawn_source.clone()
         && let Err(err) = apply_model_policy(
             &mut config,
@@ -129,13 +125,7 @@ async fn handle_spawn_agent(
     {
         tracing::warn!("failed to apply spawn_agent model policy: {err}");
     }
-    apply_spawn_agent_service_tier(
-        &session,
-        &mut config,
-        turn.config.service_tier.as_deref(),
-        args.service_tier.as_deref(),
-    )
-    .await?;
+    apply_spawn_agent_service_tier(&session, &mut config).await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
 
     let result = Box::pin(session.services.agent_control.spawn_agent_with_metadata(
@@ -252,7 +242,6 @@ struct SpawnAgentArgs {
     agent_type: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
-    service_tier: Option<String>,
     #[serde(default)]
     fork_context: bool,
 }

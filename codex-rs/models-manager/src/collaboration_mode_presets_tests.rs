@@ -74,7 +74,7 @@ fn default_mode_instructions_replace_mode_names_placeholder() {
             .contains("The `request_user_input` tool is unavailable in Default mode.")
     );
     assert!(
-        default_instructions.contains("ask the user directly with a concise plain-text question")
+        default_instructions.contains("Ask the user directly with one concise plain-text question")
     );
 }
 

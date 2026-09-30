@@ -406,6 +406,8 @@ accounts = ["work-pro", "personal-pro"]
                 .collect(),
             ),
             rate_limit_reset_credits: None,
+            account_id: None,
+            rate_limit_upsell: None,
         }
     );
 

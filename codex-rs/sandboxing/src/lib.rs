@@ -11,6 +11,7 @@ mod sandbox_command_input;
 #[cfg(target_os = "macos")]
 pub mod seatbelt;
 mod spawn;
+mod terminal_queries;
 mod unrestricted_command;
 mod violation;
 mod windows;

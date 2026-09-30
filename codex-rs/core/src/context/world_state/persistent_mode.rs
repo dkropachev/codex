@@ -12,7 +12,7 @@ use codex_utils_output_truncation::truncate_text;
 use serde::Deserialize;
 use serde::Serialize;
 
-const DEFAULT_INSTRUCTIONS: &str = include_str!("../../../templates/persistent_mode.md");
+const DEFAULT_INSTRUCTIONS: &str = include_str!("../../../assets/persistent_mode.md");
 // Reserve 200 estimated tokens for the replacement notice, truncation marker, and XML markers.
 const MAX_PERSISTENT_MODE_BODY_TOKENS: usize = 9_800;
 const REPLACEMENT_NOTICE: &str = "These persistent-mode instructions replace all previously provided persistent-mode instructions.";

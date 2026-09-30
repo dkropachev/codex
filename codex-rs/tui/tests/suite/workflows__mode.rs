@@ -71,6 +71,13 @@ async fn workflow_slash_enters_mode_and_submits_mocked_ai_turn() -> Result<()> {
     .await?;
 
     writer.send(b"/workflow".to_vec()).await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "workflow command draft",
+        |contents| contents.contains("/workflow"),
+    )
+    .await?;
     writer.send(b"\r".to_vec()).await?;
     wait_for_screen(&mut output_rx, &mut screen, "workflow footer", |contents| {
         contents.contains("Workflow mode")

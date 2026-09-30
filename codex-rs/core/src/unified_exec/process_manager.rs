@@ -39,7 +39,6 @@ use crate::tools::runtimes::is_managed_proxy_env_var;
 use crate::tools::runtimes::unified_exec::UnifiedExecAttempt;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
-use crate::tools::sandboxing::ApprovalAction;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
@@ -562,7 +561,7 @@ impl UnifiedExecProcessManager {
         let UnifiedExecAttempt {
             process,
             metrics_sidecar,
-            escalated,
+            permissions,
         } = attempt;
         let process = Arc::new(process);
         if let Some(completion) = completion.as_ref() {
@@ -625,7 +624,7 @@ impl UnifiedExecProcessManager {
                 request.hook_command.clone(),
                 cwd.clone(),
                 request.turn_environment.selection.environment_id.clone(),
-                escalated,
+                permissions,
                 plugin_attribution.clone(),
                 start,
                 request.process_id,
@@ -902,33 +901,31 @@ impl UnifiedExecProcessManager {
         // Different terminal sessions can be polled concurrently, but reads and
         // writes against one terminal must not overlap because they share a
         // draining output buffer and process lifecycle.
-        let (locked_process, approval) = {
+        let locked_process = {
             let store = self.process_store.lock().await;
             let entry = store
                 .processes
                 .get(&process_id)
                 .ok_or(UnifiedExecError::UnknownProcessId { process_id })?;
-            let approval = (!request.input.is_empty()
-                && (entry.tty || request.input != INTERRUPT)
-                && entry.escalated
-                && context
-                    .session
-                    .features()
-                    .enabled(Feature::WriteStdinApproval))
-            .then(|| ApprovalAction::WriteStdin {
-                id: entry.call_id.clone(),
-                approval_id: context.call_id.clone(),
-                environment_id: entry.environment_id.clone(),
-                process_id,
-                input: request.input.to_string(),
-                cwd: entry.cwd.clone(),
-                tty: entry.tty,
-            });
-            (Arc::clone(&entry.process), approval)
+            Arc::clone(&entry.process)
         };
         let _interaction_guard = locked_process.interaction_lock().lock_owned().await;
-        if let Some(approval) = approval {
-            let approval_reason = "Send input to an existing escalated terminal. The cwd is its launch directory; the terminal's current directory and state may have changed.".to_string();
+        // A queued write must observe strict review enabled while it was waiting.
+        let strict_auto_review = context
+            .session
+            .active_turn_context_and_strict_auto_review()
+            .await
+            .is_some_and(|(_, _, strict)| strict);
+        let approval = {
+            let store = self.process_store.lock().await;
+            let entry = store
+                .processes
+                .get(&process_id)
+                .filter(|entry| Arc::ptr_eq(&entry.process, &locked_process))
+                .ok_or(UnifiedExecError::UnknownProcessId { process_id })?;
+            entry.stdin_approval(context, request.input, strict_auto_review)?
+        };
+        if let Some((approval, approval_reason)) = approval {
             let reviewed = crate::guardian::format_guardian_action_pretty(
                 &approval.clone().into_guardian_request().map_err(|err| {
                     UnifiedExecError::StdinApproval(ToolError::Rejected(err.to_string()))
@@ -960,11 +957,6 @@ impl UnifiedExecProcessManager {
                     "terminal input and permission details are too large to review safely; use a smaller input or start a new terminal with fewer grants".to_string(),
                 )));
             }
-            let strict_auto_review = context
-                .session
-                .active_turn_context_and_strict_auto_review()
-                .await
-                .is_some_and(|(_, _, strict)| strict);
             let approval_context = ApprovalContext {
                 review_context: GuardianReviewContext::from(&context.step_context),
                 cancellation_token: Some(context.cancellation_token.clone()),
@@ -1253,7 +1245,7 @@ impl UnifiedExecProcessManager {
         hook_command: String,
         cwd: PathUri,
         environment_id: String,
-        escalated: bool,
+        permissions: super::TerminalPermissions,
         plugin_attribution: Option<PluginCommandAttribution>,
         started_at: Instant,
         process_id: i32,
@@ -1276,7 +1268,7 @@ impl UnifiedExecProcessManager {
             hook_command,
             tty,
             environment_id,
-            escalated,
+            permissions,
             network_approval,
             session: Arc::downgrade(&context.session),
             last_used: started_at,

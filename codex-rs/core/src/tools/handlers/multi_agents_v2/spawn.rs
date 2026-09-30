@@ -6,6 +6,8 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::codex_thread::ThreadConfigSnapshot;
+use crate::model_policy::ModelPolicySource;
+use crate::model_policy::apply_model_policy;
 use crate::session::multi_agents::resolve_usage_hints;
 use crate::tools::handlers::multi_agents::collab_tool_call_status;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
@@ -124,9 +126,6 @@ async fn handle_spawn_agent(
     let child_depth = next_thread_spawn_depth(&session_source);
     let mut config =
         build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
-    if let Some(service_tier) = args.service_tier.as_ref() {
-        config.service_tier = Some(service_tier.clone());
-    }
     let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
     apply_requested_spawn_agent_model_overrides(
         &session,
@@ -144,15 +143,6 @@ async fn handle_spawn_agent(
                 .clone_from(&turn.developer_instructions);
         }
     }
-    apply_spawn_agent_service_tier(
-        &session,
-        &mut config,
-        turn.config.service_tier.as_deref(),
-        args.service_tier.as_deref(),
-    )
-    .await?;
-    apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
-
     // Remember an applied configured default so cold reload reapplies its restrictions.
     let persisted_role_name = role_name.or_else(|| {
         (!is_full_history_fork
@@ -169,6 +159,20 @@ async fn handle_spawn_agent(
         persisted_role_name,
         Some(args.task_name.clone()),
     )?;
+    if args.model.is_none()
+        && args.reasoning_effort.is_none()
+        && let codex_protocol::protocol::SessionSource::SubAgent(source) = spawn_source.clone()
+        && let Err(err) = apply_model_policy(
+            &mut config,
+            ModelPolicySource::SubAgent(source),
+            message.len(),
+        )
+    {
+        tracing::warn!("failed to apply spawn_agent model policy: {err}");
+    }
+    apply_spawn_agent_service_tier(&session, &mut config).await?;
+    apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
+
     let new_agent_path = spawn_source.get_agent_path().ok_or_else(|| {
         FunctionCallError::RespondToModel(
             "spawned agent is missing a canonical task name".to_string(),
@@ -205,7 +209,11 @@ async fn handle_spawn_agent(
                 .as_ref()
                 .and_then(|messages| messages.multi_agent.as_ref())
                 .and_then(|messages| messages.role.as_ref());
-            Some(resolve_usage_hints(&config.multi_agent_v2, child_catalog))
+            Some(resolve_usage_hints(
+                &config.multi_agent_v2,
+                child_catalog,
+                !config.update_plan_enabled && config.model_catalog.is_none(),
+            ))
         } else {
             None
         };
@@ -288,7 +296,6 @@ struct SpawnAgentArgs {
     agent_type: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
-    service_tier: Option<String>,
     fork_turns: Option<String>,
     fork_context: Option<bool>,
 }

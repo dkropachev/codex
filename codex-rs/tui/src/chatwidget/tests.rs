@@ -233,6 +233,8 @@ fn next_goal_draft(
 mod account_pool_status_and_layout;
 mod app_server;
 mod approval_requests;
+#[path = "tests/backend_banners_tests.rs"]
+mod backend_banners_tests;
 mod composer_submission;
 #[path = "tests/config_errors_tests.rs"]
 mod config_errors;
@@ -257,6 +259,8 @@ mod plugin_catalog;
 #[path = "tests/plugins__popups.rs"]
 mod plugins_popups;
 mod popups_and_settings;
+#[path = "tests/rate_limit_recovery_tests.rs"]
+mod rate_limit_recovery_tests;
 mod side;
 mod slash_commands;
 mod status_and_layout;

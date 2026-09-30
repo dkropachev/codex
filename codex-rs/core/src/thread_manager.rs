@@ -68,6 +68,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_rollout::RolloutCompressionMode;
 use codex_rollout::state_db::StateDbHandle;
 use codex_skills_extension::HostSkillsService;
 use codex_thread_store::InMemoryThreadStore;
@@ -377,7 +378,7 @@ pub fn build_models_manager(
     )
 }
 
-fn collaboration_modes_config(config: &Config) -> CollaborationModesConfig {
+pub(crate) fn collaboration_modes_config(config: &Config) -> CollaborationModesConfig {
     CollaborationModesConfig {
         default_mode_request_user_input: config
             .features
@@ -395,6 +396,14 @@ pub fn thread_store_from_config(
             let compression_enabled = config
                 .features
                 .enabled(Feature::LocalThreadStoreCompression);
+            let compression_mode = if config
+                .features
+                .enabled(Feature::LocalThreadStoreSharedCompression)
+            {
+                RolloutCompressionMode::IncludeShared
+            } else {
+                RolloutCompressionMode::Standalone
+            };
             let background_migration_enabled = config
                 .features
                 .enabled(Feature::BackgroundPaginatedRolloutMigration);
@@ -411,11 +420,17 @@ pub fn thread_store_from_config(
                         warn!("failed to migrate legacy rollouts on startup: {err}");
                     }
                     if compression_enabled {
-                        codex_rollout::spawn_rollout_compression_worker(codex_home);
+                        codex_rollout::spawn_rollout_compression_worker(
+                            codex_home,
+                            compression_mode,
+                        );
                     }
                 });
             } else if compression_enabled {
-                codex_rollout::spawn_rollout_compression_worker(config.codex_home.to_path_buf());
+                codex_rollout::spawn_rollout_compression_worker(
+                    config.codex_home.to_path_buf(),
+                    compression_mode,
+                );
             }
             store
         }
@@ -1987,7 +2002,7 @@ impl ThreadManagerState {
         } else {
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile
         };
-        let (session, io) = Box::pin(Session::spawn(SessionSpawnArgs {
+        let (session, io) = Session::spawn(SessionSpawnArgs {
             config,
             allow_provider_model_fallback,
             user_instructions,
@@ -2027,7 +2042,7 @@ impl ThreadManagerState {
             inherited_multi_agent_version: multi_agent_version,
             git_enrichment_policy: GitEnrichmentPolicy::Fresh,
             windows_sandbox_proxy_settings_mode,
-        }))
+        })
         .await?;
         // Enable Full Access form input only after session startup so a required MCP server cannot
         // block startup while waiting for form input.

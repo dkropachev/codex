@@ -33,6 +33,7 @@ use codex_model_provider::ModelProvider;
 use codex_model_provider::ModelProviderAuthSelection;
 use codex_model_provider::ModelProviderFuture;
 use codex_model_provider::ProviderAccountResult;
+use codex_model_provider::ProviderAuthRecoveryMessages;
 use codex_model_provider::ProviderUnauthorizedRecovery;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
@@ -695,6 +696,38 @@ fn internal_session_prompt_cache_key_is_scoped_to_parent_thread() {
 }
 
 #[test]
+fn provider_rebuild_preserves_prompt_cache_override() -> anyhow::Result<()> {
+    let (event_sender, _event_receiver) = async_channel::unbounded();
+    let client = test_model_client(SessionSource::Cli)
+        .with_session_context(Some("shared-prompt-cache-key".to_string()), event_sender);
+    let switched_provider =
+        create_oss_provider_with_base_url("https://switched.example.com/v1", WireApi::Responses);
+    let rebuilt = client.with_provider_info(switched_provider.clone(), /*auth_manager*/ None);
+
+    let request = rebuilt.build_responses_request(
+        &Prompt::default(),
+        &test_model_info(),
+        /*effort*/ None,
+        codex_protocol::config_types::ReasoningSummary::None,
+        /*service_tier*/ None,
+        &test_responses_metadata_for_client(
+            &rebuilt,
+            Some("turn-123"),
+            format!("{}:0", rebuilt.state.thread_id),
+            /*parent_thread_id*/ None,
+            TestCodexResponsesRequestKind::Turn,
+        ),
+    )?;
+
+    assert_eq!(rebuilt.provider_info(), &switched_provider);
+    assert_eq!(
+        request.prompt_cache_key,
+        Some("shared-prompt-cache-key".to_string())
+    );
+    Ok(())
+}
+
+#[test]
 fn build_subagent_headers_sets_internal_memory_consolidation_label() {
     let client = test_model_client(SessionSource::Internal(
         InternalSessionSource::MemoryConsolidation,
@@ -898,6 +931,8 @@ async fn bedrock_unauthorized_error_uses_provider_mapping() {
         &mut provider_auth_recovery_attempted,
         &test_session_telemetry(),
         &provider,
+        /*event_sender*/ None,
+        /*turn_id*/ None,
     )
     .await
     .expect_err("expired Bedrock signature should fail");
@@ -940,6 +975,13 @@ impl ModelProvider for TestRecoveryProvider {
 
     fn account_state(&self) -> ProviderAccountResult {
         self.inner.account_state()
+    }
+
+    fn auth_recovery_messages(&self) -> Option<ProviderAuthRecoveryMessages> {
+        Some(ProviderAuthRecoveryMessages {
+            started: "Refreshing provider authentication.",
+            succeeded: "Provider authentication recovered.",
+        })
     }
 
     fn recover_from_unauthorized(
@@ -988,12 +1030,15 @@ async fn provider_owned_auth_recovery_is_bounded_and_preserves_unauthorized_fail
         let mut auth_recovery = None;
         let mut provider_auth_recovery_attempted = false;
         let telemetry = test_session_telemetry();
+        let (event_sender, event_receiver) = async_channel::unbounded();
         let result = super::handle_unauthorized(
             unauthorized(),
             &mut auth_recovery,
             &mut provider_auth_recovery_attempted,
             &telemetry,
             &provider,
+            Some(&event_sender),
+            Some("turn-1"),
         )
         .await;
 
@@ -1011,6 +1056,8 @@ async fn provider_owned_auth_recovery_is_bounded_and_preserves_unauthorized_fail
                 &mut provider_auth_recovery_attempted,
                 &telemetry,
                 &provider,
+                Some(&event_sender),
+                Some("turn-1"),
             )
             .await
             .expect_err("provider recovery should not run more than once")
@@ -1024,7 +1071,98 @@ async fn provider_owned_auth_recovery_is_bounded_and_preserves_unauthorized_fail
             other => panic!("unexpected error after provider recovery: {other}"),
         }
         assert_eq!(attempts.load(Ordering::Relaxed), 1);
+
+        let events = std::iter::from_fn(|| event_receiver.try_recv().ok())
+            .map(|event| serde_json::to_value(event).expect("recovery event should serialize"))
+            .collect::<Vec<_>>();
+        let mut expected = vec![json!({
+            "id": "turn-1",
+            "msg": {
+                "type": "auth_recovery_started",
+                "provider": provider.info().name,
+                "message": "Refreshing provider authentication.",
+            }
+        })];
+        if !should_fail {
+            expected.push(json!({
+                "id": "turn-1",
+                "msg": {
+                    "type": "auth_recovery_completed",
+                    "provider": provider.info().name,
+                    "message": "Provider authentication recovered.",
+                }
+            }));
+        }
+        assert_eq!(events, expected);
     }
+}
+
+#[tokio::test]
+async fn provider_rebuild_preserves_auth_recovery_event_sender() {
+    let (event_sender, event_receiver) = async_channel::unbounded();
+    let client = test_model_client(SessionSource::Cli)
+        .with_session_context(/*prompt_cache_key_override*/ None, event_sender);
+    let mut switched_provider =
+        create_oss_provider_with_base_url("https://switched.example.com/v1", WireApi::Responses);
+    switched_provider.name = "switched test provider".to_string();
+    let rebuilt = client.with_provider_info(switched_provider, /*auth_manager*/ None);
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let provider: SharedModelProvider = Arc::new(TestRecoveryProvider {
+        inner: rebuilt.state.provider.clone(),
+        should_fail: false,
+        attempts: Arc::clone(&attempts),
+    });
+    let mut auth_recovery = None;
+    let mut provider_auth_recovery_attempted = false;
+    let recovery = super::handle_unauthorized(
+        TransportError::Http {
+            status: http::StatusCode::UNAUTHORIZED,
+            url: Some("https://switched.example.com/v1/responses".to_string()),
+            headers: None,
+            body: Some("unauthorized".to_string()),
+        },
+        &mut auth_recovery,
+        &mut provider_auth_recovery_attempted,
+        &test_session_telemetry(),
+        &provider,
+        rebuilt.event_sender.as_ref(),
+        Some("turn-after-provider-switch"),
+    )
+    .await
+    .expect("provider recovery should succeed");
+
+    let events = std::iter::from_fn(|| event_receiver.try_recv().ok())
+        .map(|event| serde_json::to_value(event).expect("recovery event should serialize"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        (
+            recovery.mode,
+            recovery.phase,
+            attempts.load(Ordering::Relaxed)
+        ),
+        ("provider", "provider_refresh", 1)
+    );
+    assert_eq!(
+        events,
+        vec![
+            json!({
+                "id": "turn-after-provider-switch",
+                "msg": {
+                    "type": "auth_recovery_started",
+                    "provider": "switched test provider",
+                    "message": "Refreshing provider authentication.",
+                }
+            }),
+            json!({
+                "id": "turn-after-provider-switch",
+                "msg": {
+                    "type": "auth_recovery_completed",
+                    "provider": "switched test provider",
+                    "message": "Provider authentication recovered.",
+                }
+            }),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -1245,6 +1383,29 @@ fn guardian_reviewer_uses_dedicated_endpoint_only_with_codex_backend_auth() {
             "codex-auto-review",
         ),
         ResponsesEndpoint::Responses
+    );
+}
+
+#[test]
+fn provider_rebuild_preserves_free_guardian_endpoint() {
+    let (mut model_client, _) =
+        model_client_with_counting_attestation(/*include_attestation*/ true);
+    Arc::get_mut(&mut model_client.state)
+        .expect("test client should have unique session state")
+        .session_source = SessionSource::SubAgent(SubAgentSource::Other("guardian".to_owned()));
+    let model_client = model_client.with_free_guardian_enabled(/*free_guardian_enabled*/ true);
+    let mut switched_provider = model_client.provider_info().clone();
+    switched_provider.request_max_retries = Some(1);
+    let rebuilt =
+        model_client.with_provider_info(switched_provider.clone(), model_client.auth_manager());
+
+    assert_eq!(rebuilt.provider_info(), &switched_provider);
+    assert_eq!(
+        rebuilt.responses_endpoint(
+            Some(&CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+            "codex-auto-review",
+        ),
+        ResponsesEndpoint::Guardian
     );
 }
 
