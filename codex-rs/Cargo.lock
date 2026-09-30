@@ -4959,6 +4959,7 @@ version = "0.152.0"
 dependencies = [
  "anyhow",
  "codex-protocol",
+ "codex-sandboxing",
  "codex-utils-absolute-path",
  "jsonschema",
  "pretty_assertions",

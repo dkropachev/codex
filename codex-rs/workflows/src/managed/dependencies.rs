@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use anyhow::bail;
 
+mod bun;
 mod lockfile;
 
 pub(in crate::managed) use lockfile::ManagedBunLockfile;
