@@ -46,6 +46,8 @@ fn rejects_malformed_or_broader_javascript_syntax() {
         r#"{"unterminated": "string}"#,
         r#"{unquoted: "key"}"#,
         r#"{'single': 'quotes'}"#,
+        "{,}",
+        "[,]",
     ] {
         assert!(
             parse_unique_jsonc(contents).is_err(),

@@ -107,7 +107,13 @@ fn normalize_jsonc(contents: &str) -> anyhow::Result<Vec<u8>> {
             {
                 following += 1;
             }
-            if matches!(without_comments.get(following), Some(b'}' | b']')) {
+            let follows_closing = matches!(without_comments.get(following), Some(b'}' | b']'));
+            let follows_value = normalized
+                .iter()
+                .rev()
+                .find(|byte| !byte.is_ascii_whitespace())
+                .is_some_and(|byte| !matches!(*byte, b'{' | b'[' | b',' | b':'));
+            if follows_closing && follows_value {
                 index += 1;
                 continue;
             }
