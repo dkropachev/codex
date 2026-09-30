@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::ffi::OsString;
 
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -223,6 +223,143 @@ fn sandbox_preflight_rejects_non_unicode_paths() {
     );
     preflight.runtime.linux_sandbox_executable = Some(&helper);
     assert_unrepresentable(preflight, "resolved readable root");
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_preflight_validates_wrapper_and_every_string_backed_path() {
+    use std::os::windows::ffi::OsStringExt;
+
+    let root = AbsolutePathBuf::current_dir().expect("current directory");
+    let wrapper = root.join("codex.exe");
+    let invalid = root.join(std::path::PathBuf::from(OsString::from_wide(&[0xd800])));
+    let preflight = |command_cwd: &AbsolutePathBuf,
+                     policy_cwd: &AbsolutePathBuf,
+                     permissions: PermissionProfile,
+                     codex_home: &AbsolutePathBuf,
+                     wrapper: Option<&AbsolutePathBuf>,
+                     workspace_roots: &[AbsolutePathBuf],
+                     level| {
+        let mut request = request(
+            &root,
+            selected(SandboxType::WindowsRestrictedToken, permissions),
+            LocalSandboxLaunchPolicy::Required,
+        );
+        request.command.cwd = command_cwd.clone();
+        request.sandbox_policy_cwd = policy_cwd;
+        request.workspace_roots = workspace_roots;
+        request.runtime.direct_spawn.codex_home = codex_home;
+        request
+            .runtime
+            .direct_spawn
+            .windows_sandbox_wrapper_executable = wrapper;
+        request.runtime.windows_sandbox_level = level;
+        unavailable(prepare_local_sandbox_command(request).expect("preflight Windows sandbox"))
+    };
+    assert_eq!(
+        preflight(
+            &root,
+            &root,
+            PermissionProfile::read_only(),
+            &root,
+            Some(&wrapper),
+            std::slice::from_ref(&root),
+            WindowsSandboxLevel::Disabled,
+        ),
+        LocalSandboxUnavailableReason::PlatformPreparation
+    );
+    assert_eq!(
+        preflight(
+            &root,
+            &root,
+            PermissionProfile::read_only(),
+            &root,
+            /*wrapper*/ None,
+            std::slice::from_ref(&root),
+            WindowsSandboxLevel::RestrictedToken,
+        ),
+        LocalSandboxUnavailableReason::MissingWindowsSandboxWrapper
+    );
+    let invalid_permissions = permissions(invalid.clone().into(), FileSystemAccessMode::Read);
+    for (reason, input) in [
+        (
+            preflight(
+                &invalid,
+                &root,
+                PermissionProfile::read_only(),
+                &root,
+                Some(&wrapper),
+                std::slice::from_ref(&root),
+                WindowsSandboxLevel::RestrictedToken,
+            ),
+            "command cwd",
+        ),
+        (
+            preflight(
+                &root,
+                &invalid,
+                PermissionProfile::read_only(),
+                &root,
+                Some(&wrapper),
+                std::slice::from_ref(&root),
+                WindowsSandboxLevel::RestrictedToken,
+            ),
+            "sandbox policy cwd",
+        ),
+        (
+            preflight(
+                &root,
+                &root,
+                invalid_permissions,
+                &root,
+                Some(&wrapper),
+                std::slice::from_ref(&root),
+                WindowsSandboxLevel::RestrictedToken,
+            ),
+            "permission path",
+        ),
+        (
+            preflight(
+                &root,
+                &root,
+                PermissionProfile::read_only(),
+                &invalid,
+                Some(&wrapper),
+                std::slice::from_ref(&root),
+                WindowsSandboxLevel::RestrictedToken,
+            ),
+            "Codex home",
+        ),
+        (
+            preflight(
+                &root,
+                &root,
+                PermissionProfile::read_only(),
+                &root,
+                Some(&invalid),
+                std::slice::from_ref(&root),
+                WindowsSandboxLevel::RestrictedToken,
+            ),
+            "Windows sandbox wrapper",
+        ),
+        (
+            preflight(
+                &root,
+                &root,
+                PermissionProfile::read_only(),
+                &root,
+                Some(&wrapper),
+                std::slice::from_ref(&invalid),
+                WindowsSandboxLevel::RestrictedToken,
+            ),
+            "workspace root",
+        ),
+    ] {
+        assert_eq!(
+            reason,
+            LocalSandboxUnavailableReason::UnrepresentableInput(input)
+        );
+    }
 }
 
 #[test]
