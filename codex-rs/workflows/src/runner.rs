@@ -11,6 +11,7 @@ use std::process::ExitStatus;
 use std::process::Stdio;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -52,6 +53,7 @@ pub const MAX_RUNNER_ERROR_BYTES: usize = 4 * 1024;
 pub const COMPLETION_TIMEOUT: Duration = Duration::from_secs(2);
 pub const INSPECTION_TIMEOUT: Duration = Duration::from_secs(5);
 pub const RUNNER_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
+const CAPTURE_EXIT_TIMEOUT: Duration = Duration::from_millis(250);
 pub const EXECUTABLE_VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
 const TRUSTED_BUNFIG: &str = "";
 
@@ -962,7 +964,7 @@ pub(crate) fn run_bounded_command_until_with_limits(
     if status.is_err() {
         child.terminate();
     }
-    let captures = finish_captures(stdout, stderr);
+    let captures = finish_captures(stdout, stderr, CAPTURE_EXIT_TIMEOUT);
     let status = status?;
     let (stdout, stderr) = captures?;
     Ok(BoundedCommandOutput {
@@ -1006,38 +1008,65 @@ struct BoundedCapture {
 fn capture_bounded(
     mut reader: impl Read + Send + 'static,
     maximum_bytes: usize,
-) -> thread::JoinHandle<std::io::Result<BoundedCapture>> {
-    thread::spawn(move || {
+) -> BoundedCaptureTask {
+    let (sender, result) = mpsc::sync_channel(1);
+    let task = thread::spawn(move || {
         let mut capture = BoundedCapture::default();
-        let mut buffer = [0_u8; 8 * 1024];
-        loop {
-            let read = reader.read(&mut buffer)?;
-            if read == 0 {
-                break;
+        let captured = (|| {
+            let mut buffer = [0_u8; 8 * 1024];
+            loop {
+                let read = reader.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                let remaining = maximum_bytes.saturating_sub(capture.bytes.len());
+                capture
+                    .bytes
+                    .extend_from_slice(&buffer[..read.min(remaining)]);
+                capture.oversized |= read > remaining;
             }
-            let remaining = maximum_bytes.saturating_sub(capture.bytes.len());
-            capture
-                .bytes
-                .extend_from_slice(&buffer[..read.min(remaining)]);
-            capture.oversized |= read > remaining;
-        }
-        Ok(capture)
-    })
+            Ok(capture)
+        })();
+        let _ = sender.send(captured);
+    });
+    BoundedCaptureTask { result, task }
+}
+
+struct BoundedCaptureTask {
+    result: mpsc::Receiver<std::io::Result<BoundedCapture>>,
+    task: thread::JoinHandle<()>,
 }
 
 fn finish_captures(
-    stdout: thread::JoinHandle<std::io::Result<BoundedCapture>>,
-    stderr: thread::JoinHandle<std::io::Result<BoundedCapture>>,
+    stdout: BoundedCaptureTask,
+    stderr: BoundedCaptureTask,
+    timeout: Duration,
 ) -> anyhow::Result<(BoundedCapture, BoundedCapture)> {
-    let stdout = stdout
-        .join()
-        .map_err(|_| anyhow::anyhow!("workflow stdout capture thread panicked"))?
-        .context("failed to read workflow subprocess stdout");
-    let stderr = stderr
-        .join()
-        .map_err(|_| anyhow::anyhow!("workflow stderr capture thread panicked"))?
-        .context("failed to read workflow subprocess stderr");
+    let deadline = Instant::now() + timeout;
+    let stdout = finish_capture(stdout, deadline, "stdout");
+    let stderr = finish_capture(stderr, deadline, "stderr");
     Ok((stdout?, stderr?))
+}
+
+fn finish_capture(
+    capture: BoundedCaptureTask,
+    deadline: Instant,
+    stream: &'static str,
+) -> anyhow::Result<BoundedCapture> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let result = capture.result.recv_timeout(remaining).map_err(|error| match error {
+        mpsc::RecvTimeoutError::Timeout => {
+            anyhow::anyhow!("workflow {stream} remained open after subprocess exit")
+        }
+        mpsc::RecvTimeoutError::Disconnected => {
+            anyhow::anyhow!("workflow {stream} capture thread stopped unexpectedly")
+        }
+    })?;
+    capture
+        .task
+        .join()
+        .map_err(|_| anyhow::anyhow!("workflow {stream} capture thread panicked"))?;
+    result.with_context(|| format!("failed to read workflow subprocess {stream}"))
 }
 
 fn validate_inspection(

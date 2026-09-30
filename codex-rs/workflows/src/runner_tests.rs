@@ -253,6 +253,28 @@ fn bounded_command_reports_independent_stdout_and_stderr_overflow() {
     assert!(output.stderr_oversized);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn bounded_command_rejects_pipe_held_by_escaped_descendant() {
+    let started = Instant::now();
+    let mut command = std::process::Command::new("sh");
+    command.args(["-c", "setsid sh -c 'sleep 1' &"]);
+
+    let error = run_bounded_command_until_with_limits(
+        command,
+        CommandDeadline::after(Duration::from_secs(/*secs*/ 2)),
+        CommandOutputLimits {
+            stdout_bytes: 16,
+            stderr_bytes: 16,
+        },
+        /*cancelled*/ None,
+    )
+    .expect_err("escaped descendant must not cause silent partial capture");
+
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(error.to_string().contains("remained open"));
+}
+
 #[cfg(unix)]
 #[test]
 fn bounded_command_terminates_descendants_on_cancellation() {
