@@ -98,9 +98,13 @@ pub(in crate::managed) fn validate_managed_dependency_sources(
                 pending.push((local, value));
             }
         }
+        let mut override_field = None;
         for section in ["overrides", "resolutions"] {
             if let Some(value) = object.get(section) {
-                validate_override_map(section, value)?;
+                let values = validate_override_map(section, value)?;
+                if !values.is_empty() && override_field.replace(section).is_some() {
+                    bail!("managed workflow may not combine `overrides` and `resolutions`");
+                }
             }
         }
     }
@@ -131,7 +135,10 @@ fn reject_unsupported_package_features(
     Ok(())
 }
 
-fn validate_override_map(field: &str, value: &serde_json::Value) -> anyhow::Result<()> {
+fn validate_override_map<'a>(
+    field: &str,
+    value: &'a serde_json::Value,
+) -> anyhow::Result<&'a serde_json::Map<String, serde_json::Value>> {
     let values = value
         .as_object()
         .with_context(|| format!("managed workflow `{field}` must be an object"))?;
@@ -144,7 +151,7 @@ fn validate_override_map(field: &str, value: &serde_json::Value) -> anyhow::Resu
         })?;
         validate_registry_specifier(name, specifier)?;
     }
-    Ok(())
+    Ok(values)
 }
 
 fn validate_specifier(base: &Path, name: &str, specifier: &str) -> anyhow::Result<Option<PathBuf>> {

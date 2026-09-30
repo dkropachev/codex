@@ -51,8 +51,7 @@ fn accepts_public_registry_grammar_and_flat_overrides() {
         "devDependencies": {"alias": "npm:@scope/package@1.2.x"},
         "optionalDependencies": {"optional": "*"},
         "peerDependencies": {"peer": ">=1.0.0 <3"},
-        "overrides": {"plain": "2.0.0", "child": "~1.0.0"},
-        "resolutions": {"peer": "1.5.0"}
+        "overrides": {"plain": "2.0.0", "child": "~1.0.0"}
     }));
     assert_eq!(
         package.validate().expect("valid public dependencies"),
@@ -229,6 +228,7 @@ fn rejects_malformed_dependency_and_override_shapes() {
         serde_json::json!({"overrides": {"bad": 1}}),
         serde_json::json!({"overrides": {"bad": {"child": "1.0.0"}}}),
         serde_json::json!({"overrides": {"bad@1.x": "2.0.0"}}),
+        serde_json::json!({"overrides": {"bad": "1.0.0"}, "resolutions": {"bad": "1.0.0"}}),
         serde_json::json!({"resolutions": ["1.0.0"]}),
     ] {
         let package = Package::new(package_json.clone());

@@ -83,7 +83,8 @@ fn accepts_jsonc_registry_alias_and_optional_peer_metadata() {
     let package = Package::new(serde_json::json!({
         "dependencies": {"dep": "npm:@scope/pkg@^1.0.0"},
         "devDependencies": {},
-        "peerDependencies": {"peer": "^2.0.0"}
+        "peerDependencies": {"peer": "^2.0.0"},
+        "resolutions": {"dep": "1.2.3"}
     }));
     package.write_lock(
         r#"{
@@ -95,6 +96,7 @@ fn accepts_jsonc_registry_alias_and_optional_peer_metadata() {
             "peerDependencies": {"peer": "^2.0.0"},
             "optionalPeers": ["peer"],
           }},
+          "overrides": {"dep": "1.2.3"},
           "packages": {
             "dep": ["dep@npm:@scope/pkg@1.2.3", "", {"os": ["linux"]}, ""],
           },
@@ -167,6 +169,13 @@ fn rejects_manifest_mismatch_local_mismatch_duplicates_and_malformed_jsonc() {
         serde_json::json!({
             "lockfileVersion": 1,
             "trustedDependencies": ["dep"],
+            "workspaces": {"": {"dependencies": {"dep": "1.2.3"}}},
+            "packages": {"dep": ["dep@1.2.3", "", {}, ""]}
+        })
+        .to_string(),
+        serde_json::json!({
+            "lockfileVersion": 1,
+            "overrides": {"dep": "2.0.0"},
             "workspaces": {"": {"dependencies": {"dep": "1.2.3"}}},
             "packages": {"dep": ["dep@1.2.3", "", {}, ""]}
         })

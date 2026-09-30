@@ -114,8 +114,17 @@ fn validate_text_lock(
             bail!("bun.lock top-level field `{key}` is unsupported");
         }
     }
-    if let Some(overrides) = object.get("overrides") {
-        validate_override_map("overrides", overrides)?;
+    let actual_overrides = optional_override_map("bun.lock overrides", object.get("overrides"))?;
+    let expected_overrides = optional_override_map(
+        "package.json overrides",
+        package.package_json.get("overrides"),
+    )?
+    .or(optional_override_map(
+        "package.json resolutions",
+        package.package_json.get("resolutions"),
+    )?);
+    if actual_overrides != expected_overrides {
+        bail!("bun.lock overrides do not match package.json");
     }
     let allowed_local = sources
         .local_packages
@@ -190,6 +199,17 @@ fn validate_text_lock(
         );
     }
     Ok(())
+}
+
+fn optional_override_map<'a>(
+    field: &str,
+    value: Option<&'a serde_json::Value>,
+) -> anyhow::Result<Option<&'a serde_json::Map<String, serde_json::Value>>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let values = validate_override_map(field, value)?;
+    Ok((!values.is_empty()).then_some(values))
 }
 
 fn dependency_object(
