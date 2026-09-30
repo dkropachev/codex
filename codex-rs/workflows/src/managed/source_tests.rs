@@ -39,6 +39,8 @@ fn parses_existing_local_path_and_file_url() {
 
         assert_invalid(&format!("/{}", temp.path().display()));
         assert_invalid(&format!("file:///{}", temp.path().display()));
+        let relative = temp.path().strip_prefix("/").expect("absolute temp path");
+        assert_invalid(&format!("file:///%2F{}", relative.display()));
     }
 }
 
