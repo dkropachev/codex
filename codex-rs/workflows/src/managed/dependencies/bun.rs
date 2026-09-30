@@ -57,7 +57,6 @@ impl ManagedBunInstallLockfile {
 /// Trusted persistent and operation-private paths used by managed Bun commands.
 #[derive(Debug)]
 pub(in crate::managed) struct ManagedBunEnvironment {
-    management_root: AbsolutePathBuf,
     pub(in crate::managed) cache_dir: AbsolutePathBuf,
     pub(in crate::managed) scratch_dir: AbsolutePathBuf,
     pub(in crate::managed) temp_dir: AbsolutePathBuf,
@@ -219,7 +218,6 @@ pub(in crate::managed) fn materialize_bun_environment(
     })?;
 
     Ok(ManagedBunEnvironment {
-        management_root: management_root.clone(),
         cache_dir,
         scratch_dir,
         temp_dir,
@@ -274,12 +272,10 @@ pub(in crate::managed) fn managed_bun_install_command_plan(
     environment: &ManagedBunEnvironment,
 ) -> anyhow::Result<ManagedBunCommandPlan> {
     reject_untrusted_candidate_bun_configuration(candidate)?;
-    if environment
-        .management_root
-        .as_path()
-        .starts_with(candidate.as_path())
+    if paths_overlap(candidate, &environment.cache_dir)?
+        || paths_overlap(candidate, &absolute_from_path(environment.operation.path())?)?
     {
-        bail!("managed Bun environment must not be inside the workflow candidate");
+        bail!("managed Bun environment and workflow candidate must not overlap");
     }
     if bun_executable.as_path().starts_with(candidate.as_path()) {
         bail!("managed workflow candidate may not provide the Bun executable");
@@ -303,6 +299,22 @@ pub(in crate::managed) fn managed_bun_install_command_plan(
         NetworkSandboxPolicy::Enabled,
         &read_only_paths,
     ))
+}
+
+fn paths_overlap(left: &AbsolutePathBuf, right: &AbsolutePathBuf) -> anyhow::Result<bool> {
+    let left = fs::canonicalize(left.as_path())
+        .with_context(|| format!("failed to resolve managed path {}", left.as_path().display()))?;
+    let right = fs::canonicalize(right.as_path()).with_context(|| {
+        format!(
+            "failed to resolve managed path {}",
+            right.as_path().display()
+        )
+    })?;
+    Ok(left.starts_with(&right) || right.starts_with(&left))
+}
+
+fn absolute_from_path(path: &std::path::Path) -> anyhow::Result<AbsolutePathBuf> {
+    AbsolutePathBuf::from_absolute_path_checked(path).context("managed path was not absolute")
 }
 
 /// Plans sandbox-only inspection of a binary lockfile in private scratch space.

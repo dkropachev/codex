@@ -107,7 +107,7 @@ fn command_plan_keeps_private_environment_alive() {
 fn rejects_overlapping_management_and_candidate_paths() {
     let (_temporary, root, environment) = fixture();
     for (bun, candidate) in [
-        (root.join("tools/bun"), environment.management_root.clone()),
+        (root.join("tools/bun"), root.join("management")),
         (root.join("candidate/tool/bun"), root.join("candidate")),
     ] {
         fs::create_dir_all(candidate.as_path()).expect("create candidate");
@@ -125,6 +125,20 @@ fn rejects_overlapping_management_and_candidate_paths() {
             .is_err()
         );
     }
+
+    let candidate = root.join("management/staging/candidate");
+    fs::create_dir_all(candidate.as_path()).expect("create disjoint staging candidate");
+    managed_bun_install_command_plan(
+        &root.join("tools/bun"),
+        &candidate,
+        ManagedBunInstallLockfile::Text,
+        &ValidatedDependencySources {
+            has_dependencies: true,
+            local_packages: Vec::new(),
+        },
+        &environment,
+    )
+    .expect("allow disjoint candidate beneath management root");
 }
 
 #[test]
