@@ -34,7 +34,9 @@ impl SandboxManager {
     }
 }
 
-fn command_from_direct_spawn_request(request: SandboxExecRequest) -> anyhow::Result<Command> {
+pub(crate) fn command_from_direct_spawn_request(
+    request: SandboxExecRequest,
+) -> anyhow::Result<Command> {
     let SandboxExecRequest {
         command: argv,
         cwd,

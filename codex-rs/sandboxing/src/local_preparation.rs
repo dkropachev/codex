@@ -1,17 +1,25 @@
 use std::process::Command;
 
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 
 use crate::LocalProcessCommand;
 use crate::LocalSandboxLaunchPolicy;
 use crate::LocalSandboxSelection;
 use crate::SandboxDirectSpawnRuntime;
+use crate::SandboxDirectSpawnTransformRequest;
 use crate::SandboxManager;
+use crate::SandboxTransformError;
+use crate::SandboxTransformRequest;
 use crate::SandboxType;
 use crate::SandboxablePreference;
+use crate::WindowsSandboxProxySettingsMode;
 use crate::get_platform_sandbox;
+use crate::local_command::command_from_direct_spawn_request;
 use crate::prepare_sandbox_command;
 use crate::prepare_unrestricted_command;
 
@@ -68,9 +76,8 @@ pub enum LocalSandboxPreparation {
 
 /// Prepares a host-local command without spawning it or weakening its selection.
 ///
-/// Platform-sandbox selections fail closed until the platform preparation
-/// stage is applied. An unrestricted command is prepared only when both the
-/// selection and its originating policy permit one.
+/// An unrestricted command is prepared only when both the selection and its
+/// originating policy permit one.
 pub fn prepare_local_sandbox_command(
     request: LocalSandboxPreparationRequest<'_>,
 ) -> anyhow::Result<LocalSandboxPreparation> {
@@ -126,13 +133,79 @@ pub fn prepare_local_sandbox_command(
                 LocalSandboxUnavailableReason::UnrepresentableInput(input),
             ));
         }
-        if let Err(error) = prepare_sandbox_command(command) {
-            return Ok(LocalSandboxPreparation::Unavailable(
-                LocalSandboxUnavailableReason::UnrepresentableInput(error.input()),
-            ));
-        }
-        return Ok(LocalSandboxPreparation::Unavailable(
-            LocalSandboxUnavailableReason::PlatformPreparation,
+        let command = match prepare_sandbox_command(command) {
+            Ok(command) => command,
+            Err(error) => {
+                return Ok(LocalSandboxPreparation::Unavailable(
+                    LocalSandboxUnavailableReason::UnrepresentableInput(error.input()),
+                ));
+            }
+        };
+        let sandbox_policy_cwd = PathUri::from_abs_path(sandbox_policy_cwd);
+        let transformed = SandboxManager::new().transform_for_direct_spawn_with_runtime(
+            SandboxDirectSpawnTransformRequest {
+                transform: SandboxTransformRequest {
+                    command,
+                    permissions: &permissions,
+                    sandbox,
+                    enforce_managed_network: false,
+                    environment_id: None,
+                    network: None,
+                    sandbox_policy_cwd: &sandbox_policy_cwd,
+                    codex_linux_sandbox_exe: runtime
+                        .linux_sandbox_executable
+                        .map(AbsolutePathBuf::as_path),
+                    use_legacy_landlock: runtime.use_legacy_landlock,
+                    windows_sandbox_level: runtime.windows_sandbox_level,
+                    windows_sandbox_private_desktop: runtime.windows_sandbox_private_desktop,
+                },
+                workspace_roots,
+                windows_sandbox_proxy_settings_mode: WindowsSandboxProxySettingsMode::Preserve,
+            },
+            runtime.direct_spawn,
+        );
+        let transformed = match transformed {
+            Ok(transformed) => transformed,
+            Err(SandboxTransformError::MissingLinuxSandboxExecutable) => {
+                return Ok(LocalSandboxPreparation::Unavailable(
+                    LocalSandboxUnavailableReason::MissingLinuxSandboxExecutable,
+                ));
+            }
+            Err(
+                SandboxTransformError::InvalidCommandCwd { .. }
+                | SandboxTransformError::InvalidSandboxPolicyCwd { .. }
+                | SandboxTransformError::EnvironmentNetworkProxy(_),
+            ) => anyhow::bail!("sandbox transformation failed after local input validation"),
+            #[cfg(target_os = "macos")]
+            Err(SandboxTransformError::SeatbeltPreparation(_)) => {
+                return Ok(LocalSandboxPreparation::Unavailable(
+                    LocalSandboxUnavailableReason::PlatformPreparation,
+                ));
+            }
+            #[cfg(target_os = "linux")]
+            Err(SandboxTransformError::Wsl1UnsupportedForBubblewrap) => {
+                return Ok(LocalSandboxPreparation::Unavailable(
+                    LocalSandboxUnavailableReason::PlatformPreparation,
+                ));
+            }
+            #[cfg(not(target_os = "macos"))]
+            Err(SandboxTransformError::SeatbeltUnavailable) => {
+                return Ok(LocalSandboxPreparation::Unavailable(
+                    LocalSandboxUnavailableReason::PlatformPreparation,
+                ));
+            }
+            #[cfg(target_os = "windows")]
+            Err(SandboxTransformError::WindowsSandboxPreparation(_)) => {
+                return Ok(LocalSandboxPreparation::Unavailable(
+                    LocalSandboxUnavailableReason::PlatformPreparation,
+                ));
+            }
+        };
+        return Ok(LocalSandboxPreparation::Prepared(
+            PreparedLocalSandboxCommand {
+                command: command_from_direct_spawn_request(transformed)?,
+                sandbox,
+            },
         ));
     }
     let preference = match policy {
@@ -191,6 +264,18 @@ fn unrepresentable_path(
             }
             FileSystemPath::GlobPattern { pattern } if pattern.contains('\0') => {
                 return Some("permission glob");
+            }
+            FileSystemPath::Special {
+                value:
+                    FileSystemSpecialPath::ProjectRoots {
+                        subpath: Some(subpath),
+                    },
+            } if subpath.contains('\0') => {
+                return Some(match entry.access {
+                    FileSystemAccessMode::Read => "resolved readable root",
+                    FileSystemAccessMode::Write => "resolved writable root",
+                    FileSystemAccessMode::Deny => "resolved unreadable root",
+                });
             }
             FileSystemPath::Path { .. }
             | FileSystemPath::GlobPattern { .. }

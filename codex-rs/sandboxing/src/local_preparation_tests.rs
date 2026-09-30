@@ -74,8 +74,12 @@ fn permissions(path: FileSystemPath, access: FileSystemAccessMode) -> Permission
 }
 
 fn assert_unrepresentable(request: LocalSandboxPreparationRequest<'_>, input: &'static str) {
+    let outcome = prepare_local_sandbox_command(request).expect("prepare sandbox command");
+    let LocalSandboxPreparation::Unavailable(reason) = outcome else {
+        panic!("expected unrepresentable {input}");
+    };
     assert_eq!(
-        unavailable(prepare_local_sandbox_command(request).expect("prepare sandbox command")),
+        reason,
         LocalSandboxUnavailableReason::UnrepresentableInput(input)
     );
 }
@@ -109,7 +113,7 @@ fn unavailable_and_platform_selections_fail_closed() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn linux_preflight_validates_selection_runtime_and_command_input() {
+fn linux_preparation_validates_inputs_and_preserves_selected_profile() {
     use std::os::unix::ffi::OsStringExt;
 
     let root = AbsolutePathBuf::current_dir().expect("current directory");
@@ -137,19 +141,48 @@ fn linux_preflight_validates_selection_runtime_and_command_input() {
     );
 
     let helper = root.join("codex-linux-sandbox");
+    let materialized_permissions = PermissionProfile::workspace_write()
+        .materialize_project_roots_with_workspace_roots(std::slice::from_ref(&root));
     let mut valid = request(
         &root,
-        selected(SandboxType::LinuxSeccomp, PermissionProfile::read_only()),
+        selected(SandboxType::LinuxSeccomp, materialized_permissions.clone()),
         LocalSandboxLaunchPolicy::Required,
     );
     valid.runtime.linux_sandbox_executable = Some(&helper);
+    valid
+        .command
+        .env
+        .insert("SAFE_ENV".into(), "safe-value".into());
     valid.command.env.insert(
         "OPENAI_IDENTITY_TOKEN_FILE".into(),
         OsString::from_vec(vec![0xff]),
     );
+    let LocalSandboxPreparation::Prepared(prepared) =
+        prepare_local_sandbox_command(valid).expect("prepare valid command")
+    else {
+        panic!("expected prepared Linux sandbox command");
+    };
+    assert_eq!(prepared.sandbox(), SandboxType::LinuxSeccomp);
+    let command = prepared.into_command();
+    assert_eq!(command.get_program(), helper.as_path());
     assert_eq!(
-        unavailable(prepare_local_sandbox_command(valid).expect("preflight valid command")),
-        LocalSandboxUnavailableReason::PlatformPreparation
+        command
+            .get_envs()
+            .map(|(name, value)| (name.to_owned(), value.map(ToOwned::to_owned)))
+            .collect::<Vec<_>>(),
+        vec![("SAFE_ENV".into(), Some("safe-value".into()))]
+    );
+    let args = command
+        .get_args()
+        .map(|argument| argument.to_str().expect("Unicode sandbox argument"))
+        .collect::<Vec<_>>();
+    let profile = args
+        .windows(2)
+        .find_map(|args| (args[0] == "--permission-profile").then_some(args[1]))
+        .expect("permission profile argument");
+    assert_eq!(
+        serde_json::from_str::<PermissionProfile>(profile).expect("deserialize permission profile"),
+        materialized_permissions
     );
 
     let mut invalid = request(
@@ -160,6 +193,45 @@ fn linux_preflight_validates_selection_runtime_and_command_input() {
     invalid.runtime.linux_sandbox_executable = Some(&helper);
     invalid.command.args = vec![OsString::from_vec(vec![0xff])];
     assert_unrepresentable(invalid, "command argument");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_preparation_wraps_commands_and_classifies_backend_failures() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let root = AbsolutePathBuf::from_absolute_path(directory.path()).expect("absolute root");
+    let LocalSandboxPreparation::Prepared(prepared) = prepare_local_sandbox_command(request(
+        &root,
+        selected(SandboxType::MacosSeatbelt, PermissionProfile::read_only()),
+        LocalSandboxLaunchPolicy::Required,
+    ))
+    .expect("prepare macOS sandbox command") else {
+        panic!("expected prepared macOS sandbox command");
+    };
+    assert_eq!(prepared.sandbox(), SandboxType::MacosSeatbelt);
+    assert_eq!(
+        prepared.into_command().get_program(),
+        std::path::Path::new("/usr/bin/sandbox-exec")
+    );
+
+    let outside = root.join("outside");
+    let writable = root.join("writable-link");
+    std::fs::create_dir(&outside).expect("create symlink target");
+    symlink(&outside, &writable).expect("create writable symlink");
+    let failure = request(
+        &root,
+        selected(
+            SandboxType::MacosSeatbelt,
+            permissions(writable.into(), FileSystemAccessMode::Write),
+        ),
+        LocalSandboxLaunchPolicy::Required,
+    );
+    assert_eq!(
+        unavailable(prepare_local_sandbox_command(failure).expect("classify Seatbelt failure")),
+        LocalSandboxUnavailableReason::PlatformPreparation
+    );
 }
 
 #[cfg(unix)]
@@ -386,6 +458,63 @@ fn windows_preflight_validates_wrapper_and_every_string_backed_path() {
             LocalSandboxUnavailableReason::UnrepresentableInput(input)
         );
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_preparation_uses_trusted_wrapper_and_scrubbed_inner_environment() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let root = AbsolutePathBuf::from_absolute_path(directory.path()).expect("absolute root");
+    let wrapper = root.join("codex.exe");
+    let inner = root.join("bun.exe");
+    let mut request = request(
+        &root,
+        selected(
+            SandboxType::WindowsRestrictedToken,
+            PermissionProfile::read_only(),
+        ),
+        LocalSandboxLaunchPolicy::Required,
+    );
+    request.command.program = inner.as_os_str().to_owned();
+    request
+        .command
+        .env
+        .insert("SAFE_ENV".into(), "safe-value".into());
+    request
+        .runtime
+        .direct_spawn
+        .windows_sandbox_wrapper_executable = Some(&wrapper);
+    request.runtime.windows_sandbox_level = WindowsSandboxLevel::RestrictedToken;
+    let LocalSandboxPreparation::Prepared(prepared) =
+        prepare_local_sandbox_command(request).expect("prepare Windows sandbox command")
+    else {
+        panic!("expected prepared Windows sandbox command");
+    };
+    assert_eq!(prepared.sandbox(), SandboxType::WindowsRestrictedToken);
+    let command = prepared.into_command();
+    assert_eq!(command.get_program(), wrapper.as_path());
+    let args = command
+        .get_args()
+        .map(|argument| argument.to_str().expect("Unicode wrapper argument"))
+        .collect::<Vec<_>>();
+    assert!(args.contains(&"--preserve-proxy-settings"));
+    let environment = args
+        .windows(2)
+        .find_map(|args| (args[0] == "--env-json").then_some(args[1]))
+        .expect("inner environment argument");
+    assert_eq!(
+        serde_json::from_str::<HashMap<String, String>>(environment)
+            .expect("deserialize inner environment"),
+        HashMap::from([("SAFE_ENV".to_string(), "safe-value".to_string())])
+    );
+    let separator = args.iter().position(|arg| *arg == "--").expect("separator");
+    assert_eq!(
+        &args[separator + 1..],
+        &[
+            inner.as_path().to_str().expect("Unicode inner path"),
+            "argument"
+        ]
+    );
 }
 
 #[test]
