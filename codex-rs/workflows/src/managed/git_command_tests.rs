@@ -12,9 +12,11 @@ use super::*;
 fn ls_remote_command_is_exact_and_noninteractive() {
     let working_directory = tempfile::tempdir().expect("temporary Git directory");
     let trusted = trusted_git_command(OsStr::new("git"), working_directory.path());
-    assert!(!trusted.get_envs().any(|(name, value)| {
-        name == OsStr::new("GIT_DIR") && value.is_some()
-    }));
+    assert!(
+        !trusted
+            .get_envs()
+            .any(|(name, value)| { name == OsStr::new("GIT_DIR") && value.is_some() })
+    );
     let command = ls_remote_command(
         OsStr::new("git"),
         OsStr::new("https://example.com/workflow.git"),
