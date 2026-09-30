@@ -70,6 +70,8 @@ fn rejects_unsafe_or_malformed_sources_without_disclosing_credentials() {
         "https://github.com/openai/codex#main",
         "file:///definitely/not/a/workflow/repository",
         "file://server/share/workflow",
+        "file:////server/share/workflow",
+        "file:///%5C%5Cserver%5Cshare%5Cworkflow",
         r"\\server\share\workflow",
         r"\\?\UNC\server\share\workflow",
         "//server/share/workflow",
@@ -104,5 +106,11 @@ fn parses_verbatim_local_path_without_preserving_the_device_prefix() {
     let temp = tempfile::tempdir().expect("temp dir");
     let source = format!(r"\\?\{}", temp.path().display());
     let parsed = WorkflowGitSource::parse(&source).expect("verbatim local source");
-    assert!(!parsed.as_os_str().to_string_lossy().starts_with(r"\\?\"));
+    let canonical = AbsolutePathBuf::from_absolute_path(temp.path())
+        .and_then(|path| path.canonicalize())
+        .expect("canonical temp dir");
+    assert_eq!(
+        parsed,
+        WorkflowGitSource(WorkflowGitSourceKind::Local(canonical))
+    );
 }

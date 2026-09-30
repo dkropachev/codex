@@ -36,11 +36,8 @@ impl WorkflowGitSource {
                     .bytes()
                     .any(|byte| b"/\\:@[]".contains(&byte) || byte.is_ascii_whitespace())
         });
-        let network_path = source.starts_with("//")
-            || source.starts_with(r"\\")
-                && normalize_windows_device_path(source).is_none_or(|path| path.starts_with(r"\\"));
         ensure!(
-            !source.is_empty() && !remote_helper && !network_path,
+            !source.is_empty() && !remote_helper && !is_network_path(source),
             INVALID_SOURCE
         );
 
@@ -96,6 +93,7 @@ impl WorkflowGitSource {
                     INVALID_SOURCE
                 );
                 let path = url.to_file_path().map_err(|()| anyhow!(INVALID_SOURCE))?;
+                ensure!(!path.to_str().is_some_and(is_network_path), INVALID_SOURCE);
                 Ok(Self(WorkflowGitSourceKind::Local(canonical_local(&path)?)))
             }
             "https" | "ssh" => {
@@ -163,6 +161,12 @@ fn canonical_local(path: &Path) -> Result<AbsolutePathBuf> {
         .map_err(|_| anyhow!(INVALID_SOURCE))?;
     ensure!(path.as_path().to_str().is_some(), INVALID_SOURCE);
     Ok(path)
+}
+
+fn is_network_path(path: &str) -> bool {
+    path.starts_with("//")
+        || path.starts_with(r"\\")
+            && normalize_windows_device_path(path).is_none_or(|path| path.starts_with(r"\\"))
 }
 
 fn valid_user(user: &str) -> bool {
