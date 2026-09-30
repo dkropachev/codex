@@ -99,6 +99,11 @@ fn select_local_sandbox_for_platform(
         let Some(sandbox) = platform_sandbox else {
             return LocalSandboxSelection::Unavailable;
         };
+        if sandbox == SandboxType::LinuxSeccomp
+            && !linux_sandbox_would_apply_restrictions(&permissions)
+        {
+            return LocalSandboxSelection::Unavailable;
+        }
         sandbox
     } else {
         SandboxType::None
@@ -107,6 +112,11 @@ fn select_local_sandbox_for_platform(
         sandbox,
         permissions,
     }
+}
+
+pub(crate) fn linux_sandbox_would_apply_restrictions(permissions: &PermissionProfile) -> bool {
+    let (file_system_policy, network_policy) = permissions.to_runtime_permissions();
+    !file_system_policy.has_full_disk_write_access() || !network_policy.is_enabled()
 }
 
 #[cfg(test)]
