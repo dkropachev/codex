@@ -783,6 +783,7 @@ pub(crate) struct ChatWidget {
 struct PendingCollaborationModeSelection {
     thread_id: ThreadId,
     mode: CollaborationMode,
+    expires_at: Instant,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]

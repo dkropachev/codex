@@ -4,6 +4,8 @@ use super::*;
 use crate::app_event::AppEvent;
 use crate::chatwidget::rate_limits::RATE_LIMIT_SWITCH_PROMPT_VIEW_ID;
 
+const COLLABORATION_MODE_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
 impl ChatWidget {
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
@@ -375,13 +377,23 @@ impl ChatWidget {
             return;
         }
 
-        if let Some(pending) = self.pending_user_collaboration_mode.take()
-            && pending.thread_id == thread_id
-            && notification.thread_settings.collaboration_mode != pending.mode
-        {
-            notification.thread_settings.model = pending.mode.settings.model.clone();
-            notification.thread_settings.effort = pending.mode.settings.reasoning_effort.clone();
-            notification.thread_settings.collaboration_mode = pending.mode;
+        let pending = self
+            .pending_user_collaboration_mode
+            .as_ref()
+            .filter(|pending| pending.thread_id == thread_id);
+        let preserve = pending
+            .filter(|pending| {
+                Instant::now() < pending.expires_at
+                    && notification.thread_settings.collaboration_mode != pending.mode
+            })
+            .map(|pending| pending.mode.clone());
+        if pending.is_some() && preserve.is_none() {
+            self.pending_user_collaboration_mode = None;
+        }
+        if let Some(mode) = preserve {
+            notification.thread_settings.model = mode.settings.model.clone();
+            notification.thread_settings.effort = mode.settings.reasoning_effort.clone();
+            notification.thread_settings.collaboration_mode = mode;
         }
 
         self.apply_thread_settings(notification.thread_settings);
@@ -682,6 +694,7 @@ impl ChatWidget {
             PendingCollaborationModeSelection {
                 thread_id,
                 mode: self.effective_collaboration_mode(),
+                expires_at: Instant::now() + COLLABORATION_MODE_ACK_TIMEOUT,
             }
         });
         self.submit_collaboration_mode_settings_update();

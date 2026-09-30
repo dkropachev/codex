@@ -466,7 +466,7 @@ async fn stale_thread_settings_do_not_clobber_a_user_selected_workflow_mode() {
     chat.on_thread_settings_updated(stale);
 
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Workflow);
-    assert!(chat.pending_user_collaboration_mode.is_none());
+    assert!(chat.pending_user_collaboration_mode.is_some());
     assert!(
         chat.effective_collaboration_mode()
             .settings
@@ -474,6 +474,12 @@ async fn stale_thread_settings_do_not_clobber_a_user_selected_workflow_mode() {
             .as_deref()
             .is_some_and(|instructions| instructions.contains("Workflow mode exists to design"))
     );
+
+    let mut older = thread_settings_for_test("gpt-older", thread_id);
+    older.thread_settings.collaboration_mode.mode = ModeKind::Plan;
+    chat.on_thread_settings_updated(older);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Workflow);
+    assert!(chat.pending_user_collaboration_mode.is_some());
 
     let selected = chat.effective_collaboration_mode();
     let mut acknowledged = thread_settings_for_test(selected.model(), thread_id);
@@ -502,6 +508,18 @@ async fn pending_collaboration_mode_is_scoped_to_one_notification_and_thread() {
     let second_thread = ThreadId::new();
     chat.handle_thread_session(configured_thread_session(second_thread));
     assert!(chat.pending_user_collaboration_mode.is_none());
+
+    let workflow_mask = collaboration_modes::mask_for_kind_with_config(
+        chat.model_catalog.as_ref(),
+        ModeKind::Workflow,
+        chat.collaboration_modes_config(),
+    )
+    .expect("workflow mode");
+    chat.set_collaboration_mask_from_user_action(workflow_mask);
+    chat.pending_user_collaboration_mode
+        .as_mut()
+        .expect("pending selection")
+        .expires_at = Instant::now();
 
     let mut authoritative = thread_settings_for_test("gpt-5.4", second_thread);
     authoritative.thread_settings.collaboration_mode.mode = ModeKind::Default;
