@@ -5,6 +5,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use anyhow::Context;
 use anyhow::bail;
@@ -94,6 +95,26 @@ pub(in crate::managed) struct PreparedManagedBunCommand {
     command: Command,
     sandbox: SandboxType,
     _operation: Arc<tempfile::TempDir>,
+}
+
+impl PreparedManagedBunCommand {
+    pub(in crate::managed) fn run(
+        self,
+        deadline: crate::runner::CommandDeadline,
+        limits: crate::runner::CommandOutputLimits,
+        cancelled: Option<&AtomicBool>,
+    ) -> anyhow::Result<crate::runner::BoundedCommandOutput> {
+        let Self {
+            command,
+            sandbox: _,
+            _operation,
+        } = self;
+        let output = crate::runner::run_bounded_command_until_with_limits(
+            command, deadline, limits, cancelled,
+        );
+        drop(_operation);
+        output
+    }
 }
 
 impl ManagedBunCommandPlan {

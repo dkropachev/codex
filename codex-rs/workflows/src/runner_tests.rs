@@ -231,6 +231,30 @@ fn bounded_command_honors_an_existing_deadline() {
 
 #[cfg(unix)]
 #[test]
+fn bounded_command_reports_independent_stdout_and_stderr_overflow() {
+    let mut command = std::process::Command::new("sh");
+    command.args(["-c", "printf 123456; printf abcdef >&2"]);
+
+    let output = run_bounded_command_until_with_limits(
+        command,
+        CommandDeadline::after(Duration::from_secs(/*secs*/ 2)),
+        CommandOutputLimits {
+            stdout_bytes: 4,
+            stderr_bytes: 3,
+        },
+        /*cancelled*/ None,
+    )
+    .expect("run independently bounded command");
+
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1234");
+    assert_eq!(output.stderr, b"abc");
+    assert!(output.stdout_oversized);
+    assert!(output.stderr_oversized);
+}
+
+#[cfg(unix)]
+#[test]
 fn bounded_command_terminates_descendants_on_cancellation() {
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;

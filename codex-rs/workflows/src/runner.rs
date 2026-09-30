@@ -906,12 +906,28 @@ pub(crate) fn run_bounded_command(
     )
 }
 
-pub(crate) fn run_bounded_command_until(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CommandOutputLimits {
+    pub(crate) stdout_bytes: usize,
+    pub(crate) stderr_bytes: usize,
+}
+
+#[derive(Debug)]
+pub(crate) struct BoundedCommandOutput {
+    pub(crate) status: ExitStatus,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+    pub(crate) stdout_oversized: bool,
+    pub(crate) stderr_oversized: bool,
+}
+
+/// Runs a subprocess with a shared deadline and independent output bounds.
+pub(crate) fn run_bounded_command_until_with_limits(
     mut command: Command,
     deadline: CommandDeadline,
-    maximum_stdout_bytes: usize,
+    limits: CommandOutputLimits,
     cancelled: Option<&AtomicBool>,
-) -> anyhow::Result<(ExitStatus, Vec<u8>, Vec<u8>, bool)> {
+) -> anyhow::Result<BoundedCommandOutput> {
     deadline.check(cancelled)?;
     command
         .stdin(Stdio::null())
@@ -929,8 +945,8 @@ pub(crate) fn run_bounded_command_until(
         .stderr
         .take()
         .context("workflow subprocess stderr was not piped")?;
-    let stdout = capture_bounded(stdout, maximum_stdout_bytes);
-    let stderr = capture_bounded(stderr, MAX_RUNNER_ERROR_BYTES);
+    let stdout = capture_bounded(stdout, limits.stdout_bytes);
+    let stderr = capture_bounded(stderr, limits.stderr_bytes);
     let status = loop {
         if let Err(err) = deadline.check(cancelled) {
             child.terminate();
@@ -948,7 +964,36 @@ pub(crate) fn run_bounded_command_until(
     wait_for_capture(&stderr);
     let stdout = capture_snapshot(&stdout);
     let stderr = capture_snapshot(&stderr);
-    Ok((status, stdout.bytes, stderr.bytes, stdout.oversized))
+    Ok(BoundedCommandOutput {
+        status,
+        stdout: stdout.bytes,
+        stderr: stderr.bytes,
+        stdout_oversized: stdout.oversized,
+        stderr_oversized: stderr.oversized,
+    })
+}
+
+pub(crate) fn run_bounded_command_until(
+    command: Command,
+    deadline: CommandDeadline,
+    maximum_stdout_bytes: usize,
+    cancelled: Option<&AtomicBool>,
+) -> anyhow::Result<(ExitStatus, Vec<u8>, Vec<u8>, bool)> {
+    let output = run_bounded_command_until_with_limits(
+        command,
+        deadline,
+        CommandOutputLimits {
+            stdout_bytes: maximum_stdout_bytes,
+            stderr_bytes: MAX_RUNNER_ERROR_BYTES,
+        },
+        cancelled,
+    )?;
+    Ok((
+        output.status,
+        output.stdout,
+        output.stderr,
+        output.stdout_oversized,
+    ))
 }
 
 #[derive(Default)]
