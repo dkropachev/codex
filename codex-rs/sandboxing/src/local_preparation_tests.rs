@@ -87,13 +87,19 @@ fn assert_unrepresentable(request: LocalSandboxPreparationRequest<'_>, input: &'
 #[test]
 fn unavailable_and_platform_selections_fail_closed() {
     let root = AbsolutePathBuf::current_dir().expect("current directory");
+    let unavailable_sandbox = match get_platform_sandbox(/*windows_sandbox_enabled*/ true) {
+        Some(SandboxType::LinuxSeccomp) => SandboxType::MacosSeatbelt,
+        Some(SandboxType::MacosSeatbelt | SandboxType::WindowsRestrictedToken)
+        | Some(SandboxType::None)
+        | None => SandboxType::LinuxSeccomp,
+    };
     for (selection, expected) in [
         (
             LocalSandboxSelection::Unavailable,
             LocalSandboxUnavailableReason::SelectionUnavailable,
         ),
         (
-            selected(SandboxType::MacosSeatbelt, PermissionProfile::read_only()),
+            selected(unavailable_sandbox, PermissionProfile::read_only()),
             LocalSandboxUnavailableReason::PlatformPreparation,
         ),
     ] {
