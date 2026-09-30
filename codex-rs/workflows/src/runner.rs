@@ -12,6 +12,8 @@ use std::process::Stdio;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
+#[cfg(unix)]
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -1005,6 +1007,55 @@ struct BoundedCapture {
     oversized: bool,
 }
 
+#[cfg(unix)]
+fn capture_bounded<R>(
+    mut reader: R,
+    maximum_bytes: usize,
+) -> BoundedCaptureTask
+where
+    R: Read + Send + std::os::fd::AsFd + 'static,
+{
+    let flags = rustix::fs::fcntl_getfl(&reader);
+    let configured = flags.and_then(|flags| {
+        rustix::fs::fcntl_setfl(&reader, flags | rustix::fs::OFlags::NONBLOCK)
+    });
+    let (sender, result) = mpsc::sync_channel(1);
+    let stop = Arc::new(AtomicBool::new(false));
+    let task_stop = Arc::clone(&stop);
+    let task = thread::spawn(move || {
+        let mut capture = BoundedCapture::default();
+        let captured = (|| {
+            configured?;
+            let mut buffer = [0_u8; 8 * 1024];
+            loop {
+                if task_stop.load(Ordering::Relaxed) {
+                    return Ok(capture);
+                }
+                let read = match reader.read(&mut buffer) {
+                    Ok(read) => read,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error),
+                };
+                if read == 0 {
+                    return Ok(capture);
+                }
+                let remaining = maximum_bytes.saturating_sub(capture.bytes.len());
+                capture
+                    .bytes
+                    .extend_from_slice(&buffer[..read.min(remaining)]);
+                capture.oversized |= read > remaining;
+            }
+        })();
+        let _ = sender.send(captured);
+    });
+    BoundedCaptureTask { result, task, stop }
+}
+
+#[cfg(not(unix))]
 fn capture_bounded(
     mut reader: impl Read + Send + 'static,
     maximum_bytes: usize,
@@ -1017,7 +1068,7 @@ fn capture_bounded(
             loop {
                 let read = reader.read(&mut buffer)?;
                 if read == 0 {
-                    break;
+                    return Ok(capture);
                 }
                 let remaining = maximum_bytes.saturating_sub(capture.bytes.len());
                 capture
@@ -1025,7 +1076,6 @@ fn capture_bounded(
                     .extend_from_slice(&buffer[..read.min(remaining)]);
                 capture.oversized |= read > remaining;
             }
-            Ok(capture)
         })();
         let _ = sender.send(captured);
     });
@@ -1035,6 +1085,8 @@ fn capture_bounded(
 struct BoundedCaptureTask {
     result: mpsc::Receiver<std::io::Result<BoundedCapture>>,
     task: thread::JoinHandle<()>,
+    #[cfg(unix)]
+    stop: Arc<AtomicBool>,
 }
 
 fn finish_captures(
@@ -1053,20 +1105,33 @@ fn finish_capture(
     deadline: Instant,
     stream: &'static str,
 ) -> anyhow::Result<BoundedCapture> {
+    let BoundedCaptureTask {
+        result,
+        task,
+        #[cfg(unix)]
+        stop,
+    } = capture;
     let remaining = deadline.saturating_duration_since(Instant::now());
-    let result = capture.result.recv_timeout(remaining).map_err(|error| match error {
-        mpsc::RecvTimeoutError::Timeout => {
-            anyhow::anyhow!("workflow {stream} remained open after subprocess exit")
+    let captured = match result.recv_timeout(remaining) {
+        Ok(captured) => captured,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            #[cfg(unix)]
+            {
+                stop.store(true, Ordering::Relaxed);
+                let _ = result.recv_timeout(Duration::from_millis(50));
+                task.join()
+                    .map_err(|_| anyhow::anyhow!("workflow {stream} capture thread panicked"))?;
+            }
+            bail!("workflow {stream} remained open after subprocess exit");
         }
-        mpsc::RecvTimeoutError::Disconnected => {
-            anyhow::anyhow!("workflow {stream} capture thread stopped unexpectedly")
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            bail!("workflow {stream} capture thread stopped unexpectedly");
         }
-    })?;
-    capture
-        .task
+    };
+    task
         .join()
         .map_err(|_| anyhow::anyhow!("workflow {stream} capture thread panicked"))?;
-    result.with_context(|| format!("failed to read workflow subprocess {stream}"))
+    captured.with_context(|| format!("failed to read workflow subprocess {stream}"))
 }
 
 fn validate_inspection(
