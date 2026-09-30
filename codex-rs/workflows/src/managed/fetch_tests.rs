@@ -71,6 +71,12 @@ fn fetches_lightweight_annotated_and_sha256_snapshot_releases() {
         (ReleaseKind::Snapshot, "sha256"),
     ] {
         let repository = Repository::new(object_format);
+        if matches!(&kind, ReleaseKind::Annotated) {
+            git(
+                repository.root(),
+                ["config", "uploadpack.allowFilter", "true"],
+            );
+        }
         repository.tag(&kind);
         let release = repository.resolve();
         let staging = tempfile::tempdir().expect("temporary staging root");
@@ -79,7 +85,7 @@ fn fetches_lightweight_annotated_and_sha256_snapshot_releases() {
             staging.path(),
             &staging.path().join("repository"),
             &release,
-            BLOB_FILTER_BYTES,
+            VERIFICATION_LIMITS.blob_bytes + 1,
         );
         let args = command.get_args().collect::<Vec<_>>();
         let selected = release
@@ -102,7 +108,7 @@ fn fetches_lightweight_annotated_and_sha256_snapshot_releases() {
             &repository.source(),
             &release,
             /*cancelled*/ None,
-            BLOB_FILTER_BYTES,
+            VERIFICATION_LIMITS,
         )
         .expect("fetch exact release");
 
@@ -119,6 +125,12 @@ fn fetches_lightweight_annotated_and_sha256_snapshot_releases() {
         let config = git(&fetched.repository, ["config", "--local", "--list"]);
         assert!(!config.to_ascii_lowercase().contains("remote."));
         assert!(!config.to_ascii_lowercase().contains("partialclone"));
+        assert!(
+            !fetched
+                .repository
+                .join(".git/objects/info/alternates")
+                .exists()
+        );
     }
 }
 
@@ -138,7 +150,7 @@ fn cancellation_and_staging_root_checks_fail_closed() {
         &repository.source(),
         &repository.resolve(),
         Some(&AtomicBool::new(true)),
-        BLOB_FILTER_BYTES,
+        VERIFICATION_LIMITS,
     )
     .err()
     .expect("cancelled fetch should fail");
@@ -160,7 +172,7 @@ fn cancellation_and_staging_root_checks_fail_closed() {
         &repository.source(),
         &repository.resolve(),
         /*cancelled*/ None,
-        BLOB_FILTER_BYTES,
+        VERIFICATION_LIMITS,
     )
     .err()
     .expect("symlinked staging root should fail");
@@ -179,7 +191,7 @@ fn rejects_changed_and_non_commit_selected_refs() {
     assert_error(
         &moved,
         &release,
-        BLOB_FILTER_BYTES,
+        VERIFICATION_LIMITS,
         "changed before it could be fetched",
     );
 
@@ -191,7 +203,7 @@ fn rejects_changed_and_non_commit_selected_refs() {
     assert_error(
         &blob_tag,
         &release,
-        BLOB_FILTER_BYTES,
+        VERIFICATION_LIMITS,
         "commit inspection failed",
     );
 
@@ -203,15 +215,256 @@ fn rejects_changed_and_non_commit_selected_refs() {
     assert_error(
         &blob_head,
         &release,
-        BLOB_FILTER_BYTES,
+        VERIFICATION_LIMITS,
         "commit inspection failed",
     );
+}
+
+#[test]
+fn rejects_missing_and_oversized_objects_with_or_without_filter_support() {
+    for allow_filter in [true, false] {
+        let repository = Repository::new("sha1");
+        if allow_filter {
+            git(
+                repository.root(),
+                ["config", "uploadpack.allowFilter", "true"],
+            );
+        } else {
+            git(
+                repository.root(),
+                ["config", "uploadpack.allowFilter", "false"],
+            );
+        }
+        fs::write(repository.root().join("large"), vec![b'x'; 64]).expect("write large blob");
+        git(repository.root(), ["add", "large"]);
+        git(
+            repository.root(),
+            ["commit", "--no-gpg-sign", "-qm", "large"],
+        );
+        let release = repository.resolve();
+        let expected = if allow_filter {
+            "object verification failed"
+        } else {
+            "blob exceeds 31 bytes"
+        };
+        assert_error(
+            &repository,
+            &release,
+            VerificationLimits {
+                blob_bytes: 31,
+                ..VERIFICATION_LIMITS
+            },
+            expected,
+        );
+    }
+}
+
+#[test]
+fn enforces_logical_object_and_retained_staging_limits() {
+    let listing = b"blob 4\ntree 3\n";
+    validate_object_listing(
+        listing,
+        VerificationLimits {
+            blob_bytes: 4,
+            object_entries: 2,
+            object_bytes: 7,
+            ..VERIFICATION_LIMITS
+        },
+        /*cancelled*/ None,
+    )
+    .expect("exact object limits should pass");
+    let error = validate_object_listing(
+        listing,
+        VerificationLimits {
+            blob_bytes: 3,
+            ..VERIFICATION_LIMITS
+        },
+        /*cancelled*/ None,
+    )
+    .expect_err("blob limit should fail");
+    assert!(format!("{error:#}").contains("blob exceeds 3 bytes"));
+
+    let cancelled = AtomicBool::new(true);
+    let error = validate_object_listing(listing, VERIFICATION_LIMITS, Some(&cancelled))
+        .expect_err("cancelled object inspection should fail");
+    assert!(format!("{error:#}").contains("cancelled"));
+
+    let staging = tempfile::tempdir().expect("temporary staging directory");
+    fs::create_dir(staging.path().join("nested")).expect("create nested directory");
+    fs::write(staging.path().join("nested/data"), "data").expect("write staged data");
+    inspect_staging(
+        staging.path(),
+        VerificationLimits {
+            staging_entries: 2,
+            staging_bytes: 4,
+            ..VERIFICATION_LIMITS
+        },
+        /*cancelled*/ None,
+    )
+    .expect("exact staging limits should pass");
+    let error = inspect_staging(staging.path(), VERIFICATION_LIMITS, Some(&cancelled))
+        .expect_err("cancelled staging inspection should fail");
+    assert!(format!("{error:#}").contains("cancelled"));
+
+    let repository = Repository::new("sha1");
+    let release = repository.resolve();
+    for (limits, expected) in [
+        (
+            VerificationLimits {
+                object_entries: 1,
+                ..VERIFICATION_LIMITS
+            },
+            "object count exceeds 1",
+        ),
+        (
+            VerificationLimits {
+                object_bytes: 1,
+                ..VERIFICATION_LIMITS
+            },
+            "object set exceeds 1 bytes",
+        ),
+        (
+            VerificationLimits {
+                staging_entries: 0,
+                ..VERIFICATION_LIMITS
+            },
+            "staging exceeds 0 entries",
+        ),
+        (
+            VerificationLimits {
+                staging_bytes: 0,
+                ..VERIFICATION_LIMITS
+            },
+            "staging exceeds 0 bytes",
+        ),
+    ] {
+        assert_error(&repository, &release, limits, expected);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_staging_scan_rejects_symlinks_and_special_files() {
+    use std::os::unix::fs::symlink;
+    use std::os::unix::net::UnixListener;
+
+    let staging = tempfile::tempdir().expect("temporary staging directory");
+    let nested = staging.path().join("nested");
+    fs::create_dir(&nested).expect("create nested staging directory");
+    let outside = tempfile::NamedTempFile::new().expect("outside file");
+    symlink(outside.path(), nested.join("link")).expect("create symlink");
+    let error = inspect_staging(staging.path(), VERIFICATION_LIMITS, /*cancelled*/ None)
+        .expect_err("symlink should fail");
+    assert!(format!("{error:#}").contains("symbolic link"));
+
+    fs::remove_file(nested.join("link")).expect("remove symlink");
+    let _socket = UnixListener::bind(nested.join("socket")).expect("create socket");
+    let error = inspect_staging(staging.path(), VERIFICATION_LIMITS, /*cancelled*/ None)
+        .expect_err("special file should fail");
+    assert!(format!("{error:#}").contains("special file"));
+}
+
+#[test]
+fn isolation_check_rejects_network_capable_repository_state() {
+    let repository = Repository::new("sha1");
+    let staging = tempfile::tempdir().expect("temporary staging root");
+    let fetched = fetch_with_options(
+        OsStr::new("git"),
+        &absolute(staging.path()),
+        &repository.source(),
+        &repository.resolve(),
+        /*cancelled*/ None,
+        VERIFICATION_LIMITS,
+    )
+    .expect("fetch release");
+    let root = &fetched.repository;
+
+    for (set_args, cleanup_args, expected) in [
+        (
+            vec!["config", "remote.evil.url", "https://example.com/repo"],
+            vec!["config", "--remove-section", "remote.evil"],
+            "remote Git configuration",
+        ),
+        (
+            vec!["config", "include.path", "outside.config"],
+            vec!["config", "--unset-all", "include.path"],
+            "remote Git configuration",
+        ),
+        (
+            vec!["config", "includeIf.gitdir:/tmp/.path", "outside.config"],
+            vec!["config", "--unset-all", "includeIf.gitdir:/tmp/.path"],
+            "remote Git configuration",
+        ),
+        (
+            vec!["config", "extensions.partialClone", "evil"],
+            vec!["config", "--unset-all", "extensions.partialClone"],
+            "remote Git configuration",
+        ),
+        (
+            vec!["config", "extensions.worktreeConfig", "true"],
+            vec!["config", "--unset-all", "extensions.worktreeConfig"],
+            "remote Git configuration",
+        ),
+        (
+            vec!["update-ref", "refs/heads/extra", RELEASE_REF],
+            vec!["update-ref", "-d", "refs/heads/extra"],
+            "unexpected Git references",
+        ),
+    ] {
+        git(root, set_args);
+        let error = verify_isolated(OsStr::new("git"), root, root, /*cancelled*/ None)
+            .expect_err("forbidden repository state should fail");
+        assert!(format!("{error:#}").contains(expected));
+        git(root, cleanup_args);
+    }
+
+    for name in ["alternates", "http-alternates"] {
+        let path = root.join(".git/objects/info").join(name);
+        fs::write(&path, "outside\n").expect("write alternate fixture");
+        let error = verify_isolated(OsStr::new("git"), root, root, /*cancelled*/ None)
+            .expect_err("alternate object store should fail");
+        assert!(format!("{error:#}").contains("alternate Git objects"));
+        fs::remove_file(path).expect("remove alternate fixture");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn rejects_windows_junctions_as_roots_and_nested_entries() {
+    let repository = Repository::new("sha1");
+    let parent = tempfile::tempdir().expect("temporary staging parent");
+    let target = parent.path().join("target");
+    let junction = parent.path().join("junction");
+    fs::create_dir(&target).expect("create junction target");
+    let output = Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&target)
+        .output()
+        .expect("create directory junction");
+    assert!(output.status.success(), "mklink /J failed");
+
+    let error = fetch_with_options(
+        OsStr::new("git"),
+        &absolute(&junction),
+        &repository.source(),
+        &repository.resolve(),
+        /*cancelled*/ None,
+        VERIFICATION_LIMITS,
+    )
+    .err()
+    .expect("junction root should fail");
+    assert!(format!("{error:#}").contains("regular directory"));
+    let error = inspect_staging(parent.path(), VERIFICATION_LIMITS, /*cancelled*/ None)
+        .expect_err("nested junction should fail");
+    assert!(format!("{error:#}").contains("reparse point"));
+    fs::remove_dir(junction).expect("remove directory junction");
 }
 
 fn assert_error(
     repository: &Repository,
     release: &ResolvedWorkflowRelease,
-    blob_filter_bytes: u64,
+    limits: VerificationLimits,
     expected: &str,
 ) {
     let staging = tempfile::tempdir().expect("temporary staging root");
@@ -221,7 +474,7 @@ fn assert_error(
         &repository.source(),
         release,
         /*cancelled*/ None,
-        blob_filter_bytes,
+        limits,
     )
     .err()
     .expect("fetch should fail");
