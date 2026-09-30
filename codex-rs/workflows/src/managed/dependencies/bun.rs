@@ -371,7 +371,9 @@ fn command_plan(
     network: NetworkSandboxPolicy,
     read_only_paths: &[AbsolutePathBuf],
 ) -> ManagedBunCommandPlan {
-    let mut args = vec!["--no-env-file".into(), "install".into()];
+    let mut config_argument = OsString::from("--config=");
+    config_argument.push(environment.bunfig.as_path());
+    let mut args = vec!["--no-env-file".into(), config_argument, "install".into()];
     if operation == ManagedBunOperation::InspectBinaryLockfile {
         args.extend(["--save-text-lockfile".into(), "--lockfile-only".into()]);
     }
@@ -382,8 +384,6 @@ fn command_plan(
         format!("--registry={PUBLIC_REGISTRY}").into(),
         "--cache-dir".into(),
         environment.cache_dir.as_path().as_os_str().to_os_string(),
-        "--config".into(),
-        environment.bunfig.as_path().as_os_str().to_os_string(),
     ]);
     let mut entries = vec![FileSystemSandboxEntry::new(
         FileSystemPath::Special {

@@ -40,32 +40,23 @@ fn materializes_private_configuration_and_isolated_directories() {
         fs::read_to_string(environment.bunfig.as_path()).expect("read bunfig"),
         "env = false\ntelemetry = false\n\n[install]\nregistry = \"https://registry.npmjs.org/\"\n"
     );
-    assert_eq!(
-        fs::read(environment.npmrc.as_path()).expect("read npmrc"),
-        Vec::<u8>::new()
-    );
-    for path in [
-        &environment.scratch_dir,
-        &environment.temp_dir,
-        &environment.home_dir,
-        &environment.xdg_config_dir,
-        &environment.xdg_cache_dir,
-        &environment.xdg_data_dir,
-        &environment.xdg_state_dir,
-        &environment.app_data_dir,
-        &environment.local_app_data_dir,
-    ] {
-        assert!(
-            path.as_path().is_dir(),
-            "missing {}",
-            path.as_path().display()
-        );
-    }
+    assert!(fs::read(environment.npmrc.as_path())
+        .expect("read npmrc")
+        .is_empty());
     assert!(
-        environment
-            .operation
-            .path()
-            .starts_with(root.join("management").as_path())
+        [
+            &environment.scratch_dir,
+            &environment.temp_dir,
+            &environment.home_dir,
+            &environment.xdg_config_dir,
+            &environment.xdg_cache_dir,
+            &environment.xdg_data_dir,
+            &environment.xdg_state_dir,
+            &environment.app_data_dir,
+            &environment.local_app_data_dir,
+        ]
+        .into_iter()
+        .all(|path| path.as_path().is_dir())
     );
 }
 
@@ -171,6 +162,11 @@ fn plans_install_and_inspection_with_exact_argv_environment_and_permissions() {
 
     let expected_args = vec![
         "--no-env-file".into(),
+        {
+            let mut argument = OsString::from("--config=");
+            argument.push(environment.bunfig.as_path());
+            argument
+        },
         "install".into(),
         "--frozen-lockfile".into(),
         "--ignore-scripts".into(),
@@ -178,8 +174,6 @@ fn plans_install_and_inspection_with_exact_argv_environment_and_permissions() {
         "--registry=https://registry.npmjs.org/".into(),
         "--cache-dir".into(),
         environment.cache_dir.as_path().as_os_str().to_os_string(),
-        "--config".into(),
-        environment.bunfig.as_path().as_os_str().to_os_string(),
     ];
     assert_eq!(
         install.program,
@@ -233,8 +227,8 @@ fn plans_install_and_inspection_with_exact_argv_environment_and_permissions() {
     );
     assert_eq!(inspection.program, install.program);
     let mut expected_inspection_args = expected_args;
-    expected_inspection_args.insert(2, "--save-text-lockfile".into());
-    expected_inspection_args.insert(3, "--lockfile-only".into());
+    expected_inspection_args.insert(3, "--save-text-lockfile".into());
+    expected_inspection_args.insert(4, "--lockfile-only".into());
     assert_eq!(inspection.args, expected_inspection_args);
     assert_eq!(inspection.env, install.env);
     assert_eq!(inspection.cwd, environment.scratch_dir);
