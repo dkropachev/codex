@@ -12,7 +12,7 @@ use std::process::Stdio;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -1055,7 +1055,68 @@ where
     BoundedCaptureTask { result, task, stop }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn capture_bounded(
+    mut reader: impl Read + Send + 'static,
+    maximum_bytes: usize,
+) -> BoundedCaptureTask {
+    let (sender, result) = mpsc::sync_channel(1);
+    let stop = Arc::new(AtomicBool::new(false));
+    let task_stop = Arc::clone(&stop);
+    let task = thread::spawn(move || {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::ERROR_BROKEN_PIPE;
+        use windows_sys::Win32::Foundation::GetLastError;
+        use windows_sys::Win32::Foundation::HANDLE;
+        use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+
+        let mut capture = BoundedCapture::default();
+        let captured = (|| {
+            let mut buffer = [0_u8; 8 * 1024];
+            loop {
+                if task_stop.load(Ordering::Relaxed) {
+                    return Ok(capture);
+                }
+                let mut available = 0_u32;
+                let ok = unsafe {
+                    PeekNamedPipe(
+                        reader.as_raw_handle() as HANDLE,
+                        std::ptr::null_mut(),
+                        0,
+                        std::ptr::null_mut(),
+                        &mut available,
+                        std::ptr::null_mut(),
+                    )
+                };
+                if ok == 0 {
+                    let code = unsafe { GetLastError() };
+                    if code == ERROR_BROKEN_PIPE {
+                        return Ok(capture);
+                    }
+                    return Err(std::io::Error::from_raw_os_error(code as i32));
+                }
+                if available == 0 {
+                    thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+                let available = buffer.len().min(available as usize);
+                let read = reader.read(&mut buffer[..available])?;
+                if read == 0 {
+                    return Ok(capture);
+                }
+                let remaining = maximum_bytes.saturating_sub(capture.bytes.len());
+                capture
+                    .bytes
+                    .extend_from_slice(&buffer[..read.min(remaining)]);
+                capture.oversized |= read > remaining;
+            }
+        })();
+        let _ = sender.send(captured);
+    });
+    BoundedCaptureTask { result, task, stop }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn capture_bounded(
     mut reader: impl Read + Send + 'static,
     maximum_bytes: usize,
@@ -1085,7 +1146,7 @@ fn capture_bounded(
 struct BoundedCaptureTask {
     result: mpsc::Receiver<std::io::Result<BoundedCapture>>,
     task: thread::JoinHandle<()>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     stop: Arc<AtomicBool>,
 }
 
@@ -1108,14 +1169,14 @@ fn finish_capture(
     let BoundedCaptureTask {
         result,
         task,
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         stop,
     } = capture;
     let remaining = deadline.saturating_duration_since(Instant::now());
     let captured = match result.recv_timeout(remaining) {
         Ok(captured) => captured,
         Err(mpsc::RecvTimeoutError::Timeout) => {
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             {
                 stop.store(true, Ordering::Relaxed);
                 let _ = result.recv_timeout(Duration::from_millis(50));

@@ -275,6 +275,28 @@ fn bounded_command_rejects_pipe_held_by_escaped_descendant() {
     assert!(error.to_string().contains("remained open"));
 }
 
+#[cfg(windows)]
+#[test]
+fn bounded_capture_can_stop_an_open_windows_pipe() {
+    let mut child = std::process::Command::new("ping")
+        .args(["-n", "6", "127.0.0.1"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("start pipe holder");
+    let stdout = capture_bounded(child.stdout.take().expect("stdout pipe"), 16);
+    let stderr = capture_bounded(child.stderr.take().expect("stderr pipe"), 16);
+    let started = Instant::now();
+
+    let error = finish_captures(stdout, stderr, Duration::from_millis(/*millis*/ 50))
+        .expect_err("open pipes must not leak capture threads");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(error.to_string().contains("remained open"));
+}
+
 #[cfg(unix)]
 #[test]
 fn bounded_command_terminates_descendants_on_cancellation() {
