@@ -784,7 +784,7 @@ struct PendingCollaborationModeSelection {
     thread_id: ThreadId,
     mode: CollaborationMode,
     previous_mode: CollaborationMode,
-    expires_at: Instant,
+    expires_at: Option<Instant>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]

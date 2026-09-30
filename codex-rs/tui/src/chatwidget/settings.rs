@@ -383,7 +383,9 @@ impl ChatWidget {
             .filter(|pending| pending.thread_id == thread_id);
         let preserve = pending
             .filter(|pending| {
-                Instant::now() < pending.expires_at
+                pending
+                    .expires_at
+                    .is_none_or(|expires_at| Instant::now() < expires_at)
                     && notification.thread_settings.collaboration_mode != pending.mode
             })
             .map(|pending| pending.mode.clone());
@@ -689,14 +691,21 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_collaboration_mask_from_user_action(&mut self, mask: CollaborationModeMask) {
-        let previous_mode = self.effective_collaboration_mode();
+        let previous_mode = self
+            .pending_user_collaboration_mode
+            .as_ref()
+            .filter(|pending| Some(pending.thread_id) == self.thread_id)
+            .map_or_else(
+                || self.effective_collaboration_mode(),
+                |pending| pending.previous_mode.clone(),
+            );
         self.set_collaboration_mask(mask);
         self.pending_user_collaboration_mode = self.thread_id.map(|thread_id| {
             PendingCollaborationModeSelection {
                 thread_id,
                 mode: self.effective_collaboration_mode(),
                 previous_mode,
-                expires_at: Instant::now() + COLLABORATION_MODE_ACK_TIMEOUT,
+                expires_at: None,
             }
         });
         self.submit_collaboration_mode_settings_update();
@@ -708,13 +717,14 @@ impl ChatWidget {
         requested_mode: &CollaborationMode,
         updated: bool,
     ) {
-        if updated {
-            return;
-        }
-        let Some(pending) = self.pending_user_collaboration_mode.as_ref() else {
+        let Some(pending) = self.pending_user_collaboration_mode.as_mut() else {
             return;
         };
         if pending.thread_id != thread_id || &pending.mode != requested_mode {
+            return;
+        }
+        if updated {
+            pending.expires_at = Some(Instant::now() + COLLABORATION_MODE_ACK_TIMEOUT);
             return;
         }
         let previous_mode = pending.previous_mode.clone();

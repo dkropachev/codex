@@ -460,6 +460,12 @@ async fn stale_thread_settings_do_not_clobber_a_user_selected_workflow_mode() {
     )
     .expect("workflow mode");
     chat.set_collaboration_mask_from_user_action(workflow_mask);
+    let requested = chat.effective_collaboration_mode();
+    chat.on_collaboration_mode_settings_update_result(
+        thread_id,
+        &requested,
+        /*updated*/ true,
+    );
 
     let mut stale = thread_settings_for_test("gpt-stale", thread_id);
     stale.thread_settings.collaboration_mode.mode = ModeKind::Workflow;
@@ -519,7 +525,7 @@ async fn pending_collaboration_mode_is_scoped_to_one_notification_and_thread() {
     chat.pending_user_collaboration_mode
         .as_mut()
         .expect("pending selection")
-        .expires_at = Instant::now();
+        .expires_at = Some(Instant::now());
 
     let mut authoritative = thread_settings_for_test("gpt-5.4", second_thread);
     authoritative.thread_settings.collaboration_mode.mode = ModeKind::Default;
@@ -536,6 +542,14 @@ async fn rejected_collaboration_mode_update_reverts_latest_selection() {
     let thread_id = ThreadId::new();
     chat.handle_thread_session(configured_thread_session(thread_id));
     let initial = chat.effective_collaboration_mode();
+    let plan_mask = collaboration_modes::mask_for_kind_with_config(
+        chat.model_catalog.as_ref(),
+        ModeKind::Plan,
+        chat.collaboration_modes_config(),
+    )
+    .expect("plan mode");
+    chat.set_collaboration_mask_from_user_action(plan_mask);
+    let rejected_plan = chat.effective_collaboration_mode();
     let workflow_mask = collaboration_modes::mask_for_kind_with_config(
         chat.model_catalog.as_ref(),
         ModeKind::Workflow,
@@ -543,11 +557,17 @@ async fn rejected_collaboration_mode_update_reverts_latest_selection() {
     )
     .expect("workflow mode");
     chat.set_collaboration_mask_from_user_action(workflow_mask);
-    let requested = chat.effective_collaboration_mode();
+    let rejected_workflow = chat.effective_collaboration_mode();
 
     chat.on_collaboration_mode_settings_update_result(
         thread_id,
-        &requested,
+        &rejected_plan,
+        /*updated*/ false,
+    );
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Workflow);
+    chat.on_collaboration_mode_settings_update_result(
+        thread_id,
+        &rejected_workflow,
         /*updated*/ false,
     );
 
