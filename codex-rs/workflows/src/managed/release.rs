@@ -75,10 +75,9 @@ pub(crate) fn resolve_workflow_release(output: &str) -> anyhow::Result<ResolvedW
         let Some(version) = stable_version(&tag) else {
             continue;
         };
-        let object_id = oids
-            .peeled
-            .or(oids.direct)
-            .expect("tag record has an object ID");
+        let Some(object_id) = oids.peeled.or(oids.direct) else {
+            bail!("Git returned a tag without an object ID");
+        };
         candidates.push((tag, version, object_id));
     }
     candidates.sort_by(|left, right| {
