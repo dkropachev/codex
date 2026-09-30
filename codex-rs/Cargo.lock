@@ -4940,6 +4940,7 @@ version = "0.151.0"
 dependencies = [
  "anyhow",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "jsonschema",
  "pretty_assertions",
  "rustix 1.1.4",
@@ -4950,6 +4951,7 @@ dependencies = [
  "tempfile",
  "tree-sitter",
  "tree-sitter-typescript",
+ "url",
  "windows-sys 0.52.0",
 ]
 
