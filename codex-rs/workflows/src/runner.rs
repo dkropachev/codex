@@ -920,6 +920,7 @@ pub(crate) struct BoundedCommandOutput {
     pub(crate) stdout: Vec<u8>,
     pub(crate) stderr: Vec<u8>,
     pub(crate) stdout_oversized: bool,
+    #[allow(dead_code, reason = "used by managed Bun dependency execution")]
     pub(crate) stderr_oversized: bool,
 }
 
