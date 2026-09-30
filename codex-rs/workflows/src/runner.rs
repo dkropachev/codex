@@ -9,11 +9,11 @@ use std::process::Child;
 use std::process::Command;
 use std::process::ExitStatus;
 use std::process::Stdio;
+#[cfg(any(unix, windows))]
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
-#[cfg(any(unix, windows))]
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -1008,17 +1008,13 @@ struct BoundedCapture {
 }
 
 #[cfg(unix)]
-fn capture_bounded<R>(
-    mut reader: R,
-    maximum_bytes: usize,
-) -> BoundedCaptureTask
+fn capture_bounded<R>(mut reader: R, maximum_bytes: usize) -> BoundedCaptureTask
 where
     R: Read + Send + std::os::fd::AsFd + 'static,
 {
     let flags = rustix::fs::fcntl_getfl(&reader);
-    let configured = flags.and_then(|flags| {
-        rustix::fs::fcntl_setfl(&reader, flags | rustix::fs::OFlags::NONBLOCK)
-    });
+    let configured = flags
+        .and_then(|flags| rustix::fs::fcntl_setfl(&reader, flags | rustix::fs::OFlags::NONBLOCK));
     let (sender, result) = mpsc::sync_channel(1);
     let stop = Arc::new(AtomicBool::new(false));
     let task_stop = Arc::clone(&stop);
@@ -1056,15 +1052,14 @@ where
 }
 
 #[cfg(windows)]
-fn capture_bounded(
-    mut reader: impl Read + Send + 'static,
-    maximum_bytes: usize,
-) -> BoundedCaptureTask {
+fn capture_bounded<R>(mut reader: R, maximum_bytes: usize) -> BoundedCaptureTask
+where
+    R: Read + Send + std::os::windows::io::AsRawHandle + 'static,
+{
     let (sender, result) = mpsc::sync_channel(1);
     let stop = Arc::new(AtomicBool::new(false));
     let task_stop = Arc::clone(&stop);
     let task = thread::spawn(move || {
-        use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::Foundation::ERROR_BROKEN_PIPE;
         use windows_sys::Win32::Foundation::GetLastError;
         use windows_sys::Win32::Foundation::HANDLE;
@@ -1080,7 +1075,7 @@ fn capture_bounded(
                 let mut available = 0_u32;
                 let ok = unsafe {
                     PeekNamedPipe(
-                        reader.as_raw_handle() as HANDLE,
+                        std::os::windows::io::AsRawHandle::as_raw_handle(&reader) as HANDLE,
                         std::ptr::null_mut(),
                         0,
                         std::ptr::null_mut(),
@@ -1189,8 +1184,7 @@ fn finish_capture(
             bail!("workflow {stream} capture thread stopped unexpectedly");
         }
     };
-    task
-        .join()
+    task.join()
         .map_err(|_| anyhow::anyhow!("workflow {stream} capture thread panicked"))?;
     captured.with_context(|| format!("failed to read workflow subprocess {stream}"))
 }
