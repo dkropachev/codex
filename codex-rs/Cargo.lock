@@ -4944,6 +4944,7 @@ dependencies = [
  "jsonschema",
  "pretty_assertions",
  "rustix 1.1.4",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",
