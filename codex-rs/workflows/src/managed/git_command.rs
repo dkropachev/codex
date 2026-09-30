@@ -10,19 +10,23 @@ use anyhow::bail;
 use super::ResolvedWorkflowRelease;
 use super::WorkflowGitSource;
 
-const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
-const MAX_GIT_OUTPUT_BYTES: usize = 1024 * 1024;
+pub(super) const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
+pub(super) const MAX_GIT_OUTPUT_BYTES: usize = 1024 * 1024;
 const GIT_CONFIG: &[&str] = &[
     "safe.bareRepository=explicit",
     "core.fsmonitor=false",
     "credential.helper=",
     "credential.interactive=never",
+    "fetch.fsckObjects=true",
+    "fetch.writeCommitGraph=false",
     "core.askPass=",
     "http.followRedirects=false",
     "protocol.allow=never",
     "protocol.file.allow=always",
     "protocol.https.allow=always",
     "protocol.ssh.allow=always",
+    "submodule.recurse=false",
+    "transfer.fsckObjects=true",
 ];
 
 #[cfg(windows)]
@@ -76,20 +80,29 @@ fn resolve_workflow_git_release_with_options(
         bail!("Git release check failed with exit status {status}");
     }
     let output = std::str::from_utf8(&stdout).context("Git returned non-UTF-8 release metadata")?;
-    super::release::resolve_workflow_release(output)
+    let release = super::release::resolve_workflow_release(output)?;
+    release.validate_identity()?;
+    Ok(release)
 }
 
 fn ls_remote_command(git: &OsStr, source: &OsStr, working_directory: &Path) -> Command {
+    let mut command = trusted_git_command(git, working_directory);
+    command
+        .args(["ls-remote", "--"])
+        .arg(source)
+        .args(["HEAD", "refs/tags/*"])
+        .env("GIT_DIR", working_directory.join("isolated.git"));
+    command
+}
+
+pub(super) fn trusted_git_command(git: &OsStr, working_directory: &Path) -> Command {
     let mut command = Command::new(git);
     for config in GIT_CONFIG {
         command.args(["-c", config]);
     }
     command
         .arg("-c")
-        .arg(format!("core.hooksPath={DISABLED_GIT_CONFIG_PATH}"))
-        .args(["ls-remote", "--"])
-        .arg(source)
-        .args(["HEAD", "refs/tags/*"]);
+        .arg(format!("core.hooksPath={DISABLED_GIT_CONFIG_PATH}"));
     remove_git_environment_variables(&mut command, std::env::vars_os().map(|(name, _)| name));
     command
         .current_dir(working_directory)
@@ -100,7 +113,6 @@ fn ls_remote_command(git: &OsStr, source: &OsStr, working_directory: &Path) -> C
         .env("GIT_CONFIG_SYSTEM", DISABLED_GIT_CONFIG_PATH)
         .env("GIT_LFS_SKIP_SMUDGE", "1")
         .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_DIR", working_directory.join("isolated.git"))
         .env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")

@@ -111,3 +111,36 @@ fn rejects_invalid_listings() {
         assert!(resolve_workflow_release(&output).is_err(), "{output}");
     }
 }
+
+#[test]
+fn validates_release_identities_before_fetch() {
+    let sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    for release in [
+        resolved(Some("v1.2.3"), FIRST),
+        resolved(Some("1.2.3+build.7"), FIRST),
+        resolved(None, sha256),
+    ] {
+        assert_eq!(
+            release
+                .validate_identity()
+                .map_err(|error| error.to_string()),
+            Ok(())
+        );
+    }
+
+    for (tag, version, object_id) in [
+        (Some("v1.2.3+build.7"), None, FIRST),
+        (None, Some("1.2.3+build.7"), FIRST),
+        (Some("v1.2.3-rc.1"), Some("1.2.3-rc.1"), FIRST),
+        (Some("v1.2.3+other"), Some("1.2.3+build.7"), FIRST),
+        (None, None, "0000000000000000000000000000000000000000"),
+        (None, None, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaag"),
+    ] {
+        let release = ResolvedWorkflowRelease {
+            tag: tag.map(str::to_string),
+            version: version.map(|version| Version::parse(version).unwrap()),
+            advertised_object_id: object_id.to_string(),
+        };
+        assert!(release.validate_identity().is_err());
+    }
+}
