@@ -16,6 +16,37 @@ pub struct ResolvedWorkflowRelease {
     pub advertised_object_id: String,
 }
 
+impl ResolvedWorkflowRelease {
+    pub(crate) fn validate_identity(&self) -> anyhow::Result<()> {
+        if !valid_object_id(&self.advertised_object_id) {
+            bail!("resolved workflow release has an invalid advertised object ID");
+        }
+        match (&self.tag, &self.version) {
+            (Some(tag), Some(version)) => {
+                if !valid_tag_name(tag) {
+                    bail!("resolved workflow release has an invalid tag name");
+                }
+                let Some(parsed) = stable_version(tag) else {
+                    bail!("resolved workflow release tag is not a stable SemVer release");
+                };
+                let expected = if tag.starts_with('v') {
+                    format!("v{version}")
+                } else {
+                    version.to_string()
+                };
+                if parsed != *version || tag != &expected {
+                    bail!("resolved workflow release tag and version do not match exactly");
+                }
+            }
+            (None, None) => {}
+            (Some(_), None) | (None, Some(_)) => {
+                bail!("resolved workflow release must have both a tag and version or neither");
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 struct TagOids {
     direct: Option<String>,
@@ -33,10 +64,7 @@ pub(crate) fn resolve_workflow_release(output: &str) -> anyhow::Result<ResolvedW
         else {
             bail!("malformed ls-remote record on line {}", index + 1);
         };
-        if !matches!(oid.len(), 40 | 64)
-            || !oid.bytes().all(|byte| byte.is_ascii_hexdigit())
-            || oid.bytes().all(|byte| byte == b'0')
-        {
+        if !valid_object_id(oid) {
             bail!("invalid object ID on ls-remote line {}", index + 1);
         }
         if object_id_length.is_some_and(|len| len != oid.len()) {
@@ -124,6 +152,12 @@ fn record_oid(slot: &mut Option<String>, oid: &str, _reference: &str) -> anyhow:
 fn stable_version(tag: &str) -> Option<Version> {
     let version = Version::parse(tag.strip_prefix('v').unwrap_or(tag)).ok()?;
     version.pre.is_empty().then_some(version)
+}
+
+fn valid_object_id(object_id: &str) -> bool {
+    matches!(object_id.len(), 40 | 64)
+        && object_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && object_id.bytes().any(|byte| byte != b'0')
 }
 
 fn valid_tag_name(tag: &str) -> bool {
