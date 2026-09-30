@@ -182,7 +182,10 @@ fn plans_install_and_inspection_with_exact_argv_environment_and_permissions() {
         "--config".into(),
         environment.bunfig.as_path().as_os_str().to_os_string(),
     ];
-    assert_eq!(install.program, bun);
+    assert_eq!(
+        install.program,
+        absolute(&fs::canonicalize(bun.as_path()).expect("resolve Bun executable"))
+    );
     assert_eq!(install.args, expected_args);
     assert_eq!(install.cwd, candidate);
     let mut expected_env = [

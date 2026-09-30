@@ -273,7 +273,7 @@ pub(in crate::managed) fn managed_bun_install_command_plan(
     {
         bail!("managed Bun environment and workflow candidate must not overlap");
     }
-    validate_bun_executable(bun_executable, candidate)?;
+    let bun_executable = validate_bun_executable(bun_executable, candidate)?;
     let mut read_only_paths = vec![
         candidate.join("package.json"),
         candidate.join(lockfile.file_name()),
@@ -286,7 +286,7 @@ pub(in crate::managed) fn managed_bun_install_command_plan(
             .map(|package| candidate.join(package).join("package.json")),
     );
     Ok(command_plan(
-        bun_executable,
+        &bun_executable,
         candidate,
         environment,
         ManagedBunOperation::Install,
@@ -319,9 +319,9 @@ pub(in crate::managed) fn managed_bun_binary_inspection_command_plan(
     bun_executable: &AbsolutePathBuf,
     environment: &ManagedBunEnvironment,
 ) -> anyhow::Result<ManagedBunCommandPlan> {
-    validate_bun_executable(bun_executable, &environment.scratch_dir)?;
+    let bun_executable = validate_bun_executable(bun_executable, &environment.scratch_dir)?;
     Ok(command_plan(
-        bun_executable,
+        &bun_executable,
         &environment.scratch_dir,
         environment,
         ManagedBunOperation::InspectBinaryLockfile,
@@ -333,7 +333,7 @@ pub(in crate::managed) fn managed_bun_binary_inspection_command_plan(
 fn validate_bun_executable(
     bun_executable: &AbsolutePathBuf,
     operation_root: &AbsolutePathBuf,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<AbsolutePathBuf> {
     let bun = fs::canonicalize(bun_executable.as_path()).with_context(|| {
         format!(
             "failed to resolve managed Bun executable {}",
@@ -352,7 +352,8 @@ fn validate_bun_executable(
     if bun.starts_with(operation_root) {
         bail!("managed operation target may not provide the Bun executable");
     }
-    Ok(())
+    AbsolutePathBuf::from_absolute_path_checked(bun)
+        .context("resolved managed Bun executable was not absolute")
 }
 
 fn command_plan(
