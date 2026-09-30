@@ -73,7 +73,7 @@ pub(in crate::managed) struct ManagedBunEnvironment {
 }
 
 /// An unspawned Bun command together with the exact sandbox permissions it requires.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(in crate::managed) struct ManagedBunCommandPlan {
     program: AbsolutePathBuf,
     args: Vec<OsString>,
@@ -94,12 +94,6 @@ pub(in crate::managed) struct PreparedManagedBunCommand {
     command: Command,
     sandbox: SandboxType,
     _operation: Arc<tempfile::TempDir>,
-}
-
-impl PreparedManagedBunCommand {
-    pub(in crate::managed) fn sandbox(&self) -> SandboxType {
-        self.sandbox
-    }
 }
 
 impl ManagedBunCommandPlan {
@@ -276,7 +270,15 @@ pub(in crate::managed) fn managed_bun_install_command_plan(
     {
         bail!("managed Bun environment and workflow candidate must not overlap");
     }
-    let bun_executable = validate_bun_executable(bun_executable, candidate)?;
+    let bun_executable = validate_bun_executable(
+        bun_executable,
+        &[
+            candidate,
+            &environment.cache_dir,
+            &environment.temp_dir,
+            &environment.home_dir,
+        ],
+    )?;
     let mut read_only_paths = vec![
         candidate.join("package.json"),
         candidate.join(lockfile.file_name()),
@@ -326,7 +328,15 @@ pub(in crate::managed) fn managed_bun_binary_inspection_command_plan(
     bun_executable: &AbsolutePathBuf,
     environment: &ManagedBunEnvironment,
 ) -> anyhow::Result<ManagedBunCommandPlan> {
-    let bun_executable = validate_bun_executable(bun_executable, &environment.scratch_dir)?;
+    let bun_executable = validate_bun_executable(
+        bun_executable,
+        &[
+            &environment.scratch_dir,
+            &environment.cache_dir,
+            &environment.temp_dir,
+            &environment.home_dir,
+        ],
+    )?;
     Ok(command_plan(
         &bun_executable,
         &environment.scratch_dir,
@@ -339,7 +349,7 @@ pub(in crate::managed) fn managed_bun_binary_inspection_command_plan(
 
 fn validate_bun_executable(
     bun_executable: &AbsolutePathBuf,
-    operation_root: &AbsolutePathBuf,
+    writable_roots: &[&AbsolutePathBuf],
 ) -> anyhow::Result<AbsolutePathBuf> {
     let bun = fs::canonicalize(bun_executable.as_path()).with_context(|| {
         format!(
@@ -350,14 +360,16 @@ fn validate_bun_executable(
     if !bun.is_file() {
         bail!("managed Bun executable must be a regular file");
     }
-    let operation_root = fs::canonicalize(operation_root.as_path()).with_context(|| {
-        format!(
-            "failed to resolve managed operation root {}",
-            operation_root.as_path().display()
-        )
-    })?;
-    if bun.starts_with(operation_root) {
-        bail!("managed operation target may not provide the Bun executable");
+    for writable_root in writable_roots {
+        let writable_root = fs::canonicalize(writable_root.as_path()).with_context(|| {
+            format!(
+                "failed to resolve managed writable root {}",
+                writable_root.as_path().display()
+            )
+        })?;
+        if bun.starts_with(writable_root) {
+            bail!("managed writable root may not provide the Bun executable");
+        }
     }
     AbsolutePathBuf::from_absolute_path_checked(bun)
         .context("resolved managed Bun executable was not absolute")

@@ -40,9 +40,6 @@ fn materializes_private_configuration_and_isolated_directories() {
         fs::read_to_string(environment.bunfig.as_path()).expect("read bunfig"),
         "env = false\ntelemetry = false\n\n[install]\nregistry = \"https://registry.npmjs.org/\"\n"
     );
-    assert!(fs::read(environment.npmrc.as_path())
-        .expect("read npmrc")
-        .is_empty());
     assert!(
         [
             &environment.scratch_dir,
@@ -57,6 +54,11 @@ fn materializes_private_configuration_and_isolated_directories() {
         ]
         .into_iter()
         .all(|path| path.as_path().is_dir())
+    );
+    assert!(
+        fs::read(environment.npmrc.as_path())
+            .expect("read npmrc")
+            .is_empty()
     );
 }
 
