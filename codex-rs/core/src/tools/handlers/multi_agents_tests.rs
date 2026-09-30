@@ -857,17 +857,31 @@ async fn multi_agent_v2_spawn_applies_model_policy_before_root_service_tier() {
     );
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ExplicitModelPolicyOverride {
+    ModelOnly,
+    ReasoningOnly,
+}
+
+#[test_case::test_case(ExplicitModelPolicyOverride::ModelOnly; "model only")]
+#[test_case::test_case(ExplicitModelPolicyOverride::ReasoningOnly; "reasoning only")]
 #[tokio::test]
-async fn multi_agent_v2_spawn_explicit_model_override_skips_model_policy() {
-    let (mut session, mut turn) = make_session_and_context().await;
+async fn multi_agent_v2_spawn_partial_explicit_override_skips_entire_model_policy(
+    explicit_override: ExplicitModelPolicyOverride,
+) {
+    let (mut session, turn) = make_session_and_context().await;
+    let mut turn = turn
+        .with_model("gpt-5.4".to_string(), &session.services.models_manager)
+        .await;
     let mut config = (*turn.config).clone();
+    config.model_reasoning_effort = Some(ReasoningEffort::Medium);
     config.model_policy = Some(ModelPolicyToml {
         enabled: true,
         rules: vec![ModelPolicyRuleToml {
             source: Some(vec!["subagent.thread_spawn".to_string()]),
             route: ModelPolicyRouteToml {
                 model: Some("gpt-5.6-terra".to_string()),
-                reasoning_effort: Some(ModelPolicyReasoningEffortToml::Low),
+                reasoning_effort: Some(ModelPolicyReasoningEffortToml::XHigh),
                 ..Default::default()
             },
             ..Default::default()
@@ -887,21 +901,31 @@ async fn multi_agent_v2_spawn_explicit_model_override_skips_model_policy() {
     session.services.agent_control = root.thread.session.services.agent_control.clone();
     session.thread_id = root.thread_id;
 
+    let mut arguments = json!({
+        "message": "inspect this repo",
+        "task_name": "explicit_override",
+        "fork_turns": "none"
+    });
+    let expected = match explicit_override {
+        ExplicitModelPolicyOverride::ModelOnly => {
+            arguments["model"] = json!("gpt-5.6-sol");
+            ("gpt-5.6-sol", Some(ReasoningEffort::Low))
+        }
+        ExplicitModelPolicyOverride::ReasoningOnly => {
+            arguments["reasoning_effort"] = json!("high");
+            ("gpt-5.4", Some(ReasoningEffort::High))
+        }
+    };
+
     SpawnAgentHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
             "spawn_agent",
-            function_payload(json!({
-                "message": "inspect this repo",
-                "task_name": "explicit_model",
-                "model": "gpt-5.6-sol",
-                "reasoning_effort": "high",
-                "fork_turns": "none"
-            })),
+            function_payload(arguments),
         ))
         .await
-        .expect("spawn_agent should honor explicit model overrides");
+        .expect("spawn_agent should honor the explicit override");
     let child_thread_id = manager
         .captured_ops()
         .into_iter()
@@ -915,8 +939,10 @@ async fn multi_agent_v2_spawn_explicit_model_override_skips_model_policy() {
         .config_snapshot()
         .await;
 
-    assert_eq!(snapshot.model, "gpt-5.6-sol");
-    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::High));
+    assert_eq!(
+        (snapshot.model.as_str(), snapshot.reasoning_effort),
+        expected
+    );
 }
 
 #[tokio::test]

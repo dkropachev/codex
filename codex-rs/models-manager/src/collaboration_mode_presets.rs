@@ -119,7 +119,7 @@ fn asking_questions_guidance_message(default_mode_request_user_input: bool) -> S
     if default_mode_request_user_input {
         "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions.\n\nUse the `request_user_input` tool only for optional questions where the answer would materially improve the quality of the work.\n\nIf `request_user_input` returns no answers, continue with best judgment instead of asking again or treating the turn as blocked.\n\nNever use the `request_user_input` tool for permission requests or permission-related escalations.\n\nIf explicit user input is required for another reason before progress can safely continue, do not use the `request_user_input` tool. Ask the user directly with one concise plain-text question instead. Never write a multiple choice question as a textual assistant message.".to_string()
     } else {
-        "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions.\n\nIf explicit user input is required before progress can safely continue, ask the user directly with one concise plain-text question. Never write a multiple choice question as a textual assistant message.".to_string()
+        "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions.\n\nIf explicit user input is required before progress can safely continue, pause. Ask the user directly with one concise plain-text question instead. Never write a multiple choice question as a textual assistant message.".to_string()
     }
 }
 
