@@ -700,22 +700,21 @@ impl ChatWidget {
                 |pending| pending.previous_mode.clone(),
             );
         self.set_collaboration_mask(mask);
-        self.pending_user_collaboration_mode = self.thread_id.map(|thread_id| {
-            PendingCollaborationModeSelection {
-                thread_id,
-                mode: self.effective_collaboration_mode(),
-                previous_mode,
-                expires_at: None,
-            }
-        });
+        self.pending_user_collaboration_mode =
+            self.thread_id
+                .map(|thread_id| PendingCollaborationModeSelection {
+                    thread_id,
+                    mode: self.effective_collaboration_mode(),
+                    previous_mode,
+                    expires_at: None,
+                });
         self.submit_collaboration_mode_settings_update();
     }
 
-    pub(crate) fn on_collaboration_mode_settings_update_result(
+    pub(crate) fn on_collaboration_mode_settings_update_succeeded(
         &mut self,
         thread_id: ThreadId,
         requested_mode: &CollaborationMode,
-        updated: bool,
     ) {
         let Some(pending) = self.pending_user_collaboration_mode.as_mut() else {
             return;
@@ -723,8 +722,31 @@ impl ChatWidget {
         if pending.thread_id != thread_id || &pending.mode != requested_mode {
             return;
         }
-        if updated {
+        pending.expires_at = Some(Instant::now() + COLLABORATION_MODE_ACK_TIMEOUT);
+    }
+
+    pub(crate) fn on_collaboration_mode_settings_update_unsupported(
+        &mut self,
+        thread_id: ThreadId,
+        requested_mode: &CollaborationMode,
+    ) {
+        let Some(pending) = self.pending_user_collaboration_mode.as_mut() else {
+            return;
+        };
+        if pending.thread_id == thread_id && &pending.mode == requested_mode {
             pending.expires_at = Some(Instant::now() + COLLABORATION_MODE_ACK_TIMEOUT);
+        }
+    }
+
+    pub(crate) fn on_collaboration_mode_settings_update_failed(
+        &mut self,
+        thread_id: ThreadId,
+        requested_mode: &CollaborationMode,
+    ) {
+        let Some(pending) = self.pending_user_collaboration_mode.as_ref() else {
+            return;
+        };
+        if pending.thread_id != thread_id || &pending.mode != requested_mode {
             return;
         }
         let previous_mode = pending.previous_mode.clone();

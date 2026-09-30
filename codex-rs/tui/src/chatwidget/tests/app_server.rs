@@ -461,11 +461,7 @@ async fn stale_thread_settings_do_not_clobber_a_user_selected_workflow_mode() {
     .expect("workflow mode");
     chat.set_collaboration_mask_from_user_action(workflow_mask);
     let requested = chat.effective_collaboration_mode();
-    chat.on_collaboration_mode_settings_update_result(
-        thread_id,
-        &requested,
-        /*updated*/ true,
-    );
+    chat.on_collaboration_mode_settings_update_succeeded(thread_id, &requested);
 
     let mut stale = thread_settings_for_test("gpt-stale", thread_id);
     stale.thread_settings.collaboration_mode.mode = ModeKind::Workflow;
@@ -559,20 +555,36 @@ async fn rejected_collaboration_mode_update_reverts_latest_selection() {
     chat.set_collaboration_mask_from_user_action(workflow_mask);
     let rejected_workflow = chat.effective_collaboration_mode();
 
-    chat.on_collaboration_mode_settings_update_result(
-        thread_id,
-        &rejected_plan,
-        /*updated*/ false,
-    );
+    chat.on_collaboration_mode_settings_update_failed(thread_id, &rejected_plan);
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Workflow);
-    chat.on_collaboration_mode_settings_update_result(
-        thread_id,
-        &rejected_workflow,
-        /*updated*/ false,
-    );
+    chat.on_collaboration_mode_settings_update_failed(thread_id, &rejected_workflow);
 
     assert!(chat.pending_user_collaboration_mode.is_none());
     assert_eq!(chat.effective_collaboration_mode(), initial);
+}
+
+#[tokio::test]
+async fn unsupported_collaboration_mode_update_keeps_local_selection() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+    let workflow_mask = collaboration_modes::mask_for_kind_with_config(
+        chat.model_catalog.as_ref(),
+        ModeKind::Workflow,
+        chat.collaboration_modes_config(),
+    )
+    .expect("workflow mode");
+    chat.set_collaboration_mask_from_user_action(workflow_mask);
+    let selected = chat.effective_collaboration_mode();
+
+    chat.on_collaboration_mode_settings_update_unsupported(thread_id, &selected);
+    let mut stale = thread_settings_for_test("gpt-stale", thread_id);
+    stale.thread_settings.collaboration_mode.mode = ModeKind::Plan;
+    chat.on_thread_settings_updated(stale);
+
+    assert!(chat.pending_user_collaboration_mode.is_some());
+    assert_eq!(chat.effective_collaboration_mode(), selected);
 }
 
 #[tokio::test]
