@@ -69,7 +69,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         .is_enabled()
         .then(|| history.raw_items().cloned().collect());
     let (mut input, prompt_input_metadata): (Vec<_>, Vec<_>) = history
-        .for_prompt_annotated(&turn_context.model_info.input_modalities)
+        .for_prompt_annotated(&turn_context.model_info().input_modalities)
         .into_iter()
         .map(|envelope| (envelope.item, envelope.metadata))
         .unzip();
@@ -82,7 +82,8 @@ pub(super) async fn run_remote_compact_v2_attempt(
         base_instructions,
         output_schema: None,
         output_schema_strict: true,
-        verbosity: turn_context.effective_model_verbosity(&step_context.model_info),
+        verbosity: turn_context.effective_model_verbosity(&step_context.settings.model_info),
+        cyber_access_program: turn_context.cyber_access_program,
     };
 
     let responses_metadata = sess
@@ -92,7 +93,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         )
         .await;
     let trace_attempt = compaction_trace.start_attempt(&serde_json::json!({
-        "model": turn_context.model_info.slug.as_str(),
+        "model": turn_context.model_info().slug.as_str(),
         "instructions": prompt.base_instructions.text.as_str(),
         "input": &prompt.input,
         "parallel_tool_calls": prompt.parallel_tool_calls,
@@ -119,6 +120,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         compaction_output,
         response_id,
         token_usage,
+        usage_metadata,
     } = compaction_output_result?;
     // TODO: Emit this before compaction output validation so malformed completed
     // responses still surface their raw upstream usage.
@@ -127,6 +129,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         EventMsg::RawResponseCompleted(RawResponseCompletedEvent {
             response_id,
             token_usage: token_usage.clone(),
+            usage_metadata,
         }),
     )
     .await;

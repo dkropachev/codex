@@ -37,6 +37,10 @@ use codex_protocol::protocol::MultiAgentVersion;
 #[cfg(test)]
 use crate::session::completed_session_loop_termination;
 
+pub(crate) struct GuardianReadOnlyHistoryTools(
+    pub(crate) Vec<Arc<dyn for<'call> codex_tools::ToolExecutor<codex_tools::ToolCall<'call>>>>,
+);
+
 /// Start an interactive sub-Codex thread and return its runtime and IO channels.
 ///
 /// Delegates never request approvals, and the returned IO yields their public events.
@@ -52,7 +56,7 @@ pub(crate) async fn run_codex_thread_interactive(
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
     initial_history: Option<InitialHistory>,
-    thread_extension_init: ExtensionDataInit,
+    mut thread_extension_init: ExtensionDataInit,
     git_enrichment_policy: GitEnrichmentPolicy,
     windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
 ) -> Result<(Arc<Session>, SessionIo), CodexErr> {
@@ -77,6 +81,26 @@ pub(crate) async fn run_codex_thread_interactive(
     };
     let session_source = SessionSource::SubAgent(subagent_source.clone());
     let is_guardian_reviewer = crate::guardian::is_basic_session_source(&session_source);
+    if is_guardian_reviewer {
+        let history_tools = crate::tools::spec_plan::extension_tool_executors(
+            parent_session.as_ref(),
+            parent_ctx.extension_data.as_ref(),
+        )
+        .filter(|executor| {
+            let name = executor.tool_name();
+            matches!(
+                (name.namespace.as_deref(), name.name.as_str()),
+                (
+                    Some("history"),
+                    "list_windows" | "list_items" | "read_item" | "search_contents"
+                )
+            )
+        })
+        .collect::<Vec<_>>();
+        if !history_tools.is_empty() {
+            thread_extension_init.insert(GuardianReadOnlyHistoryTools(history_tools));
+        }
+    }
     let extensions = if is_guardian_reviewer {
         codex_extension_api::empty_extension_registry()
     } else {

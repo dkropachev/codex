@@ -47,7 +47,10 @@ impl ToolExecutor<ToolInvocation> for ReadExecOutputHandler {
         create_read_exec_output_tool()
     }
 
-    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+    where
+        ToolInvocation: 'a,
+    {
         Box::pin(async move {
             let ToolInvocation {
                 session,
@@ -100,7 +103,7 @@ impl ToolExecutor<ToolInvocation> for ReadExecOutputHandler {
                 slice_output(raw_text.as_str(), args.line_start, args.line_count)
             };
             let truncation_policy: TruncationPolicy =
-                step_context.model_info.truncation_policy.into();
+                step_context.settings.model_info.truncation_policy.into();
             let max_tokens =
                 resolve_max_tokens(args.max_output_tokens).min(truncation_policy.token_budget());
             let output = formatted_truncate_text(&selected, TruncationPolicy::Tokens(max_tokens));

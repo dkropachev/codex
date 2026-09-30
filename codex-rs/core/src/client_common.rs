@@ -39,6 +39,8 @@ pub struct Prompt {
     /// Optional per-turn verbosity control for models that support Responses
     /// API `text.verbosity`.
     pub verbosity: Option<Verbosity>,
+
+    pub(crate) cyber_access_program: Option<codex_protocol::turn_input::CyberAccessProgram>,
 }
 
 impl Default for Prompt {
@@ -51,6 +53,7 @@ impl Default for Prompt {
             output_schema: None,
             output_schema_strict: true,
             verbosity: None,
+            cyber_access_program: None,
         }
     }
 }

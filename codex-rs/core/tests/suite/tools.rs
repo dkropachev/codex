@@ -5,6 +5,7 @@ use std::fs;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use codex_core::config::Constrained;
@@ -841,7 +842,7 @@ async fn exec_command_enforces_glob_deny_read_policy() -> Result<()> {
 enum CommandToolAvailability {
     Default,
     OutputCompactionEnabled,
-    LegacyUnifiedExecDisabled,
+    ManagedUnifiedExecDisabled,
     ShellToolDisabled,
     ModelDisabled,
 }
@@ -864,12 +865,16 @@ async fn collect_tools(availability: CommandToolAvailability) -> Result<Vec<Stri
                 .enable(Feature::ExecOutputCompaction)
                 .expect("test config should allow feature update");
         }),
-        CommandToolAvailability::LegacyUnifiedExecDisabled => test_codex().with_config(|config| {
-            config
-                .features
-                .disable(Feature::UnifiedExec)
-                .expect("test config should allow feature update");
-        }),
+        CommandToolAvailability::ManagedUnifiedExecDisabled => test_codex()
+            .with_cloud_config_bundle(
+                CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                    r#"
+[features]
+unified_exec = false
+shell_tool = true
+"#,
+                ),
+            ),
         CommandToolAvailability::ShellToolDisabled => test_codex().with_config(|config| {
             config
                 .features
@@ -912,10 +917,7 @@ async fn unified_exec_spec_toggle_end_to_end() -> Result<()> {
         }
     }
 
-    for availability in [
-        CommandToolAvailability::Default,
-        CommandToolAvailability::LegacyUnifiedExecDisabled,
-    ] {
+    for availability in [CommandToolAvailability::Default] {
         let tools = collect_tools(availability).await?;
         for command_tool in ["exec_command", "write_stdin"] {
             assert!(
@@ -936,6 +938,16 @@ async fn unified_exec_spec_toggle_end_to_end() -> Result<()> {
             "tools list should include {command_tool} when output compaction is enabled: {tools:?}"
         );
     }
+
+    let tools = collect_tools(CommandToolAvailability::ManagedUnifiedExecDisabled).await?;
+    assert!(
+        tools.iter().any(|name| name == "exec_command"),
+        "managed unified-exec disable should keep one-shot command execution: {tools:?}"
+    );
+    assert!(
+        !tools.iter().any(|name| name == "write_stdin"),
+        "managed unified-exec disable must not expose retained process authority: {tools:?}"
+    );
 
     Ok(())
 }

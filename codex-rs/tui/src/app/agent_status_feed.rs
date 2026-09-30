@@ -190,7 +190,10 @@ fn activity_summary(item: &ThreadItem) -> Option<String> {
         }
         ThreadItem::ImageGeneration(_) => return Some("Generated an image".to_string()),
         ThreadItem::ContextCompaction { .. } => return Some("Compacted context".to_string()),
-        ThreadItem::UserMessage { .. } | ThreadItem::HookPrompt { .. } | ThreadItem::Sleep(_) => {
+        ThreadItem::UserMessage { .. }
+        | ThreadItem::HookPrompt { .. }
+        | ThreadItem::FunctionCallOutput { .. }
+        | ThreadItem::Sleep(_) => {
             return None;
         }
     };

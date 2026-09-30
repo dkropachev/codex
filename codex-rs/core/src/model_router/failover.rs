@@ -110,6 +110,7 @@ pub(crate) fn model_router_failure_scope(err: &CodexErr) -> Option<ModelRouterFa
         CodexErrorDetails::Stream(message) => message_failure_scope(message),
         CodexErrorDetails::Timeout
         | CodexErrorDetails::RequestTimeout
+        | CodexErrorDetails::RateLimitExceeded(_)
         | CodexErrorDetails::ContextWindowExceeded
         | CodexErrorDetails::ServerOverloaded => Some(ModelRouterFailureScope::Model),
         CodexErrorDetails::UsageLimitReached(_)
@@ -314,6 +315,12 @@ mod tests {
             model_router_failure_scope(&CodexErr::Stream(
                 "Rate limit reached for gpt-5.1. Please try again in 1s.".to_string(),
             )),
+            Some(ModelRouterFailureScope::Model)
+        );
+        assert_eq!(
+            model_router_failure_scope(&CodexErr::new(CodexErrorDetails::RateLimitExceeded(
+                "retry later".to_string()
+            ),)),
             Some(ModelRouterFailureScope::Model)
         );
         assert_eq!(
