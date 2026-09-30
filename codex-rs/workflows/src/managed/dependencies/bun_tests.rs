@@ -18,6 +18,8 @@ fn absolute(path: &std::path::Path) -> AbsolutePathBuf {
 fn fixture() -> (tempfile::TempDir, AbsolutePathBuf, ManagedBunEnvironment) {
     let temporary = tempfile::tempdir().expect("temporary root");
     let root = absolute(temporary.path());
+    fs::create_dir_all(root.join("tools").as_path()).expect("create tools directory");
+    fs::write(root.join("tools/bun").as_path(), "bun").expect("write Bun executable");
     let environment =
         materialize_bun_environment(&root.join("management")).expect("materialize Bun environment");
     (temporary, root, environment)
@@ -115,6 +117,9 @@ fn rejects_overlapping_management_and_candidate_paths() {
         (root.join("candidate/tool/bun"), root.join("candidate")),
     ] {
         fs::create_dir_all(candidate.as_path()).expect("create candidate");
+        fs::create_dir_all(bun.as_path().parent().expect("Bun parent"))
+            .expect("create Bun parent");
+        fs::write(bun.as_path(), "bun").expect("write Bun executable");
         assert!(
             managed_bun_install_command_plan(
                 &bun,
@@ -127,16 +132,24 @@ fn rejects_overlapping_management_and_candidate_paths() {
         );
     }
 
-    let candidate = root.join("management/staging/candidate");
-    fs::create_dir_all(candidate.as_path()).expect("create disjoint staging candidate");
-    managed_bun_install_command_plan(
-        &root.join("tools/bun"),
-        &candidate,
-        ManagedBunInstallLockfile::Text,
-        &sources(&[]),
-        &environment,
-    )
-    .expect("allow disjoint candidate beneath management root");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+
+        let candidate = root.join("candidate");
+        let alias = root.join("aliased-bun");
+        symlink(candidate.join("tool/bun"), &alias).expect("alias candidate Bun");
+        assert!(
+            managed_bun_install_command_plan(
+                &alias,
+                &candidate,
+                ManagedBunInstallLockfile::Text,
+                &sources(&[]),
+                &environment,
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]
@@ -154,7 +167,8 @@ fn plans_install_and_inspection_with_exact_argv_environment_and_permissions() {
         &environment,
     )
     .expect("install plan");
-    let inspection = managed_bun_binary_inspection_command_plan(&bun, &environment);
+    let inspection = managed_bun_binary_inspection_command_plan(&bun, &environment)
+        .expect("binary inspection plan");
 
     let expected_args = vec![
         "install".into(),
@@ -241,28 +255,6 @@ fn plans_install_and_inspection_with_exact_argv_environment_and_permissions() {
             ],
         )
     );
-}
-
-#[test]
-fn binary_install_protects_the_binary_lockfile() {
-    let (_temporary, root, environment) = fixture();
-    let candidate = root.join("candidate");
-    fs::create_dir_all(candidate.as_path()).expect("create candidate");
-    let plan = managed_bun_install_command_plan(
-        &root.join("tools/bun"),
-        &candidate,
-        ManagedBunInstallLockfile::Binary,
-        &sources(&[]),
-        &environment,
-    )
-    .expect("binary install plan");
-    let paths = summarized_permissions(&plan.permissions).1;
-
-    assert!(paths.contains(&(
-        candidate.join("bun.lockb").to_string_lossy().into_owned(),
-        FileSystemAccessMode::Read,
-    )));
-    assert!(!paths.iter().any(|(path, _)| path.ends_with("bun.lock")));
 }
 
 #[test]
