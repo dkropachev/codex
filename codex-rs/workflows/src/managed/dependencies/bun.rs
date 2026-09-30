@@ -363,14 +363,13 @@ fn command_plan(
     network: NetworkSandboxPolicy,
     read_only_paths: &[AbsolutePathBuf],
 ) -> ManagedBunCommandPlan {
-    let mut args = vec!["install".into()];
+    let mut args = vec!["--no-env-file".into(), "install".into()];
     if operation == ManagedBunOperation::InspectBinaryLockfile {
         args.extend(["--save-text-lockfile".into(), "--lockfile-only".into()]);
     }
     args.extend([
         "--frozen-lockfile".into(),
         "--ignore-scripts".into(),
-        "--no-env-file".into(),
         "--backend=copyfile".into(),
         format!("--registry={PUBLIC_REGISTRY}").into(),
         "--cache-dir".into(),

@@ -171,10 +171,10 @@ fn plans_install_and_inspection_with_exact_argv_environment_and_permissions() {
         .expect("binary inspection plan");
 
     let expected_args = vec![
+        "--no-env-file".into(),
         "install".into(),
         "--frozen-lockfile".into(),
         "--ignore-scripts".into(),
-        "--no-env-file".into(),
         "--backend=copyfile".into(),
         "--registry=https://registry.npmjs.org/".into(),
         "--cache-dir".into(),
@@ -231,8 +231,8 @@ fn plans_install_and_inspection_with_exact_argv_environment_and_permissions() {
     );
     assert_eq!(inspection.program, install.program);
     let mut expected_inspection_args = expected_args;
-    expected_inspection_args.insert(1, "--save-text-lockfile".into());
-    expected_inspection_args.insert(2, "--lockfile-only".into());
+    expected_inspection_args.insert(2, "--save-text-lockfile".into());
+    expected_inspection_args.insert(3, "--lockfile-only".into());
     assert_eq!(inspection.args, expected_inspection_args);
     assert_eq!(inspection.env, install.env);
     assert_eq!(inspection.cwd, environment.scratch_dir);
