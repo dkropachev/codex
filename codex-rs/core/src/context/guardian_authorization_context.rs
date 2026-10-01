@@ -76,13 +76,11 @@ pub fn bound_guardian_model_input(
         return Err("Guardian approval request exceeds the model-context item limit".into());
     }
 
-    for include_images in [true, false] {
-        if let Some(bounded) =
-            best_guardian_context_candidate(&context, &approval_request, include_images)
-        {
-            *items = bounded;
-            return Ok(());
-        }
+    if let Some(bounded) =
+        best_guardian_context_candidate(&context, &approval_request, /*include_images*/ false)
+    {
+        *items = bounded;
+        return Ok(());
     }
 
     // The approval request already fit on its own. If preserving short trust-boundary items still
