@@ -10,6 +10,7 @@ mod truncation;
 mod trusted_skills;
 mod trusted_tools;
 
+#[cfg(test)]
 pub(crate) use action::MAX_MODEL_VISIBLE_ACTION_TOKENS;
 pub(crate) use action::render_action_value;
 pub(crate) use config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS;
