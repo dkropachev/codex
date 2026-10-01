@@ -9,10 +9,11 @@ use std::process::Child;
 use std::process::Command;
 use std::process::ExitStatus;
 use std::process::Stdio;
+#[cfg(any(unix, windows))]
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -54,6 +55,7 @@ pub const MAX_RUNNER_ERROR_BYTES: usize = 4 * 1024;
 pub const COMPLETION_TIMEOUT: Duration = Duration::from_secs(2);
 pub const INSPECTION_TIMEOUT: Duration = Duration::from_secs(5);
 pub const RUNNER_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
+const CAPTURE_EXIT_TIMEOUT: Duration = Duration::from_millis(250);
 pub const EXECUTABLE_VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
 const TRUSTED_BUNFIG: &str = "";
 
@@ -906,12 +908,29 @@ pub(crate) fn run_bounded_command(
     )
 }
 
-pub(crate) fn run_bounded_command_until(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CommandOutputLimits {
+    pub(crate) stdout_bytes: usize,
+    pub(crate) stderr_bytes: usize,
+}
+
+#[derive(Debug)]
+pub(crate) struct BoundedCommandOutput {
+    pub(crate) status: ExitStatus,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+    pub(crate) stdout_oversized: bool,
+    #[allow(dead_code, reason = "used by managed Bun dependency execution")]
+    pub(crate) stderr_oversized: bool,
+}
+
+/// Runs a subprocess with a shared deadline and independent output bounds.
+pub(crate) fn run_bounded_command_until_with_limits(
     mut command: Command,
     deadline: CommandDeadline,
-    maximum_stdout_bytes: usize,
+    limits: CommandOutputLimits,
     cancelled: Option<&AtomicBool>,
-) -> anyhow::Result<(ExitStatus, Vec<u8>, Vec<u8>, bool)> {
+) -> anyhow::Result<BoundedCommandOutput> {
     deadline.check(cancelled)?;
     command
         .stdin(Stdio::null())
@@ -929,82 +948,246 @@ pub(crate) fn run_bounded_command_until(
         .stderr
         .take()
         .context("workflow subprocess stderr was not piped")?;
-    let stdout = capture_bounded(stdout, maximum_stdout_bytes);
-    let stderr = capture_bounded(stderr, MAX_RUNNER_ERROR_BYTES);
+    let stdout = capture_bounded(stdout, limits.stdout_bytes);
+    let stderr = capture_bounded(stderr, limits.stderr_bytes);
     let status = loop {
         if let Err(err) = deadline.check(cancelled) {
-            child.terminate();
-            return Err(err);
+            break Err(err);
         }
-        if let Some(status) = child
+        match child
             .try_wait()
-            .context("failed to wait for Bun workflow runner")?
+            .context("failed to wait for Bun workflow runner")
         {
-            break status;
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) => {}
+            Err(err) => break Err(err),
         }
         thread::sleep(Duration::from_millis(10));
     };
-    wait_for_capture(&stdout);
-    wait_for_capture(&stderr);
-    let stdout = capture_snapshot(&stdout);
-    let stderr = capture_snapshot(&stderr);
-    Ok((status, stdout.bytes, stderr.bytes, stdout.oversized))
+    if status.is_err() {
+        child.terminate();
+    }
+    let captures = finish_captures(stdout, stderr, CAPTURE_EXIT_TIMEOUT);
+    let status = status?;
+    let (stdout, stderr) = captures?;
+    Ok(BoundedCommandOutput {
+        status,
+        stdout: stdout.bytes,
+        stderr: stderr.bytes,
+        stdout_oversized: stdout.oversized,
+        stderr_oversized: stderr.oversized,
+    })
+}
+
+pub(crate) fn run_bounded_command_until(
+    command: Command,
+    deadline: CommandDeadline,
+    maximum_stdout_bytes: usize,
+    cancelled: Option<&AtomicBool>,
+) -> anyhow::Result<(ExitStatus, Vec<u8>, Vec<u8>, bool)> {
+    let output = run_bounded_command_until_with_limits(
+        command,
+        deadline,
+        CommandOutputLimits {
+            stdout_bytes: maximum_stdout_bytes,
+            stderr_bytes: MAX_RUNNER_ERROR_BYTES,
+        },
+        cancelled,
+    )?;
+    Ok((
+        output.status,
+        output.stdout,
+        output.stderr,
+        output.stdout_oversized,
+    ))
 }
 
 #[derive(Default)]
 struct BoundedCapture {
     bytes: Vec<u8>,
     oversized: bool,
-    done: bool,
 }
 
+#[cfg(unix)]
+fn capture_bounded<R>(mut reader: R, maximum_bytes: usize) -> BoundedCaptureTask
+where
+    R: Read + Send + std::os::fd::AsFd + 'static,
+{
+    let flags = rustix::fs::fcntl_getfl(&reader);
+    let configured = flags
+        .and_then(|flags| rustix::fs::fcntl_setfl(&reader, flags | rustix::fs::OFlags::NONBLOCK));
+    let (sender, result) = mpsc::sync_channel(1);
+    let stop = Arc::new(AtomicBool::new(false));
+    let task_stop = Arc::clone(&stop);
+    let task = thread::spawn(move || {
+        let mut capture = BoundedCapture::default();
+        let captured = (|| {
+            configured?;
+            let mut buffer = [0_u8; 8 * 1024];
+            loop {
+                if task_stop.load(Ordering::Relaxed) {
+                    return Ok(capture);
+                }
+                let read = match reader.read(&mut buffer) {
+                    Ok(read) => read,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error),
+                };
+                if read == 0 {
+                    return Ok(capture);
+                }
+                let remaining = maximum_bytes.saturating_sub(capture.bytes.len());
+                capture
+                    .bytes
+                    .extend_from_slice(&buffer[..read.min(remaining)]);
+                capture.oversized |= read > remaining;
+            }
+        })();
+        let _ = sender.send(captured);
+    });
+    BoundedCaptureTask { result, task, stop }
+}
+
+#[cfg(windows)]
+fn capture_bounded<R>(mut reader: R, maximum_bytes: usize) -> BoundedCaptureTask
+where
+    R: Read + Send + std::os::windows::io::AsRawHandle + 'static,
+{
+    let (sender, result) = mpsc::sync_channel(1);
+    let stop = Arc::new(AtomicBool::new(false));
+    let task_stop = Arc::clone(&stop);
+    let task = thread::spawn(move || {
+        use windows_sys::Win32::Foundation::ERROR_BROKEN_PIPE;
+        use windows_sys::Win32::Foundation::GetLastError;
+        use windows_sys::Win32::Foundation::HANDLE;
+        use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+
+        let mut capture = BoundedCapture::default();
+        let captured = (|| {
+            let mut buffer = [0_u8; 8 * 1024];
+            loop {
+                if task_stop.load(Ordering::Relaxed) {
+                    return Ok(capture);
+                }
+                let mut available = 0_u32;
+                let ok = unsafe {
+                    PeekNamedPipe(
+                        std::os::windows::io::AsRawHandle::as_raw_handle(&reader) as HANDLE,
+                        std::ptr::null_mut(),
+                        0,
+                        std::ptr::null_mut(),
+                        &mut available,
+                        std::ptr::null_mut(),
+                    )
+                };
+                if ok == 0 {
+                    let code = unsafe { GetLastError() };
+                    if code == ERROR_BROKEN_PIPE {
+                        return Ok(capture);
+                    }
+                    return Err(std::io::Error::from_raw_os_error(code as i32));
+                }
+                if available == 0 {
+                    thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+                let available = buffer.len().min(available as usize);
+                let read = reader.read(&mut buffer[..available])?;
+                if read == 0 {
+                    return Ok(capture);
+                }
+                let remaining = maximum_bytes.saturating_sub(capture.bytes.len());
+                capture
+                    .bytes
+                    .extend_from_slice(&buffer[..read.min(remaining)]);
+                capture.oversized |= read > remaining;
+            }
+        })();
+        let _ = sender.send(captured);
+    });
+    BoundedCaptureTask { result, task, stop }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn capture_bounded(
     mut reader: impl Read + Send + 'static,
     maximum_bytes: usize,
-) -> Arc<Mutex<BoundedCapture>> {
-    let capture = Arc::new(Mutex::new(BoundedCapture::default()));
-    let task_capture = Arc::clone(&capture);
-    thread::spawn(move || {
-        let mut buffer = [0_u8; 8 * 1024];
-        while let Ok(read) = reader.read(&mut buffer) {
-            if read == 0 {
-                break;
+) -> BoundedCaptureTask {
+    let (sender, result) = mpsc::sync_channel(1);
+    let task = thread::spawn(move || {
+        let mut capture = BoundedCapture::default();
+        let captured = (|| {
+            let mut buffer = [0_u8; 8 * 1024];
+            loop {
+                let read = reader.read(&mut buffer)?;
+                if read == 0 {
+                    return Ok(capture);
+                }
+                let remaining = maximum_bytes.saturating_sub(capture.bytes.len());
+                capture
+                    .bytes
+                    .extend_from_slice(&buffer[..read.min(remaining)]);
+                capture.oversized |= read > remaining;
             }
-            let Ok(mut capture) = task_capture.lock() else {
-                return;
-            };
-            let remaining = maximum_bytes.saturating_sub(capture.bytes.len());
-            capture
-                .bytes
-                .extend_from_slice(&buffer[..read.min(remaining)]);
-            capture.oversized |= read > remaining;
-        }
-        if let Ok(mut capture) = task_capture.lock() {
-            capture.done = true;
-        }
+        })();
+        let _ = sender.send(captured);
     });
-    capture
+    BoundedCaptureTask { result, task }
 }
 
-fn wait_for_capture(capture: &Arc<Mutex<BoundedCapture>>) {
-    let deadline = Instant::now() + Duration::from_millis(250);
-    while Instant::now() < deadline {
-        if capture.lock().map(|capture| capture.done).unwrap_or(true) {
-            return;
+struct BoundedCaptureTask {
+    result: mpsc::Receiver<std::io::Result<BoundedCapture>>,
+    task: thread::JoinHandle<()>,
+    #[cfg(any(unix, windows))]
+    stop: Arc<AtomicBool>,
+}
+
+fn finish_captures(
+    stdout: BoundedCaptureTask,
+    stderr: BoundedCaptureTask,
+    timeout: Duration,
+) -> anyhow::Result<(BoundedCapture, BoundedCapture)> {
+    let deadline = Instant::now() + timeout;
+    let stdout = finish_capture(stdout, deadline, "stdout");
+    let stderr = finish_capture(stderr, deadline, "stderr");
+    Ok((stdout?, stderr?))
+}
+
+fn finish_capture(
+    capture: BoundedCaptureTask,
+    deadline: Instant,
+    stream: &'static str,
+) -> anyhow::Result<BoundedCapture> {
+    let BoundedCaptureTask {
+        result,
+        task,
+        #[cfg(any(unix, windows))]
+        stop,
+    } = capture;
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let captured = match result.recv_timeout(remaining) {
+        Ok(captured) => captured,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            #[cfg(any(unix, windows))]
+            {
+                stop.store(true, Ordering::Relaxed);
+                let _ = result.recv_timeout(Duration::from_millis(50));
+                task.join()
+                    .map_err(|_| anyhow::anyhow!("workflow {stream} capture thread panicked"))?;
+            }
+            bail!("workflow {stream} remained open after subprocess exit");
         }
-        thread::sleep(Duration::from_millis(5));
-    }
-}
-
-fn capture_snapshot(capture: &Arc<Mutex<BoundedCapture>>) -> BoundedCapture {
-    capture
-        .lock()
-        .map(|capture| BoundedCapture {
-            bytes: capture.bytes.clone(),
-            oversized: capture.oversized,
-            done: capture.done,
-        })
-        .unwrap_or_default()
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            bail!("workflow {stream} capture thread stopped unexpectedly");
+        }
+    };
+    task.join()
+        .map_err(|_| anyhow::anyhow!("workflow {stream} capture thread panicked"))?;
+    captured.with_context(|| format!("failed to read workflow subprocess {stream}"))
 }
 
 fn validate_inspection(
