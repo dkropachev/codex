@@ -7,6 +7,8 @@ mod focus_palette;
 mod mcp_live;
 #[path = "plugins__live.rs"]
 mod plugins_live;
+#[cfg(unix)]
+mod reconnect;
 mod resize_reflow;
 #[path = "skills__live.rs"]
 mod skills_live;

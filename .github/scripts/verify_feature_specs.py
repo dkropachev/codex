@@ -416,7 +416,10 @@ def readme_failures(root: Path) -> list[str]:
             )
             continue
 
-        if target_path.parent != feature_dir or target_path.name not in expected_targets:
+        if (
+            target_path.parent != feature_dir
+            or target_path.name not in expected_targets
+        ):
             failures.append(
                 f"{relative_path(root, readme_path)} should only link indexed feature specs "
                 f"(found `{link.target}`)"
@@ -435,16 +438,22 @@ def readme_failures(root: Path) -> list[str]:
         {target for target in listed_targets if listed_targets.count(target) > 1}
     )
     for target in duplicate_targets:
-        failures.append(f"{relative_path(root, readme_path)} lists `{target}` more than once")
+        failures.append(
+            f"{relative_path(root, readme_path)} lists `{target}` more than once"
+        )
 
     listed_set = set(listed_targets)
     for missing in sorted(expected_targets - listed_set):
         failures.append(f"{relative_path(root, readme_path)} is missing `{missing}`")
     for extra in sorted(listed_set - expected_targets):
-        failures.append(f"{relative_path(root, readme_path)} lists unknown spec `{extra}`")
+        failures.append(
+            f"{relative_path(root, readme_path)} lists unknown spec `{extra}`"
+        )
 
     if listed_targets != sorted(listed_targets):
-        failures.append(f"{relative_path(root, readme_path)} feature links must be sorted")
+        failures.append(
+            f"{relative_path(root, readme_path)} feature links must be sorted"
+        )
 
     return failures
 
@@ -473,11 +482,13 @@ def spec_failures(root: Path, spec: Path) -> list[str]:
 
     for line_number, line in enumerate(text.splitlines(), start=1):
         if FEATURE_ID_FIELD_RE.match(line):
-            failures.append(f"{rel_spec}:{line_number} must not define a Feature ID field")
+            failures.append(
+                f"{rel_spec}:{line_number} must not define a Feature ID field"
+            )
         for link in markdown_links(line):
-            if is_test_path_reference(
-                root, spec, link.text
-            ) or is_test_path_reference(root, spec, link.target):
+            if is_test_path_reference(root, spec, link.text) or is_test_path_reference(
+                root, spec, link.target
+            ):
                 failures.append(
                     f"{rel_spec}:{line_number} must not include test links; "
                     "test ownership is derived from filenames"
@@ -532,11 +543,15 @@ def top_level_schema_failures(
         if heading not in expected_set:
             failures.append(f"{rel_path} contains unexpected `## {heading}`")
 
-    if all(headings.count(heading) == 1 for heading in expected_headings) and set(
-        headings
-    ) == expected_set and headings != list(expected_headings):
+    if (
+        all(headings.count(heading) == 1 for heading in expected_headings)
+        and set(headings) == expected_set
+        and headings != list(expected_headings)
+    ):
         expected = "`, `".join(f"## {heading}" for heading in expected_headings)
-        failures.append(f"{rel_path} top-level headings must be ordered as `{expected}`")
+        failures.append(
+            f"{rel_path} top-level headings must be ordered as `{expected}`"
+        )
 
     return failures
 
@@ -599,7 +614,9 @@ def readme_test_place_failures(root: Path, readme_path: Path, text: str) -> list
                     f"{rel_readme} README test place `{test_place}` heading description "
                     f"must be `{expected_description}`"
                 )
-        child_titles = [child.title for child in child_heading_sections(section.body, 4)]
+        child_titles = [
+            child.title for child in child_heading_sections(section.body, 4)
+        ]
         failures.extend(
             child_heading_schema_failures(
                 rel_readme,
@@ -699,7 +716,9 @@ def subfeature_failures(root: Path, spec: Path, text: str) -> list[str]:
     )
 
     for section in subfeatures:
-        child_titles = [child.title for child in child_heading_sections(section.body, 4)]
+        child_titles = [
+            child.title for child in child_heading_sections(section.body, 4)
+        ]
         failures.extend(
             child_heading_schema_failures(
                 rel_spec,
@@ -711,7 +730,9 @@ def subfeature_failures(root: Path, spec: Path, text: str) -> list[str]:
 
         invariants = sections_named(section.body, "Invariants")
         if invariants and not invariants[0].strip():
-            failures.append(f"{rel_spec} subfeature `{section.title}` must include invariants")
+            failures.append(
+                f"{rel_spec} subfeature `{section.title}` must include invariants"
+            )
 
     return failures
 
@@ -767,7 +788,9 @@ def test_place_failures(root: Path, spec: Path, text: str) -> list[str]:
         heading_description = heading.group(2)
         known_test_place = test_place in TEST_PLACE_IDS
         if test_place in listed_places:
-            failures.append(f"{rel_spec} lists test place `{test_place}` more than once")
+            failures.append(
+                f"{rel_spec} lists test place `{test_place}` more than once"
+            )
         if known_test_place:
             listed_places.add(test_place)
 
@@ -784,10 +807,14 @@ def test_place_failures(root: Path, spec: Path, text: str) -> list[str]:
                     f"`{expected_description}`"
                 )
 
-        child_titles = [child.title for child in child_heading_sections(section.body, 4)]
+        child_titles = [
+            child.title for child in child_heading_sections(section.body, 4)
+        ]
         description_sections = sections_named(section.body, "Description")
         if not description_sections or not description_sections[0].strip():
-            failures.append(f"{rel_spec} test place `{test_place}` must include a description")
+            failures.append(
+                f"{rel_spec} test place `{test_place}` must include a description"
+            )
         else:
             description = description_sections[0]
             if markdown_links(description) or "codex-rs/" in description:
@@ -801,7 +828,9 @@ def test_place_failures(root: Path, spec: Path, text: str) -> list[str]:
         missing_sections = sections_named(section.body, "Missing coverage ideas")
         status_sections = sections_named(section.body, "Status")
         if len(status_sections) > 1:
-            failures.append(f"{rel_spec} test place `{test_place}` lists Status more than once")
+            failures.append(
+                f"{rel_spec} test place `{test_place}` lists Status more than once"
+            )
         if status_sections:
             failures.extend(
                 child_heading_schema_failures(
@@ -996,7 +1025,9 @@ def parse_test_cases(markdown: str) -> list[TestCase]:
     return test_cases
 
 
-def declared_mapped_test_targets(root: Path, spec_files: list[Path]) -> set[MappedTestTarget]:
+def declared_mapped_test_targets(
+    root: Path, spec_files: list[Path]
+) -> set[MappedTestTarget]:
     """Return concrete test targets declared by feature specs.
 
     Feature-prefixed targets must map back to the declaring spec. Legacy or mixed
@@ -1187,7 +1218,9 @@ def unlisted_mapped_test_failures(
 def missing_behavior_scenario_failures(root: Path, spec_files: list[Path]) -> list[str]:
     """Reject ``missing`` items that duplicate an already-declared scenario id."""
 
-    declared_scenarios = mapped_test_scenarios(declared_mapped_test_targets(root, spec_files))
+    declared_scenarios = mapped_test_scenarios(
+        declared_mapped_test_targets(root, spec_files)
+    )
     failures: list[str] = []
     for spec in spec_files:
         rel_spec = relative_path(root, spec)
@@ -1328,7 +1361,9 @@ def missing_test_case_counts(spec_files: list[Path]) -> dict[tuple[str, str], in
     return counts
 
 
-def missing_backlog_ids(spec_files: list[Path]) -> dict[tuple[str, str], tuple[str, ...]]:
+def missing_backlog_ids(
+    spec_files: list[Path],
+) -> dict[tuple[str, str], tuple[str, ...]]:
     """Return declared stable ids for missing backlog entries."""
 
     ids: dict[tuple[str, str], set[str]] = {}
@@ -1482,7 +1517,9 @@ def rust_test_function_names(path: Path) -> set[str]:
 
         function = RUST_FUNCTION_LINE_RE.match(line)
         if function:
-            if any(is_rust_test_attribute(attribute) for attribute in pending_attributes):
+            if any(
+                is_rust_test_attribute(attribute) for attribute in pending_attributes
+            ):
                 names.add(function.group(1))
             pending_attributes = []
             continue
@@ -1559,11 +1596,15 @@ def child_heading_schema_failures(
         if heading not in expected_set:
             failures.append(f"{rel_path} {scope} contains unexpected `#### {heading}`")
 
-    if all(headings.count(heading) == 1 for heading in expected_headings) and set(
-        headings
-    ) == expected_set and headings != list(expected_headings):
+    if (
+        all(headings.count(heading) == 1 for heading in expected_headings)
+        and set(headings) == expected_set
+        and headings != list(expected_headings)
+    ):
         expected = "`, `".join(f"#### {heading}" for heading in expected_headings)
-        failures.append(f"{rel_path} {scope} child headings must be ordered as `{expected}`")
+        failures.append(
+            f"{rel_path} {scope} child headings must be ordered as `{expected}`"
+        )
 
     return failures
 
@@ -1784,7 +1825,9 @@ def changed_files_from_working_tree(root: Path) -> list[str]:
         text=True,
     )
     if untracked_result.returncode != 0:
-        raise SystemExit(untracked_result.stderr.strip() or untracked_result.stdout.strip())
+        raise SystemExit(
+            untracked_result.stderr.strip() or untracked_result.stdout.strip()
+        )
 
     changed_files = changed_files_from_name_status(diff_result.stdout)
     changed_files.extend(
@@ -1836,9 +1879,7 @@ def feature_spec_files(root: Path) -> list[Path]:
     if not feature_dir.exists():
         return []
     ignored = {README_NAME, TEMPLATE_NAME}
-    return sorted(
-        path for path in feature_dir.glob("*.md") if path.name not in ignored
-    )
+    return sorted(path for path in feature_dir.glob("*.md") if path.name not in ignored)
 
 
 def heading_entries(markdown: str) -> list[tuple[int, str, str]]:
@@ -1955,7 +1996,9 @@ def is_test_place_path(test_place: str, path: str) -> bool:
     path_parts = Path(path).parts
     if Path(path).suffix != ".rs" or Path(path).name == "mod.rs":
         return False
-    return any(path_parts[: len(Path(root).parts)] == Path(root).parts for root in roots)
+    return any(
+        path_parts[: len(Path(root).parts)] == Path(root).parts for root in roots
+    )
 
 
 def test_place_for_test_path(path: str) -> str | None:

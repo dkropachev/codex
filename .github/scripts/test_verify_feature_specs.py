@@ -127,8 +127,7 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
             spec = root / "codex-rs/feature-specs/account-pool.md"
             text = spec.read_text(encoding="utf-8")
             text = text.replace(
-                "## Invariants\n\n"
-                "- Invariant.\n\n",
+                "## Invariants\n\n- Invariant.\n\n",
                 "",
             )
             text = text.replace(
@@ -154,7 +153,9 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
             self.write_valid_repo(root)
             spec = root / "codex-rs/feature-specs/account-pool.md"
             text = spec.read_text(encoding="utf-8")
-            start = text.index("### exec-server (exec-server service boundary behavior)")
+            start = text.index(
+                "### exec-server (exec-server service boundary behavior)"
+            )
             end = text.index("## Test Generation Notes")
             text = text[:start] + text[end:]
             text = text.replace(
@@ -234,8 +235,7 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
             spec = root / "codex-rs/feature-specs/account-pool.md"
             text = spec.read_text(encoding="utf-8")
             text = text.replace(
-                "#### Status\n\n"
-                "Not covered",
+                "#### Status\n\nNot covered",
                 "#### Status\n\n"
                 "Not covered\n\n"
                 "#### Test cases\n\n"
@@ -475,9 +475,7 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
             )
             text = text.replace(
                 "## Test Generation Notes",
-                "## E2E Coverage\n\n"
-                "- Obsolete.\n\n"
-                "## Test Generation Notes",
+                "## E2E Coverage\n\n- Obsolete.\n\n## Test Generation Notes",
             )
             spec.write_text(text, encoding="utf-8")
 
@@ -503,7 +501,9 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
             self.write_valid_repo(root)
             spec = root / "codex-rs/feature-specs/account-pool.md"
             text = spec.read_text(encoding="utf-8")
-            spec.write_text(text.replace("## Summary", "Feature ID: account-pool\n\n## Summary"))
+            spec.write_text(
+                text.replace("## Summary", "Feature ID: account-pool\n\n## Summary")
+            )
 
             failures = verify_feature_specs.verify_feature_specs(root, changed_files=[])
 
@@ -543,7 +543,9 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
         self.assertEqual(failures, [])
 
-    def test_scenario_id_from_test_path_normalizes_feature_prefixed_filename(self) -> None:
+    def test_scenario_id_from_test_path_normalizes_feature_prefixed_filename(
+        self,
+    ) -> None:
         self.assertEqual(
             verify_feature_specs.scenario_id_from_test_path(
                 "codex-rs/core/tests/suite/account_pool__rate_limit_failover.rs"
@@ -917,7 +919,10 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
 
         self.assertEqual(
             rows,
-            [expected_row(test_place) for test_place in verify_feature_specs.TEST_PLACE_IDS],
+            [
+                expected_row(test_place)
+                for test_place in verify_feature_specs.TEST_PLACE_IDS
+            ],
         )
         self.assertEqual(
             verify_feature_specs.format_coverage_report(rows),
@@ -1154,7 +1159,9 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
             text=True,
         )
 
-    def replace_test_place_block(self, text: str, test_place: str, replacement: str) -> str:
+    def replace_test_place_block(
+        self, text: str, test_place: str, replacement: str
+    ) -> str:
         start = text.index(f"### {test_place} (")
         next_starts = []
         for catalog_test_place in verify_feature_specs.TEST_PLACE_IDS:
@@ -1285,7 +1292,11 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 "app-server API behavior",
                 "This fixture feature has no app-server API surface.",
             ),
-            ("cli", "main CLI command behavior", "This fixture feature has no CLI surface."),
+            (
+                "cli",
+                "main CLI command behavior",
+                "This fixture feature has no CLI surface.",
+            ),
             (
                 "tui-e2e",
                 "full terminal TUI behavior",

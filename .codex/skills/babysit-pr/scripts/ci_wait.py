@@ -7,8 +7,20 @@ import time
 from contextlib import contextmanager
 from datetime import datetime
 
-CI_CONFIG_PREFIXES = (".github/workflows/", ".github/actions/", ".github/scripts/", "scripts/")
-CI_CONFIG_FILES = {".bazelrc", ".bazelversion", "justfile", "MODULE.bazel", "MODULE.bazel.lock", "codex-rs/rust-toolchain.toml"}
+CI_CONFIG_PREFIXES = (
+    ".github/workflows/",
+    ".github/actions/",
+    ".github/scripts/",
+    "scripts/",
+)
+CI_CONFIG_FILES = {
+    ".bazelrc",
+    ".bazelversion",
+    "justfile",
+    "MODULE.bazel",
+    "MODULE.bazel.lock",
+    "codex-rs/rust-toolchain.toml",
+}
 PENDING_STATES = {"QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED"}
 MAX_CI_REVISIONS, MAX_HISTORY_FILES, MAX_SAMPLES = 20, 20, 500
 MIN_TIMEOUT, DEFAULT_TIMEOUT, MAX_TIMEOUT = 10 * 60, 60 * 60, 4 * 60 * 60
@@ -74,8 +86,10 @@ OUTPUT_TIMEOUT_FIELDS = (
     "url",
 )
 
+
 def effective_ci_revision(base_revision, head_revision):
     return hashlib.sha256(f"{base_revision}\0{head_revision}".encode()).hexdigest()
+
 
 @contextmanager
 def state_lock(path):
@@ -84,55 +98,91 @@ def state_lock(path):
     with lock_path.open("a+b") as lock_file:
         if os.name == "nt":
             import msvcrt
-            if lock_file.tell() == 0: lock_file.write(b"\0"); lock_file.flush()
-            lock_file.seek(0); msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+
+            if lock_file.tell() == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
         else:
             import fcntl
+
             fcntl.flock(lock_file, fcntl.LOCK_EX)
         try:
             yield
         finally:
-            if os.name == "nt": lock_file.seek(0); msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-            else: fcntl.flock(lock_file, fcntl.LOCK_UN)
+            if os.name == "nt":
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+
 
 def get_ci_config_revision(gh_json, state, repo, sha):
-    if not sha: return "unknown"
+    if not sha:
+        return "unknown"
     revisions = state.get("ci_revisions_by_sha")
     revisions = revisions if isinstance(revisions, dict) else {}
-    if sha in revisions: return str(revisions[sha])
-    tree = gh_json(["api", f"repos/{repo}/git/trees/{sha}", "-X", "GET", "-f", "recursive=1"], repo=repo)
+    if sha in revisions:
+        return str(revisions[sha])
+    tree = gh_json(
+        ["api", f"repos/{repo}/git/trees/{sha}", "-X", "GET", "-f", "recursive=1"],
+        repo=repo,
+    )
     if not isinstance(tree, dict) or not isinstance(tree.get("tree"), list):
         raise RuntimeError("Git tree payload did not contain a tree")
-    if tree.get("truncated"): raise RuntimeError("GitHub truncated the CI fingerprint tree")
+    if tree.get("truncated"):
+        raise RuntimeError("GitHub truncated the CI fingerprint tree")
     entries = []
     for item in tree["tree"]:
-        if not isinstance(item, dict) or item.get("type") != "blob": continue
+        if not isinstance(item, dict) or item.get("type") != "blob":
+            continue
         path = str(item.get("path") or "")
         if path in CI_CONFIG_FILES or path.startswith(CI_CONFIG_PREFIXES):
-            entries.append((path, str(item.get("mode") or ""), str(item.get("sha") or "")))
+            entries.append(
+                (path, str(item.get("mode") or ""), str(item.get("sha") or ""))
+            )
     revision = hashlib.sha256(json.dumps(sorted(entries)).encode()).hexdigest()
     revisions[sha] = revision
     state["ci_revisions_by_sha"] = dict(list(revisions.items())[-MAX_CI_REVISIONS:])
     return revision
 
-def check_identity(check): return "\x1f".join((str(check.get("workflow") or ""), str(check.get("name") or "")))
+
+def check_identity(check):
+    return "\x1f".join((str(check.get("workflow") or ""), str(check.get("name") or "")))
+
+
 def check_status(check):
-    bucket, state = str(check.get("bucket") or "").lower(), str(check.get("state") or "").upper()
-    if bucket == "fail": return "failed"
-    if bucket == "pass": return "passed"
-    if bucket == "pending" or state in PENDING_STATES: return "running" if state == "IN_PROGRESS" else "queued"
+    bucket, state = (
+        str(check.get("bucket") or "").lower(),
+        str(check.get("state") or "").upper(),
+    )
+    if bucket == "fail":
+        return "failed"
+    if bucket == "pass":
+        return "passed"
+    if bucket == "pending" or state in PENDING_STATES:
+        return "running" if state == "IN_PROGRESS" else "queued"
     return "terminal"
 
+
 def normalize_check(check):
-    match = re.search(r"/actions/runs/(\d+)(?:/job/(\d+))?", str(check.get("link") or ""))
+    match = re.search(
+        r"/actions/runs/(\d+)(?:/job/(\d+))?", str(check.get("link") or "")
+    )
     return {
-        "id": check_identity(check), "workflow": str(check.get("workflow") or ""),
-        "name": str(check.get("name") or ""), "status": check_status(check),
-        "state": str(check.get("state") or ""), "started_at": str(check.get("startedAt") or ""),
-        "completed_at": str(check.get("completedAt") or ""), "url": str(check.get("link") or ""),
+        "id": check_identity(check),
+        "workflow": str(check.get("workflow") or ""),
+        "name": str(check.get("name") or ""),
+        "status": check_status(check),
+        "state": str(check.get("state") or ""),
+        "started_at": str(check.get("startedAt") or ""),
+        "completed_at": str(check.get("completedAt") or ""),
+        "url": str(check.get("link") or ""),
         "run_id": int(match.group(1)) if match else None,
         "job_id": int(match.group(2)) if match and match.group(2) else None,
     }
+
 
 def bounded_records(records, fields):
     all_records = list(records or [])
@@ -149,12 +199,18 @@ def bounded_records(records, fields):
             if field not in record:
                 continue
             value = record[field]
-            if isinstance(value, str) and len(value) > MAX_OUTPUT_CHECK_DETAIL_VALUE_CHARS:
+            if (
+                isinstance(value, str)
+                and len(value) > MAX_OUTPUT_CHECK_DETAIL_VALUE_CHARS
+            ):
                 value = value[: MAX_OUTPUT_CHECK_DETAIL_VALUE_CHARS - 1] + "…"
                 detail_values_truncated = True
             detail[field] = value
         candidate = details + [detail]
-        if len(json.dumps(candidate, sort_keys=True)) > MAX_OUTPUT_COLLECTION_JSON_CHARS:
+        if (
+            len(json.dumps(candidate, sort_keys=True))
+            > MAX_OUTPUT_COLLECTION_JSON_CHARS
+        ):
             if not details:
                 for string_limit in (80, 40, 20, 8):
                     compact = {
@@ -165,7 +221,10 @@ def bounded_records(records, fields):
                         )
                         for key, value in detail.items()
                     }
-                    if len(json.dumps([compact], sort_keys=True)) <= MAX_OUTPUT_COLLECTION_JSON_CHARS:
+                    if (
+                        len(json.dumps([compact], sort_keys=True))
+                        <= MAX_OUTPUT_COLLECTION_JSON_CHARS
+                    ):
                         details.append(compact)
                         values_truncated = True
                         break
@@ -180,6 +239,7 @@ def bounded_records(records, fields):
         "omitted_count": total_count - emitted_count,
         "truncated": values_truncated or emitted_count < total_count,
     }
+
 
 def bounded_output_payload(payload, collection_names):
     output = json.loads(json.dumps(payload))
@@ -240,11 +300,16 @@ def bounded_output_payload(payload, collection_names):
         raise RuntimeError("bounded watcher output exceeded its hard JSON size limit")
     return output
 
+
 def bounded_check_details(checks):
     all_checks = list(checks or [])
     priorities = {"failed": 0, "running": 1, "queued": 2, "terminal": 3, "passed": 4}
     ordered = sorted(
-        ((index, check) for index, check in enumerate(all_checks) if isinstance(check, dict)),
+        (
+            (index, check)
+            for index, check in enumerate(all_checks)
+            if isinstance(check, dict)
+        ),
         key=lambda item: (priorities.get(str(item[1].get("status") or ""), 3), item[0]),
     )
     details = []
@@ -258,12 +323,18 @@ def bounded_check_details(checks):
             if field not in check:
                 continue
             value = check[field]
-            if isinstance(value, str) and len(value) > MAX_OUTPUT_CHECK_DETAIL_VALUE_CHARS:
+            if (
+                isinstance(value, str)
+                and len(value) > MAX_OUTPUT_CHECK_DETAIL_VALUE_CHARS
+            ):
                 value = value[: MAX_OUTPUT_CHECK_DETAIL_VALUE_CHARS - 1] + "…"
                 detail_values_truncated = True
             detail[field] = value
         candidate = details + [detail]
-        if len(json.dumps(candidate, sort_keys=True)) > MAX_OUTPUT_CHECK_DETAILS_JSON_CHARS:
+        if (
+            len(json.dumps(candidate, sort_keys=True))
+            > MAX_OUTPUT_CHECK_DETAILS_JSON_CHARS
+        ):
             break
         details.append(detail)
         values_truncated = values_truncated or detail_values_truncated
@@ -276,12 +347,34 @@ def bounded_check_details(checks):
         "truncated": values_truncated or emitted_count < total_count,
     }
 
+
 def check_run_key(check):
-    fallback = check.get("url") if check.get("run_id") is None and check.get("job_id") is None else ""
-    return "\x1f".join(str(check.get(field) or "") for field in ("id", "run_id", "job_id")) + f"\x1f{fallback or ''}"
-def check_observation_id(check): return f"{check_run_key(check)}\x1f{check.get('started_at') or ''}"
-def check_signature(checks): return hashlib.sha256(json.dumps(sorted(check_run_key(check) for check in checks)).encode()).hexdigest()
-def check_observation_signature(checks): return hashlib.sha256(json.dumps(sorted(check_observation_id(check) for check in checks)).encode()).hexdigest()
+    fallback = (
+        check.get("url")
+        if check.get("run_id") is None and check.get("job_id") is None
+        else ""
+    )
+    return (
+        "\x1f".join(str(check.get(field) or "") for field in ("id", "run_id", "job_id"))
+        + f"\x1f{fallback or ''}"
+    )
+
+
+def check_observation_id(check):
+    return f"{check_run_key(check)}\x1f{check.get('started_at') or ''}"
+
+
+def check_signature(checks):
+    return hashlib.sha256(
+        json.dumps(sorted(check_run_key(check) for check in checks)).encode()
+    ).hexdigest()
+
+
+def check_observation_signature(checks):
+    return hashlib.sha256(
+        json.dumps(sorted(check_observation_id(check) for check in checks)).encode()
+    ).hexdigest()
+
 
 def update_head_refresh(
     state,
@@ -311,14 +404,17 @@ def update_head_refresh(
                 state.pop("check_refresh_timeout", None)
                 return None
             return "timed_out"
-        if timeout.get("signature") == signature and timeout.get(
-            "observation_signature"
-        ) == observation_signature:
+        if (
+            timeout.get("signature") == signature
+            and timeout.get("observation_signature") == observation_signature
+        ):
             return "timed_out"
         state.pop("check_refresh_timeout", None)
     if generation_changed:
         registration = state.get("check_registration")
-        previous = registration.get("signature") if isinstance(registration, dict) else None
+        previous = (
+            registration.get("signature") if isinstance(registration, dict) else None
+        )
         previous_observation = (
             registration.get("observation_signature")
             if isinstance(registration, dict)
@@ -351,9 +447,7 @@ def update_head_refresh(
             state["check_refresh"] = {
                 "signature": signature,
                 "observation_signature": observation_signature,
-                "observations": sorted(
-                    stale_observations or current_observations
-                ),
+                "observations": sorted(stale_observations or current_observations),
                 "started_at": int(now),
             }
         else:
@@ -376,7 +470,10 @@ def update_head_refresh(
         state.pop("check_refresh_timeout", None)
         return None
     started_at = refresh.get("started_at")
-    if not isinstance(started_at, (int, float)) or now - started_at >= REGISTRATION_GRACE_SECONDS:
+    if (
+        not isinstance(started_at, (int, float))
+        or now - started_at >= REGISTRATION_GRACE_SECONDS
+    ):
         state.pop("check_refresh", None)
         state["check_refresh_timeout"] = {
             "signature": signature,
@@ -387,19 +484,32 @@ def update_head_refresh(
         return "timed_out"
     return "pending"
 
+
 def parse_github_time(value):
-    if not value: return None
-    try: return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
-    except (TypeError, ValueError): return None
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
 
 def update_active_checks(state, checks, now, ci_revision=None, generation=None):
-    previous = state.get("active_checks"); previous = previous if isinstance(previous, dict) else {}
-    statuses_before = state.get("check_statuses"); statuses_before = statuses_before if isinstance(statuses_before, dict) else {}
+    previous = state.get("active_checks")
+    previous = previous if isinstance(previous, dict) else {}
+    statuses_before = state.get("check_statuses")
+    statuses_before = statuses_before if isinstance(statuses_before, dict) else {}
     active, statuses = {}, {}
     for check in checks:
         key, status = check_run_key(check), check.get("status")
         observation_id = check_observation_id(check)
-        if status in {"queued", "running"}: statuses[key] = {"status": status, "ci_revision": ci_revision, "generation": generation, "observation_id": observation_id}
+        if status in {"queued", "running"}:
+            statuses[key] = {
+                "status": status,
+                "ci_revision": ci_revision,
+                "generation": generation,
+                "observation_id": observation_id,
+            }
         if status == "running":
             prior = statuses_before.get(key)
             queued_before = (
@@ -417,7 +527,9 @@ def update_active_checks(state, checks, now, ci_revision=None, generation=None):
                 else {
                     "since": int(started_at if started_at is not None else now),
                     "trainable": queued_before,
-                    "ci_revision": prior.get("ci_revision") if queued_before else ci_revision,
+                    "ci_revision": prior.get("ci_revision")
+                    if queued_before
+                    else ci_revision,
                     "generation": generation,
                     "observation_id": observation_id,
                 }
@@ -425,21 +537,34 @@ def update_active_checks(state, checks, now, ci_revision=None, generation=None):
             check["active_since"], active[key] = entry["since"], entry
         elif key in previous:
             entry = previous[key]
-            if entry.get("generation") == generation and entry.get("observation_id") == observation_id:
+            if (
+                entry.get("generation") == generation
+                and entry.get("observation_id") == observation_id
+            ):
                 completed_at = parse_github_time(check.get("completed_at")) or now
-                check.update(observed_active_seconds=max(0, int(completed_at - entry["since"])), active_sample_trainable=entry["trainable"], active_ci_revision=entry.get("ci_revision"))
+                check.update(
+                    observed_active_seconds=max(0, int(completed_at - entry["since"])),
+                    active_sample_trainable=entry["trainable"],
+                    active_ci_revision=entry.get("ci_revision"),
+                )
     state["active_checks"], state["check_statuses"] = active, statuses
+
 
 def update_check_registration(state, generation, checks, require_change=False):
     signature = check_signature(checks)
     observation_signature = check_observation_signature(checks)
-    registration = state.get("check_registration"); registration = registration if isinstance(registration, dict) else {}
+    registration = state.get("check_registration")
+    registration = registration if isinstance(registration, dict) else {}
     same = registration.get("signature") == signature
-    same_observation = registration.get("observation_signature") == observation_signature
+    same_observation = (
+        registration.get("observation_signature") == observation_signature
+    )
     required_change_missing = require_change and same and same_observation
     if required_change_missing and registration.get("generation") == generation:
         registration["current"] = False
-    elif registration.get("generation") != generation or not same or not same_observation:
+    elif (
+        registration.get("generation") != generation or not same or not same_observation
+    ):
         registration = {
             "generation": generation,
             "signature": signature,
@@ -451,6 +576,7 @@ def update_check_registration(state, generation, checks, require_change=False):
         registration["current"] = True
     state["check_registration"] = registration
     return bool(registration.get("current", True))
+
 
 def rerun_registration_status(state, generation, runs, checks, now):
     pending = state.get("pending_rerun")
@@ -474,7 +600,8 @@ def rerun_registration_status(state, generation, runs, checks, now):
     }
     pending_attempts = pending.get("attempts") or {}
     advanced = all(
-        attempts.get(run_id, 0) > attempt for run_id, attempt in pending_attempts.items()
+        attempts.get(run_id, 0) > attempt
+        for run_id, attempt in pending_attempts.items()
     )
     observations = pending.get("check_observations")
     if isinstance(observations, dict):
@@ -486,13 +613,18 @@ def rerun_registration_status(state, generation, runs, checks, now):
             ]
             previous_observations = observations[run_id]
             if isinstance(previous_observations, list):
-                current_observations = {check_observation_id(check) for check in current}
+                current_observations = {
+                    check_observation_id(check) for check in current
+                }
                 if not current_observations or not current_observations.isdisjoint(
                     {str(value) for value in previous_observations}
                 ):
                     checks_refreshed = False
                     break
-            elif not current or check_observation_signature(current) == previous_observations:
+            elif (
+                not current
+                or check_observation_signature(current) == previous_observations
+            ):
                 checks_refreshed = False
                 break
     else:
@@ -508,7 +640,9 @@ def rerun_registration_status(state, generation, runs, checks, now):
         str((runs_by_id.get(run_id) or {}).get("status") or "").lower() == "completed"
         for run_id in unlinked_run_ids
     )
-    registration_waiting = not advanced or (bool(linked_run_ids) and not checks_refreshed)
+    registration_waiting = not advanced or (
+        bool(linked_run_ids) and not checks_refreshed
+    )
     if not registration_waiting and unlinked_finished:
         state.pop("pending_rerun", None)
         state.pop("rerun_timeout", None)
@@ -516,12 +650,14 @@ def rerun_registration_status(state, generation, runs, checks, now):
     if registration_waiting:
         if now - started_at >= RERUN_REGISTRATION_TIMEOUT_SECONDS:
             state.pop("pending_rerun", None)
-            state["rerun_timeout"] = {"generation": generation, "started_at": started_at}
+            state["rerun_timeout"] = {
+                "generation": generation,
+                "started_at": started_at,
+            }
             return "timed_out"
         return "pending"
     unlinked_running = any(
-        str((runs_by_id.get(run_id) or {}).get("status") or "").lower()
-        == "in_progress"
+        str((runs_by_id.get(run_id) or {}).get("status") or "").lower() == "in_progress"
         for run_id in unlinked_run_ids
     )
     if unlinked_running:
@@ -537,78 +673,183 @@ def rerun_registration_status(state, generation, runs, checks, now):
         pending.pop("execution_started_at", None)
     return "pending"
 
+
 def rerun_is_pending(state, generation, runs, checks):
-    return rerun_registration_status(state, generation, runs, checks, time.time()) == "pending"
+    return (
+        rerun_registration_status(state, generation, runs, checks, time.time())
+        == "pending"
+    )
+
 
 def record_timing_samples(state, pr, checks, ci_revision):
-    samples = [item for item in state.get("timing_samples") or [] if isinstance(item, dict)]
+    samples = [
+        item for item in state.get("timing_samples") or [] if isinstance(item, dict)
+    ]
     keys = {(item.get("check_id"), item.get("completed_at")) for item in samples}
     for check in checks:
-        duration, revision = check.get("observed_active_seconds"), check.get("active_ci_revision")
-        if check.get("status") != "passed" or not check.get("active_sample_trainable") or not isinstance(duration, (int, float)) or duration <= 0 or not revision: continue
-        sample = {"repo": pr["repo"], "base_branch": pr["base_branch"], "ci_revision": revision, "check_id": check_identity(check), "completed_at": str(check.get("completed_at") or ""), "duration_seconds": int(math.ceil(duration))}
+        duration, revision = (
+            check.get("observed_active_seconds"),
+            check.get("active_ci_revision"),
+        )
+        if (
+            check.get("status") != "passed"
+            or not check.get("active_sample_trainable")
+            or not isinstance(duration, (int, float))
+            or duration <= 0
+            or not revision
+        ):
+            continue
+        sample = {
+            "repo": pr["repo"],
+            "base_branch": pr["base_branch"],
+            "ci_revision": revision,
+            "check_id": check_identity(check),
+            "completed_at": str(check.get("completed_at") or ""),
+            "duration_seconds": int(math.ceil(duration)),
+        }
         key = (sample["check_id"], sample["completed_at"])
-        if key not in keys: samples.append(sample); keys.add(key)
+        if key not in keys:
+            samples.append(sample)
+            keys.add(key)
     samples.sort(key=lambda item: str(item.get("completed_at") or ""), reverse=True)
     counts, bounded = {}, []
     for sample in samples:
         cohort = (sample.get("ci_revision"), sample.get("check_id"))
-        if counts.get(cohort, 0) >= 20: continue
-        bounded.append(sample); counts[cohort] = counts.get(cohort, 0) + 1
-        if len(bounded) >= MAX_SAMPLES: break
+        if counts.get(cohort, 0) >= 20:
+            continue
+        bounded.append(sample)
+        counts[cohort] = counts.get(cohort, 0) + 1
+        if len(bounded) >= MAX_SAMPLES:
+            break
     state["timing_samples"] = bounded
+
 
 def snapshot_generation(snapshot):
     pr = snapshot["pr"]
-    return (pr.get("head_sha"), pr.get("base_sha"), (snapshot.get("ci") or {}).get("revision"))
+    return (
+        pr.get("head_sha"),
+        pr.get("base_sha"),
+        (snapshot.get("ci") or {}).get("revision"),
+    )
+
 
 def _timing_history(state_path, state):
-    history = [item for item in state.get("timing_samples") or [] if isinstance(item, dict)]
-    try: siblings = sorted(state_path.parent.glob("pr-*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
-    except OSError: siblings = []
+    history = [
+        item for item in state.get("timing_samples") or [] if isinstance(item, dict)
+    ]
+    try:
+        siblings = sorted(
+            state_path.parent.glob("pr-*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        siblings = []
     for sibling in siblings[:MAX_HISTORY_FILES]:
-        if sibling == state_path: continue
-        try: payload = json.loads(sibling.read_text())
-        except (OSError, json.JSONDecodeError): continue
-        if isinstance(payload, dict): history.extend(item for item in payload.get("timing_samples") or [] if isinstance(item, dict))
+        if sibling == state_path:
+            continue
+        try:
+            payload = json.loads(sibling.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            history.extend(
+                item
+                for item in payload.get("timing_samples") or []
+                if isinstance(item, dict)
+            )
     return history
 
+
 def execution_timeouts(snapshot, now, state_path, state):
-    running = [check for check in snapshot.get("check_details") or [] if check.get("status") == "running"]
-    if not running: return []
-    history, pr, revision = _timing_history(state_path, state), snapshot["pr"], snapshot["ci"]["revision"]
-    reported = set(state.get("reported_timeouts") or []); generation = "\x1f".join(str(item or "") for item in snapshot_generation(snapshot)); timeouts = []
+    running = [
+        check
+        for check in snapshot.get("check_details") or []
+        if check.get("status") == "running"
+    ]
+    if not running:
+        return []
+    history, pr, revision = (
+        _timing_history(state_path, state),
+        snapshot["pr"],
+        snapshot["ci"]["revision"],
+    )
+    reported = set(state.get("reported_timeouts") or [])
+    generation = "\x1f".join(str(item or "") for item in snapshot_generation(snapshot))
+    timeouts = []
     for check in running:
         active_since = check.get("active_since")
-        if not isinstance(active_since, (int, float)): continue
-        durations = sorted(int(sample["duration_seconds"]) for sample in history if sample.get("repo") == pr["repo"] and sample.get("base_branch") == pr["base_branch"] and sample.get("ci_revision") == revision and sample.get("check_id") == check_identity(check))
+        if not isinstance(active_since, (int, float)):
+            continue
+        durations = sorted(
+            int(sample["duration_seconds"])
+            for sample in history
+            if sample.get("repo") == pr["repo"]
+            and sample.get("base_branch") == pr["base_branch"]
+            and sample.get("ci_revision") == revision
+            and sample.get("check_id") == check_identity(check)
+        )
         if durations:
             limit = durations[max(0, math.ceil(len(durations) * 0.95) - 1)] * 2 + 5 * 60
             limit, source = min(MAX_TIMEOUT, max(MIN_TIMEOUT, limit)), "history"
-        else: limit, source = DEFAULT_TIMEOUT, "fallback"
-        active_seconds, timeout_id = max(0, int(now - active_since)), f"{generation}\x1f{check_observation_id(check)}"
-        if active_seconds <= limit or timeout_id in reported: continue
+        else:
+            limit, source = DEFAULT_TIMEOUT, "fallback"
+        active_seconds, timeout_id = (
+            max(0, int(now - active_since)),
+            f"{generation}\x1f{check_observation_id(check)}",
+        )
+        if active_seconds <= limit or timeout_id in reported:
+            continue
         reported.add(timeout_id)
-        timeouts.append({"workflow": check.get("workflow"), "name": check.get("name"), "active_seconds": active_seconds, "limit_seconds": limit, "sample_count": len(durations), "history_source": source, "url": check.get("url")})
+        timeouts.append(
+            {
+                "workflow": check.get("workflow"),
+                "name": check.get("name"),
+                "active_seconds": active_seconds,
+                "limit_seconds": limit,
+                "sample_count": len(durations),
+                "history_source": source,
+                "url": check.get("url"),
+            }
+        )
     state["reported_timeouts"] = list(reported)[-100:]
     return timeouts
 
-def wait_reason(target, snapshot, state_path, state, initial_generation, now, allow_finished=True):
+
+def wait_reason(
+    target, snapshot, state_path, state, initial_generation, now, allow_finished=True
+):
     pr, ci = snapshot["pr"], snapshot.get("ci") or {}
-    if pr.get("closed") or pr.get("merged"): return "pr_closed", []
-    if snapshot.get("new_review_items"): return "review_feedback", []
-    if snapshot_generation(snapshot) != initial_generation: return "generation_changed", []
-    if ci.get("rerun_timed_out"): return "rerun_registration_timeout", []
-    if ci.get("check_refresh_timed_out"): return "check_registration_timeout", []
-    if ci.get("rerun_pending") or ci.get("head_refresh_pending"): return None, []
-    if not ci.get("check_set_current", True): return "ci_config_changed", []
+    if pr.get("closed") or pr.get("merged"):
+        return "pr_closed", []
+    if snapshot.get("new_review_items"):
+        return "review_feedback", []
+    if snapshot_generation(snapshot) != initial_generation:
+        return "generation_changed", []
+    if ci.get("rerun_timed_out"):
+        return "rerun_registration_timeout", []
+    if ci.get("check_refresh_timed_out"):
+        return "check_registration_timeout", []
+    if ci.get("rerun_pending") or ci.get("head_refresh_pending"):
+        return None, []
+    if not ci.get("check_set_current", True):
+        return "ci_config_changed", []
     checks = snapshot["checks"]
-    if allow_finished and int(checks.get("total_count") or 0) == 0: return "no_checks", []
-    if target == "first-failure" and (snapshot.get("failed_runs") or snapshot.get("failed_jobs") or int(snapshot["checks"].get("failed_count") or 0) > 0): return "first_failure", []
+    if allow_finished and int(checks.get("total_count") or 0) == 0:
+        return "no_checks", []
+    if target == "first-failure" and (
+        snapshot.get("failed_runs")
+        or snapshot.get("failed_jobs")
+        or int(snapshot["checks"].get("failed_count") or 0) > 0
+    ):
+        return "first_failure", []
     timeouts = execution_timeouts(snapshot, now, state_path, state)
-    if timeouts: return "execution_timeout", timeouts
-    if allow_finished and checks.get("all_terminal"): return "finished", []
+    if timeouts:
+        return "execution_timeout", timeouts
+    if allow_finished and checks.get("all_terminal"):
+        return "finished", []
     return None, []
+
 
 def run_wait(
     args,
@@ -620,12 +861,29 @@ def run_wait(
 ):
     initial_generation = None
     while True:
-        snapshot, state_path = collect_snapshot(args); state, _ = load_state(state_path)
-        generation = snapshot_generation(snapshot); initial_generation = initial_generation or generation; now = time.time(); checks = snapshot["checks"]
+        snapshot, state_path = collect_snapshot(args)
+        state, _ = load_state(state_path)
+        generation = snapshot_generation(snapshot)
+        initial_generation = initial_generation or generation
+        now = time.time()
+        checks = snapshot["checks"]
         terminal_since = (snapshot.get("ci") or {}).get("terminal_since")
-        terminal_since = terminal_since if isinstance(terminal_since, (int, float)) else now
-        allow_finished = bool(checks.get("all_terminal") and now - terminal_since >= REGISTRATION_GRACE_SECONDS)
-        reason, timeouts = wait_reason(args.wait_for, snapshot, state_path, state, initial_generation, now, allow_finished)
+        terminal_since = (
+            terminal_since if isinstance(terminal_since, (int, float)) else now
+        )
+        allow_finished = bool(
+            checks.get("all_terminal")
+            and now - terminal_since >= REGISTRATION_GRACE_SECONDS
+        )
+        reason, timeouts = wait_reason(
+            args.wait_for,
+            snapshot,
+            state_path,
+            state,
+            initial_generation,
+            now,
+            allow_finished,
+        )
         if reason is not None:
             failures, failures_summary = bounded_check_details(
                 [
@@ -643,15 +901,42 @@ def run_wait(
             review_items, review_items_summary = bounded_records(
                 snapshot.get("new_review_items") or [], OUTPUT_REVIEW_ITEM_FIELDS
             )
-            timeouts, timeouts_summary = bounded_records(timeouts, OUTPUT_TIMEOUT_FIELDS)
-            result = {"event": "wait_complete", "target": args.wait_for, "reason": reason, "generation": dict(zip(("head_sha", "base_sha", "ci_revision"), generation)), "ci": snapshot.get("ci"), "checks": checks, "failures": failures, "failures_summary": failures_summary, "failed_runs": failed_runs, "failed_runs_summary": failed_runs_summary, "failed_jobs": failed_jobs, "failed_jobs_summary": failed_jobs_summary, "new_review_items": review_items, "new_review_items_summary": review_items_summary, "review_backlog_count": int(snapshot.get("review_backlog_count") or 0), "timeouts": timeouts, "timeouts_summary": timeouts_summary, "actions": snapshot.get("actions") or [], "pr": snapshot.get("pr"), "state_file": str(state_path)[:MAX_OUTPUT_CHECK_DETAIL_VALUE_CHARS]}
-            if generation != initial_generation and reason != "generation_changed": result["also_reasons"] = ["generation_changed"]
+            timeouts, timeouts_summary = bounded_records(
+                timeouts, OUTPUT_TIMEOUT_FIELDS
+            )
+            result = {
+                "event": "wait_complete",
+                "target": args.wait_for,
+                "reason": reason,
+                "generation": dict(
+                    zip(("head_sha", "base_sha", "ci_revision"), generation)
+                ),
+                "ci": snapshot.get("ci"),
+                "checks": checks,
+                "failures": failures,
+                "failures_summary": failures_summary,
+                "failed_runs": failed_runs,
+                "failed_runs_summary": failed_runs_summary,
+                "failed_jobs": failed_jobs,
+                "failed_jobs_summary": failed_jobs_summary,
+                "new_review_items": review_items,
+                "new_review_items_summary": review_items_summary,
+                "review_backlog_count": int(snapshot.get("review_backlog_count") or 0),
+                "timeouts": timeouts,
+                "timeouts_summary": timeouts_summary,
+                "actions": snapshot.get("actions") or [],
+                "pr": snapshot.get("pr"),
+                "state_file": str(state_path)[:MAX_OUTPUT_CHECK_DETAIL_VALUE_CHARS],
+            }
+            if generation != initial_generation and reason != "generation_changed":
+                result["also_reasons"] = ["generation_changed"]
             result = bounded_output_payload(
                 result, ("failed_jobs", "timeouts", "failures", "failed_runs")
             )
             print_json(result)
             if acknowledge_snapshot is not None:
                 acknowledge_snapshot(snapshot, state_path)
-            if reason == "execution_timeout": save_state(state_path, state)
+            if reason == "execution_timeout":
+                save_state(state_path, state)
             return 0
         time.sleep(args.poll_seconds)

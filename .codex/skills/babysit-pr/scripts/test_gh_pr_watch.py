@@ -182,8 +182,12 @@ def test_base_change_requires_fresh_check_observation(monkeypatch, tmp_path):
     monkeypatch.setattr(gh_pr_watch, "load_state", lambda path: (state, False))
     monkeypatch.setattr(gh_pr_watch, "save_state", lambda *args: None)
     monkeypatch.setattr(gh_pr_watch, "get_authenticated_login", lambda: "octocat")
-    monkeypatch.setattr(gh_pr_watch, "fetch_new_review_items", lambda *args, **kwargs: [])
-    monkeypatch.setattr(gh_pr_watch.ci_wait, "get_ci_config_revision", lambda *args: "ci")
+    monkeypatch.setattr(
+        gh_pr_watch, "fetch_new_review_items", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        gh_pr_watch.ci_wait, "get_ci_config_revision", lambda *args: "ci"
+    )
     monkeypatch.setattr(gh_pr_watch, "get_pr_checks", lambda *args, **kwargs: checks)
     monkeypatch.setattr(gh_pr_watch, "get_workflow_runs_for_sha", lambda *args: [])
     args = argparse.Namespace(
@@ -194,9 +198,7 @@ def test_base_change_requires_fresh_check_observation(monkeypatch, tmp_path):
         wait_for="finished",
     )
 
-    stale, _ = gh_pr_watch._collect_snapshot(
-        args, pr, tmp_path / "watcher-state.json"
-    )
+    stale, _ = gh_pr_watch._collect_snapshot(args, pr, tmp_path / "watcher-state.json")
     assert stale["ci"]["head_refresh_pending"] is True
     assert stale["ci"]["check_set_current"] is False
     assert stale["actions"] == ["idle"]
@@ -217,9 +219,7 @@ def test_base_change_requires_fresh_check_observation(monkeypatch, tmp_path):
         startedAt="2026-09-21T10:02:00Z",
         completedAt="2026-09-21T10:03:00Z",
     )
-    fresh, _ = gh_pr_watch._collect_snapshot(
-        args, pr, tmp_path / "watcher-state.json"
-    )
+    fresh, _ = gh_pr_watch._collect_snapshot(args, pr, tmp_path / "watcher-state.json")
     assert fresh["ci"]["head_refresh_pending"] is False
     assert fresh["ci"]["check_set_current"] is True
 
@@ -233,9 +233,7 @@ def test_base_change_requires_fresh_check_observation(monkeypatch, tmp_path):
         }
     )
     checks[:] = [raw_check, raw_check_two]
-    legacy, _ = gh_pr_watch._collect_snapshot(
-        args, pr, tmp_path / "watcher-state.json"
-    )
+    legacy, _ = gh_pr_watch._collect_snapshot(args, pr, tmp_path / "watcher-state.json")
     assert legacy["ci"]["head_refresh_pending"] is True
     assert legacy["ci"]["check_set_current"] is False
 
@@ -264,7 +262,13 @@ def test_recommend_actions_prioritizes_review_comments():
         sample_pr(), sample_checks(), [], [], [], 0, 3, registration_stable=False
     ) == ["idle"]
     assert gh_pr_watch.recommend_actions(
-        sample_pr(), sample_checks(failed_count=1), [{"run_id": 1}], [], [], 0, 3,
+        sample_pr(),
+        sample_checks(failed_count=1),
+        [{"run_id": 1}],
+        [],
+        [],
+        0,
+        3,
         registration_stable=False,
     ) == ["diagnose_ci_failure"]
 
@@ -366,9 +370,12 @@ def test_review_feedback_pages_without_losing_items(monkeypatch, tmp_path):
         gh_pr_watch.mark_review_items_seen(state, page)
 
     assert surfaced == [str(index) for index in range(1, 13)]
-    assert gh_pr_watch.fetch_new_review_items(
-        sample_pr(), state, fresh_state=False, authenticated_login="octocat"
-    ) == []
+    assert (
+        gh_pr_watch.fetch_new_review_items(
+            sample_pr(), state, fresh_state=False, authenticated_login="octocat"
+        )
+        == []
+    )
 
     state_path = tmp_path / "pr-123.json"
     gh_pr_watch.save_state(state_path, {})
@@ -425,9 +432,7 @@ def test_run_watch_keeps_polling_open_ready_to_merge_pr(monkeypatch):
     assert [event for event, _ in events] == ["snapshot"]
     summary = events[0][1]["snapshot"]["check_details_summary"]
     assert summary["total_count"] == 12
-    assert summary["emitted_count"] == len(
-        events[0][1]["snapshot"]["check_details"]
-    )
+    assert summary["emitted_count"] == len(events[0][1]["snapshot"]["check_details"])
     assert summary["omitted_count"] == 12 - summary["emitted_count"]
     assert summary["truncated"] is True
     assert snapshot["check_details"] == check_details
@@ -491,7 +496,9 @@ def test_check_detail_output_is_hard_capped_and_prioritizes_failures():
         "truncated": True,
     }
 
-    long_checks = [sample_check_detail(index, padding="x" * 1_000) for index in range(15)]
+    long_checks = [
+        sample_check_detail(index, padding="x" * 1_000) for index in range(15)
+    ]
     long_checks[-1]["status"] = "failed"
     snapshot = sample_snapshot(check_details=long_checks)
     output = gh_pr_watch.snapshot_for_output(snapshot)
@@ -504,7 +511,9 @@ def test_check_detail_output_is_hard_capped_and_prioritizes_failures():
         <= gh_pr_watch.ci_wait.MAX_OUTPUT_CHECK_DETAILS_JSON_CHARS
     )
     assert len(snapshot["check_details"]) == 15
-    assert len(snapshot["check_details"][-1]["name"]) > len(output["check_details"][0]["name"])
+    assert len(snapshot["check_details"][-1]["name"]) > len(
+        output["check_details"][0]["name"]
+    )
 
     oversized = [
         {
@@ -520,8 +529,12 @@ def test_check_detail_output_is_hard_capped_and_prioritizes_failures():
     bounded = gh_pr_watch.snapshot_for_output(
         sample_snapshot(
             check_details=long_checks,
-            failed_runs=[{"run_id": index, "workflow_name": "x" * 1_000} for index in range(20)],
-            failed_jobs=[{"job_id": index, "job_name": "x" * 1_000} for index in range(20)],
+            failed_runs=[
+                {"run_id": index, "workflow_name": "x" * 1_000} for index in range(20)
+            ],
+            failed_jobs=[
+                {"job_id": index, "job_name": "x" * 1_000} for index in range(20)
+            ],
             new_review_items=oversized,
         )
     )
@@ -553,7 +566,9 @@ def test_once_and_retry_emit_bounded_snapshots(monkeypatch, tmp_path):
     )
     snapshot["ci"].update({"rerun_pending": False, "check_set_current": True})
     state_path = tmp_path / "pr-123.json"
-    monkeypatch.setattr(gh_pr_watch, "collect_snapshot", lambda args: (snapshot, state_path))
+    monkeypatch.setattr(
+        gh_pr_watch, "collect_snapshot", lambda args: (snapshot, state_path)
+    )
     monkeypatch.setattr(gh_pr_watch, "resolve_pr", lambda *args, **kwargs: sample_pr())
     monkeypatch.setattr(
         gh_pr_watch,
@@ -639,24 +654,36 @@ def test_failed_jobs_include_direct_logs_endpoint(monkeypatch):
         }
     ]
     before = sample_snapshot(
-        check_details=[{"id": "a", "status": "failed"}, {"id": "b", "status": "passed"}],
+        check_details=[
+            {"id": "a", "status": "failed"},
+            {"id": "b", "status": "passed"},
+        ],
         failed_runs=[{"run_id": 1, "run_attempt": 1, "conclusion": "failure"}],
     )
     after = sample_snapshot(
-        check_details=[{"id": "a", "status": "passed"}, {"id": "b", "status": "failed"}],
+        check_details=[
+            {"id": "a", "status": "passed"},
+            {"id": "b", "status": "failed"},
+        ],
         failed_runs=[{"run_id": 2, "run_attempt": 1, "conclusion": "failure"}],
     )
-    assert gh_pr_watch.snapshot_change_key(before) != gh_pr_watch.snapshot_change_key(after)
+    assert gh_pr_watch.snapshot_change_key(before) != gh_pr_watch.snapshot_change_key(
+        after
+    )
 
 
 def test_workflow_run_lookup_paginates(monkeypatch):
     calls = []
 
     def fake_gh_json(args, repo=None):
-        page = int(args[args.index("-f", args.index("per_page=100") + 1) + 1].split("=")[1])
+        page = int(
+            args[args.index("-f", args.index("per_page=100") + 1) + 1].split("=")[1]
+        )
         calls.append(page)
         count = 100 if page == 1 else 1
-        return {"workflow_runs": [{"id": page * 1_000 + index} for index in range(count)]}
+        return {
+            "workflow_runs": [{"id": page * 1_000 + index} for index in range(count)]
+        }
 
     monkeypatch.setattr(gh_pr_watch, "gh_json", fake_gh_json)
 
@@ -767,16 +794,26 @@ def test_failed_runs_only_include_current_checks_and_latest_pr_startup_failure()
             "status": "completed",
             "conclusion": "failure",
             "html_url": "",
-        }
+        },
     ]
 
 
 def test_wait_for_first_failure_polls_silently(monkeypatch, tmp_path):
-    pending_checks = sample_checks(pending_count=1, passed_count=0, all_terminal=False, total_count=1)
+    pending_checks = sample_checks(
+        pending_count=1, passed_count=0, all_terminal=False, total_count=1
+    )
     pending = sample_snapshot(pending_checks)
     failed = sample_snapshot(
-        sample_checks(pending_count=1, failed_count=1, passed_count=0, all_terminal=False, total_count=2),
-        check_details=[sample_check_detail(index, status="failed") for index in range(12)],
+        sample_checks(
+            pending_count=1,
+            failed_count=1,
+            passed_count=0,
+            all_terminal=False,
+            total_count=2,
+        ),
+        check_details=[
+            sample_check_detail(index, status="failed") for index in range(12)
+        ],
         failed_runs=[{"run_id": index, "workflow_name": "CI"} for index in range(20)],
         failed_jobs=[{"job_id": index, "job_name": "tests"} for index in range(20)],
     )
@@ -792,7 +829,11 @@ def test_wait_for_first_failure_polls_silently(monkeypatch, tmp_path):
         lambda path, state: None,
         emitted.append,
     )
-    assert (result, sleeps, [item["reason"] for item in emitted]) == (0, [30, 30], ["first_failure"])
+    assert (result, sleeps, [item["reason"] for item in emitted]) == (
+        0,
+        [30, 30],
+        ["first_failure"],
+    )
     failure_summary = emitted[0]["failures_summary"]
     assert failure_summary["total_count"] == 12
     assert failure_summary["emitted_count"] == len(emitted[0]["failures"])
@@ -801,22 +842,48 @@ def test_wait_for_first_failure_polls_silently(monkeypatch, tmp_path):
     assert emitted[0]["failed_runs_summary"]["truncated"] is True
     assert emitted[0]["failed_jobs_summary"]["truncated"] is True
     generation = ("abc123", "base123", "ci-v1")
-    finished = gh_pr_watch.ci_wait.wait_reason("finished", sample_snapshot(), state_path, {}, generation, 1_000)
+    finished = gh_pr_watch.ci_wait.wait_reason(
+        "finished", sample_snapshot(), state_path, {}, generation, 1_000
+    )
     assert finished == ("finished", [])
     pending = sample_snapshot(sample_checks(pending_count=1, all_terminal=False))
-    assert gh_pr_watch.ci_wait.wait_reason("finished", pending, state_path, {}, generation, 1_000) == (None, [])
+    assert gh_pr_watch.ci_wait.wait_reason(
+        "finished", pending, state_path, {}, generation, 1_000
+    ) == (None, [])
     empty = sample_snapshot(sample_checks(passed_count=0, total_count=0))
-    assert gh_pr_watch.ci_wait.wait_reason("finished", empty, state_path, {}, generation, 1_000) == ("no_checks", [])
+    assert gh_pr_watch.ci_wait.wait_reason(
+        "finished", empty, state_path, {}, generation, 1_000
+    ) == ("no_checks", [])
     failed = sample_snapshot(sample_checks(failed_count=1, passed_count=11))
-    assert gh_pr_watch.ci_wait.wait_reason("finished", failed, state_path, {}, generation, 1_000) == ("finished", [])
+    assert gh_pr_watch.ci_wait.wait_reason(
+        "finished", failed, state_path, {}, generation, 1_000
+    ) == ("finished", [])
     run_failed = sample_snapshot(failed_runs=[{"conclusion": "startup_failure"}])
-    assert gh_pr_watch.ci_wait.wait_reason("first-failure", run_failed, state_path, {}, generation, 1_000)[0] == "first_failure"
+    assert (
+        gh_pr_watch.ci_wait.wait_reason(
+            "first-failure", run_failed, state_path, {}, generation, 1_000
+        )[0]
+        == "first_failure"
+    )
     stale = sample_snapshot()
     stale["ci"]["check_set_current"] = False
-    assert gh_pr_watch.ci_wait.wait_reason("finished", stale, state_path, {}, generation, 1_000)[0] == "ci_config_changed"
-    changed = sample_snapshot(new_review_items=[{"id": "review"}]); changed["pr"]["head_sha"] = "new"
-    more = iter([pending, changed]); wake = []
-    gh_pr_watch.ci_wait.run_wait(argparse.Namespace(wait_for="finished", poll_seconds=30), lambda args: (next(more), state_path), lambda path: ({}, False), lambda *args: None, wake.append)
+    assert (
+        gh_pr_watch.ci_wait.wait_reason(
+            "finished", stale, state_path, {}, generation, 1_000
+        )[0]
+        == "ci_config_changed"
+    )
+    changed = sample_snapshot(new_review_items=[{"id": "review"}])
+    changed["pr"]["head_sha"] = "new"
+    more = iter([pending, changed])
+    wake = []
+    gh_pr_watch.ci_wait.run_wait(
+        argparse.Namespace(wait_for="finished", poll_seconds=30),
+        lambda args: (next(more), state_path),
+        lambda path: ({}, False),
+        lambda *args: None,
+        wake.append,
+    )
     assert wake[0]["also_reasons"] == ["generation_changed"]
 
     reviews = sample_snapshot(
@@ -893,13 +960,19 @@ def test_execution_timeout_uses_persisted_runtime_and_excludes_queue(tmp_path):
         "startedAt": "2026-09-21T10:00:00Z",
         "completedAt": "2026-09-21T10:01:00Z",
     }
-    running_sample = gh_pr_watch.ci_wait.normalize_check(dict(completed_payload, bucket="pending", state="IN_PROGRESS", completedAt=""))
+    running_sample = gh_pr_watch.ci_wait.normalize_check(
+        dict(completed_payload, bucket="pending", state="IN_PROGRESS", completedAt="")
+    )
     queued_sample = dict(running_sample, status="queued", state="QUEUED")
     completed = gh_pr_watch.ci_wait.normalize_check(completed_payload)
     started_at = gh_pr_watch.ci_wait.parse_github_time("2026-09-21T10:00:00Z")
     completed_at = gh_pr_watch.ci_wait.parse_github_time("2026-09-21T10:01:00Z")
-    gh_pr_watch.ci_wait.update_active_checks(state, [queued_sample], started_at - 300, "ci-v1")
-    gh_pr_watch.ci_wait.update_active_checks(state, [running_sample], started_at, "ci-v2")
+    gh_pr_watch.ci_wait.update_active_checks(
+        state, [queued_sample], started_at - 300, "ci-v1"
+    )
+    gh_pr_watch.ci_wait.update_active_checks(
+        state, [running_sample], started_at, "ci-v2"
+    )
     gh_pr_watch.ci_wait.update_active_checks(state, [completed], completed_at, "ci-v2")
     gh_pr_watch.ci_wait.record_timing_samples(state, sample_pr(), [completed], "ci-v2")
     gh_pr_watch.save_state(state_path, state)
@@ -911,7 +984,9 @@ def test_execution_timeout_uses_persisted_runtime_and_excludes_queue(tmp_path):
     late_running = dict(running_sample)
     late_completed = gh_pr_watch.ci_wait.normalize_check(completed_payload)
     late_observed_at = started_at + gh_pr_watch.ci_wait.DEFAULT_TIMEOUT + 1
-    gh_pr_watch.ci_wait.update_active_checks(late_state, [late_running], late_observed_at, "ci-v1")
+    gh_pr_watch.ci_wait.update_active_checks(
+        late_state, [late_running], late_observed_at, "ci-v1"
+    )
     assert late_running["active_since"] == started_at
     late_timeout = gh_pr_watch.ci_wait.execution_timeouts(
         sample_snapshot(
@@ -926,45 +1001,102 @@ def test_execution_timeout_uses_persisted_runtime_and_excludes_queue(tmp_path):
         gh_pr_watch.ci_wait.DEFAULT_TIMEOUT + 1,
         "fallback",
     )
-    gh_pr_watch.ci_wait.update_active_checks(late_state, [late_completed], completed_at, "ci-v1")
-    gh_pr_watch.ci_wait.record_timing_samples(late_state, sample_pr(), [late_completed], "ci-v1")
+    gh_pr_watch.ci_wait.update_active_checks(
+        late_state, [late_completed], completed_at, "ci-v1"
+    )
+    gh_pr_watch.ci_wait.record_timing_samples(
+        late_state, sample_pr(), [late_completed], "ci-v1"
+    )
     assert late_state["timing_samples"] == []
 
-    queued = gh_pr_watch.ci_wait.normalize_check({"workflow": "CI", "name": "tests", "bucket": "pending", "state": "QUEUED"})
+    queued = gh_pr_watch.ci_wait.normalize_check(
+        {"workflow": "CI", "name": "tests", "bucket": "pending", "state": "QUEUED"}
+    )
     running = dict(queued, status="running", state="IN_PROGRESS")
     running_observed_at = gh_pr_watch.ci_wait.parse_github_time("2026-09-21T09:05:00Z")
     now = gh_pr_watch.ci_wait.parse_github_time("2026-09-21T09:15:01Z")
     pending = sample_checks(pending_count=1, passed_count=0, all_terminal=False)
-    gh_pr_watch.ci_wait.update_active_checks(persisted, [queued], running_observed_at - 300, "ci-v1")
-    assert gh_pr_watch.ci_wait.execution_timeouts(sample_snapshot(pending, [queued]), now, state_path, persisted) == []
-    gh_pr_watch.ci_wait.update_active_checks(persisted, [running], running_observed_at, "ci-v1")
+    gh_pr_watch.ci_wait.update_active_checks(
+        persisted, [queued], running_observed_at - 300, "ci-v1"
+    )
+    assert (
+        gh_pr_watch.ci_wait.execution_timeouts(
+            sample_snapshot(pending, [queued]), now, state_path, persisted
+        )
+        == []
+    )
+    gh_pr_watch.ci_wait.update_active_checks(
+        persisted, [running], running_observed_at, "ci-v1"
+    )
     snapshot = sample_snapshot(pending, [running])
-    timeout = gh_pr_watch.ci_wait.execution_timeouts(snapshot, now, state_path, persisted)[0]
-    assert (timeout["active_seconds"], timeout["limit_seconds"], timeout["history_source"]) == (601, 600, "history")
-    assert gh_pr_watch.ci_wait.execution_timeouts(snapshot, now, state_path, persisted) == []
+    timeout = gh_pr_watch.ci_wait.execution_timeouts(
+        snapshot, now, state_path, persisted
+    )[0]
+    assert (
+        timeout["active_seconds"],
+        timeout["limit_seconds"],
+        timeout["history_source"],
+    ) == (601, 600, "history")
+    assert (
+        gh_pr_watch.ci_wait.execution_timeouts(snapshot, now, state_path, persisted)
+        == []
+    )
 
 
 def test_ci_revision_changes_only_when_base_ci_files_change():
     state, calls = {}, []
-    workflow_sha = {"base-a": "workflow-1", "base-b": "workflow-1", "base-c": "workflow-2", "base-d": "workflow-1"}
+    workflow_sha = {
+        "base-a": "workflow-1",
+        "base-b": "workflow-1",
+        "base-c": "workflow-2",
+        "base-d": "workflow-1",
+    }
 
     def fake_gh_json(args, repo=None):
         endpoint = args[1]
         calls.append(endpoint)
         base_sha = endpoint.rsplit("/", maxsplit=1)[-1]
         bazel_sha = "bazel-2" if base_sha == "base-d" else "bazel-1"
-        return {"tree": [
-            {"path": ".github/workflows/ci.yml", "type": "blob", "sha": workflow_sha[base_sha]},
-            {"path": ".bazelversion", "type": "blob", "sha": bazel_sha},
-        ]}
+        return {
+            "tree": [
+                {
+                    "path": ".github/workflows/ci.yml",
+                    "type": "blob",
+                    "sha": workflow_sha[base_sha],
+                },
+                {"path": ".bazelversion", "type": "blob", "sha": bazel_sha},
+            ]
+        }
 
-    revision_a = gh_pr_watch.ci_wait.get_ci_config_revision(fake_gh_json, state, "openai/codex", "base-a")
+    revision_a = gh_pr_watch.ci_wait.get_ci_config_revision(
+        fake_gh_json, state, "openai/codex", "base-a"
+    )
     call_count = len(calls)
-    assert gh_pr_watch.ci_wait.get_ci_config_revision(fake_gh_json, state, "openai/codex", "base-a") == revision_a
+    assert (
+        gh_pr_watch.ci_wait.get_ci_config_revision(
+            fake_gh_json, state, "openai/codex", "base-a"
+        )
+        == revision_a
+    )
     assert len(calls) == call_count
-    assert gh_pr_watch.ci_wait.get_ci_config_revision(fake_gh_json, state, "openai/codex", "base-b") == revision_a
-    assert gh_pr_watch.ci_wait.get_ci_config_revision(fake_gh_json, state, "openai/codex", "base-c") != revision_a
-    assert gh_pr_watch.ci_wait.get_ci_config_revision(fake_gh_json, state, "openai/codex", "base-d") != revision_a
+    assert (
+        gh_pr_watch.ci_wait.get_ci_config_revision(
+            fake_gh_json, state, "openai/codex", "base-b"
+        )
+        == revision_a
+    )
+    assert (
+        gh_pr_watch.ci_wait.get_ci_config_revision(
+            fake_gh_json, state, "openai/codex", "base-c"
+        )
+        != revision_a
+    )
+    assert (
+        gh_pr_watch.ci_wait.get_ci_config_revision(
+            fake_gh_json, state, "openai/codex", "base-d"
+        )
+        != revision_a
+    )
 
 
 def test_rerun_attempt_waits_for_new_check_rollup():
@@ -974,7 +1106,9 @@ def test_rerun_attempt_waits_for_new_check_rollup():
     assert legacy["retries_by_sha"] == {"generation": 3}
     registration = {}
     assert gh_pr_watch.ci_wait.update_check_registration(registration, "old", checks)
-    assert not gh_pr_watch.ci_wait.update_check_registration(registration, "new", checks, require_change=True)
+    assert not gh_pr_watch.ci_wait.update_check_registration(
+        registration, "new", checks, require_change=True
+    )
     assert gh_pr_watch.ci_wait.update_check_registration(registration, "new", checks)
     state = {
         "pending_rerun": {
@@ -983,11 +1117,19 @@ def test_rerun_attempt_waits_for_new_check_rollup():
             "check_signature": gh_pr_watch.ci_wait.check_signature(checks),
         }
     }
-    assert gh_pr_watch.ci_wait.rerun_is_pending(state, "g", [{"id": 7, "run_attempt": 1}], checks)
+    assert gh_pr_watch.ci_wait.rerun_is_pending(
+        state, "g", [{"id": 7, "run_attempt": 1}], checks
+    )
     new_checks = [{"id": "tests", "run_id": 7, "job_id": 9}]
-    assert gh_pr_watch.ci_wait.update_check_registration(registration, "new", new_checks)
-    assert gh_pr_watch.ci_wait.rerun_is_pending(state, "g", [{"id": 7, "run_attempt": 1}], new_checks)
-    assert not gh_pr_watch.ci_wait.rerun_is_pending(state, "g", [{"id": 7, "run_attempt": 2}], new_checks)
+    assert gh_pr_watch.ci_wait.update_check_registration(
+        registration, "new", new_checks
+    )
+    assert gh_pr_watch.ci_wait.rerun_is_pending(
+        state, "g", [{"id": 7, "run_attempt": 1}], new_checks
+    )
+    assert not gh_pr_watch.ci_wait.rerun_is_pending(
+        state, "g", [{"id": 7, "run_attempt": 2}], new_checks
+    )
     unlinked = {
         "pending_rerun": {
             "generation": "g",
@@ -1017,7 +1159,9 @@ def test_rerun_attempt_waits_for_new_check_rollup():
         }
     )
     external_b = dict(external_a, started_at="2026-09-21T10:01:00Z")
-    assert gh_pr_watch.ci_wait.check_signature([external_a]) == gh_pr_watch.ci_wait.check_signature([external_b])
+    assert gh_pr_watch.ci_wait.check_signature(
+        [external_a]
+    ) == gh_pr_watch.ci_wait.check_signature([external_b])
     assert gh_pr_watch.ci_wait.check_observation_signature(
         [external_a]
     ) != gh_pr_watch.ci_wait.check_observation_signature([external_b])
@@ -1025,17 +1169,23 @@ def test_rerun_attempt_waits_for_new_check_rollup():
     stable_signature = gh_pr_watch.ci_wait.check_signature([stable])
     stable_observation = gh_pr_watch.ci_wait.check_observation_signature([stable])
     refresh_state = {"check_registration": {"signature": stable_signature}}
-    assert gh_pr_watch.ci_wait.update_head_refresh(
-        refresh_state, True, stable_signature, stable_observation, True, 1_000
-    ) == "pending"
-    assert gh_pr_watch.ci_wait.update_head_refresh(
-        refresh_state,
-        False,
-        stable_signature,
-        stable_observation,
-        True,
-        1_000 + gh_pr_watch.ci_wait.REGISTRATION_GRACE_SECONDS,
-    ) == "timed_out"
+    assert (
+        gh_pr_watch.ci_wait.update_head_refresh(
+            refresh_state, True, stable_signature, stable_observation, True, 1_000
+        )
+        == "pending"
+    )
+    assert (
+        gh_pr_watch.ci_wait.update_head_refresh(
+            refresh_state,
+            False,
+            stable_signature,
+            stable_observation,
+            True,
+            1_000 + gh_pr_watch.ci_wait.REGISTRATION_GRACE_SECONDS,
+        )
+        == "timed_out"
+    )
     fresh_state = {
         "check_registration": {
             "signature": gh_pr_watch.ci_wait.check_signature([external_a]),
@@ -1044,14 +1194,17 @@ def test_rerun_attempt_waits_for_new_check_rollup():
             ),
         }
     }
-    assert gh_pr_watch.ci_wait.update_head_refresh(
-        fresh_state,
-        True,
-        gh_pr_watch.ci_wait.check_signature([external_b]),
-        gh_pr_watch.ci_wait.check_observation_signature([external_b]),
-        True,
-        1_000,
-    ) is None
+    assert (
+        gh_pr_watch.ci_wait.update_head_refresh(
+            fresh_state,
+            True,
+            gh_pr_watch.ci_wait.check_signature([external_b]),
+            gh_pr_watch.ci_wait.check_observation_signature([external_b]),
+            True,
+            1_000,
+        )
+        is None
+    )
 
 
 def test_generation_refresh_timeout_and_active_check_reset():
@@ -1068,17 +1221,23 @@ def test_generation_refresh_timeout_and_active_check_reset():
     signature = gh_pr_watch.ci_wait.check_signature([check])
     observation = gh_pr_watch.ci_wait.check_observation_signature([check])
     legacy_state = {}
-    assert gh_pr_watch.ci_wait.update_head_refresh(
-        legacy_state, True, signature, observation, True, 1_000
-    ) == "pending"
-    assert gh_pr_watch.ci_wait.update_head_refresh(
-        legacy_state,
-        False,
-        signature,
-        observation,
-        True,
-        1_000 + gh_pr_watch.ci_wait.REGISTRATION_GRACE_SECONDS,
-    ) == "timed_out"
+    assert (
+        gh_pr_watch.ci_wait.update_head_refresh(
+            legacy_state, True, signature, observation, True, 1_000
+        )
+        == "pending"
+    )
+    assert (
+        gh_pr_watch.ci_wait.update_head_refresh(
+            legacy_state,
+            False,
+            signature,
+            observation,
+            True,
+            1_000 + gh_pr_watch.ci_wait.REGISTRATION_GRACE_SECONDS,
+        )
+        == "timed_out"
+    )
 
     pushed_state = {
         "head_refresh_signature": signature,
@@ -1087,53 +1246,68 @@ def test_generation_refresh_timeout_and_active_check_reset():
             "current": False,
         },
     }
-    assert gh_pr_watch.ci_wait.update_head_refresh(
-        pushed_state, False, signature, observation, True, 3_000
-    ) == "pending"
+    assert (
+        gh_pr_watch.ci_wait.update_head_refresh(
+            pushed_state, False, signature, observation, True, 3_000
+        )
+        == "pending"
+    )
     pushed_fresh_state = {
         "head_refresh_signature": signature,
         "check_registration": {"signature": signature, "current": False},
     }
-    assert gh_pr_watch.ci_wait.update_head_refresh(
-        pushed_fresh_state,
-        False,
-        signature,
-        observation,
-        True,
-        3_000,
-        observations_verified_fresh=True,
-        check_observations=[gh_pr_watch.ci_wait.check_observation_id(check)],
-    ) == "pending"
+    assert (
+        gh_pr_watch.ci_wait.update_head_refresh(
+            pushed_fresh_state,
+            False,
+            signature,
+            observation,
+            True,
+            3_000,
+            observations_verified_fresh=True,
+            check_observations=[gh_pr_watch.ci_wait.check_observation_id(check)],
+        )
+        == "pending"
+    )
     mismatched_marker = {
         "head_refresh_signature": "older-signature",
         "check_registration": {"signature": signature, "current": False},
     }
-    assert gh_pr_watch.ci_wait.update_head_refresh(
-        mismatched_marker,
-        False,
-        signature,
-        observation,
-        True,
-        3_000,
-        check_observations=[gh_pr_watch.ci_wait.check_observation_id(check)],
-    ) == "pending"
-    assert gh_pr_watch.ci_wait.update_head_refresh(
-        {},
-        True,
-        signature,
-        observation,
-        True,
-        3_000,
-        observations_verified_fresh=True,
-    ) is None
-    assert gh_pr_watch.ci_wait.update_head_refresh(
-        legacy_state,
-        False,
-        signature,
-        observation,
-        True,
-        2_000,
-    ) == "timed_out"
+    assert (
+        gh_pr_watch.ci_wait.update_head_refresh(
+            mismatched_marker,
+            False,
+            signature,
+            observation,
+            True,
+            3_000,
+            check_observations=[gh_pr_watch.ci_wait.check_observation_id(check)],
+        )
+        == "pending"
+    )
+    assert (
+        gh_pr_watch.ci_wait.update_head_refresh(
+            {},
+            True,
+            signature,
+            observation,
+            True,
+            3_000,
+            observations_verified_fresh=True,
+        )
+        is None
+    )
+    assert (
+        gh_pr_watch.ci_wait.update_head_refresh(
+            legacy_state,
+            False,
+            signature,
+            observation,
+            True,
+            2_000,
+        )
+        == "timed_out"
+    )
 
     active_state = {}
     gh_pr_watch.ci_wait.update_active_checks(
@@ -1167,13 +1341,19 @@ def test_rerun_registration_requires_each_run_and_times_out():
         {"id": 2, "run_attempt": 2, "status": "in_progress"},
     ]
     one_refreshed = [dict(old_checks[0], job_id=11), old_checks[1]]
-    assert gh_pr_watch.ci_wait.rerun_registration_status(
-        state, "g", attempts, one_refreshed, 1_001
-    ) == "pending"
+    assert (
+        gh_pr_watch.ci_wait.rerun_registration_status(
+            state, "g", attempts, one_refreshed, 1_001
+        )
+        == "pending"
+    )
     both_refreshed = [dict(old_checks[0], job_id=11), dict(old_checks[1], job_id=21)]
-    assert gh_pr_watch.ci_wait.rerun_registration_status(
-        state, "g", attempts, both_refreshed, 1_002
-    ) is None
+    assert (
+        gh_pr_watch.ci_wait.rerun_registration_status(
+            state, "g", attempts, both_refreshed, 1_002
+        )
+        is None
+    )
 
     two_jobs = {
         "pending_rerun": {
@@ -1194,17 +1374,23 @@ def test_rerun_registration_requires_each_run_and_times_out():
         dict(old_checks[0], job_id=11),
         {"id": "one-b", "run_id": 1, "job_id": 12, "started_at": "old"},
     ]
-    assert gh_pr_watch.ci_wait.rerun_registration_status(
-        two_jobs, "g", attempts[:1], partly_refreshed, 1_001
-    ) == "pending"
+    assert (
+        gh_pr_watch.ci_wait.rerun_registration_status(
+            two_jobs, "g", attempts[:1], partly_refreshed, 1_001
+        )
+        == "pending"
+    )
     fully_refreshed = [dict(partly_refreshed[0]), dict(partly_refreshed[1], job_id=13)]
-    assert gh_pr_watch.ci_wait.rerun_registration_status(
-        two_jobs,
-        "g",
-        attempts[:1],
-        fully_refreshed,
-        1_000 + gh_pr_watch.ci_wait.RERUN_REGISTRATION_TIMEOUT_SECONDS,
-    ) is None
+    assert (
+        gh_pr_watch.ci_wait.rerun_registration_status(
+            two_jobs,
+            "g",
+            attempts[:1],
+            fully_refreshed,
+            1_000 + gh_pr_watch.ci_wait.RERUN_REGISTRATION_TIMEOUT_SECONDS,
+        )
+        is None
+    )
 
     unlinked_running = {
         "pending_rerun": {
@@ -1214,13 +1400,16 @@ def test_rerun_registration_requires_each_run_and_times_out():
             "started_at": 1_000,
         }
     }
-    assert gh_pr_watch.ci_wait.rerun_registration_status(
-        unlinked_running,
-        "g",
-        [{"id": 9, "run_attempt": 2, "status": "in_progress"}],
-        [],
-        1_000 + gh_pr_watch.ci_wait.RERUN_REGISTRATION_TIMEOUT_SECONDS,
-    ) == "pending"
+    assert (
+        gh_pr_watch.ci_wait.rerun_registration_status(
+            unlinked_running,
+            "g",
+            [{"id": 9, "run_attempt": 2, "status": "in_progress"}],
+            [],
+            1_000 + gh_pr_watch.ci_wait.RERUN_REGISTRATION_TIMEOUT_SECONDS,
+        )
+        == "pending"
+    )
     queued = {
         "pending_rerun": {
             "generation": "g",
@@ -1229,13 +1418,16 @@ def test_rerun_registration_requires_each_run_and_times_out():
             "started_at": 1_000,
         }
     }
-    assert gh_pr_watch.ci_wait.rerun_registration_status(
-        queued,
-        "g",
-        [{"id": 9, "run_attempt": 2, "status": "queued"}],
-        [],
-        1_000 + gh_pr_watch.ci_wait.MAX_TIMEOUT + 1,
-    ) == "pending"
+    assert (
+        gh_pr_watch.ci_wait.rerun_registration_status(
+            queued,
+            "g",
+            [{"id": 9, "run_attempt": 2, "status": "queued"}],
+            [],
+            1_000 + gh_pr_watch.ci_wait.MAX_TIMEOUT + 1,
+        )
+        == "pending"
+    )
     assert "execution_started_at" not in queued["pending_rerun"]
 
     timed_out = {
@@ -1246,16 +1438,20 @@ def test_rerun_registration_requires_each_run_and_times_out():
             "started_at": 1_000,
         }
     }
-    assert gh_pr_watch.ci_wait.rerun_registration_status(
-        timed_out,
-        "g",
-        [{"id": 1, "run_attempt": 1, "status": "completed"}],
-        [],
-        1_000 + gh_pr_watch.ci_wait.RERUN_REGISTRATION_TIMEOUT_SECONDS,
-    ) == "timed_out"
-    assert gh_pr_watch.ci_wait.rerun_registration_status(
-        timed_out, "g", [], [], 3_000
-    ) == "timed_out"
+    assert (
+        gh_pr_watch.ci_wait.rerun_registration_status(
+            timed_out,
+            "g",
+            [{"id": 1, "run_attempt": 1, "status": "completed"}],
+            [],
+            1_000 + gh_pr_watch.ci_wait.RERUN_REGISTRATION_TIMEOUT_SECONDS,
+        )
+        == "timed_out"
+    )
+    assert (
+        gh_pr_watch.ci_wait.rerun_registration_status(timed_out, "g", [], [], 3_000)
+        == "timed_out"
+    )
 
 
 def test_partial_rerun_is_persisted(monkeypatch, tmp_path):
@@ -1282,7 +1478,9 @@ def test_partial_rerun_is_persisted(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(gh_pr_watch, "load_state", lambda path: (state, False))
     monkeypatch.setattr(gh_pr_watch, "resolve_pr", lambda *args, **kwargs: sample_pr())
-    monkeypatch.setattr(gh_pr_watch, "save_state", lambda path, value: saved.append(dict(value)))
+    monkeypatch.setattr(
+        gh_pr_watch, "save_state", lambda path, value: saved.append(dict(value))
+    )
     monkeypatch.setattr(
         gh_pr_watch,
         "get_pr_checks",
@@ -1305,7 +1503,9 @@ def test_partial_rerun_is_persisted(monkeypatch, tmp_path):
     monkeypatch.setattr(gh_pr_watch, "gh_text", rerun)
     with pytest.raises(gh_pr_watch.GhCommandError):
         gh_pr_watch.retry_failed_now(
-            argparse.Namespace(pr="123", repo=None, state_file=str(tmp_path / "pr-123.json"))
+            argparse.Namespace(
+                pr="123", repo=None, state_file=str(tmp_path / "pr-123.json")
+            )
         )
     assert saved[-1]["pending_rerun"]["attempts"] == {"1": 1}
     assert saved[-1]["pending_rerun"]["check_observations"] == {
@@ -1345,10 +1545,14 @@ def test_retry_revalidates_run_attempt_before_mutation(monkeypatch, tmp_path):
         ],
     )
     mutations = []
-    monkeypatch.setattr(gh_pr_watch, "gh_text", lambda *args, **kwargs: mutations.append(args))
+    monkeypatch.setattr(
+        gh_pr_watch, "gh_text", lambda *args, **kwargs: mutations.append(args)
+    )
 
     result = gh_pr_watch.retry_failed_now(
-        argparse.Namespace(pr="123", repo=None, state_file=str(tmp_path / "pr-123.json"))
+        argparse.Namespace(
+            pr="123", repo=None, state_file=str(tmp_path / "pr-123.json")
+        )
     )
 
     assert result["reason"] == "failed_runs_changed"
