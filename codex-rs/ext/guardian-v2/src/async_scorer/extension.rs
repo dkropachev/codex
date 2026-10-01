@@ -687,11 +687,12 @@ impl GuardianV2Extension {
                     return;
                 }
             };
-            let mut classification_input = if transcript.authorization.is_empty() {
-                Vec::new()
-            } else {
-                vec![GuardianAuthorizationContext::from_sections(transcript.authorization).render()]
-            };
+            let mut classification_input = transcript
+                .authorization
+                .into_iter()
+                .map(GuardianAuthorizationContext::from_section)
+                .map(|fragment| fragment.render())
+                .collect::<Vec<_>>();
             classification_input.push(">>> TRANSCRIPT START\n".to_owned());
             classification_input.extend(transcript.entries);
             classification_input.push(">>> TRANSCRIPT END\n\n".to_owned());
@@ -715,6 +716,7 @@ impl GuardianV2Extension {
                 format!("{planned_action}\n"),
                 ">>> APPROVAL REQUEST END\n".to_owned(),
             ]);
+            let approval_request = classification_input.split_off(approval_request_start);
             let mut model_input = classification_input
                 .into_iter()
                 .map(|text| UserInput::Text {
@@ -727,6 +729,11 @@ impl GuardianV2Extension {
                     Some(UserInput::Image { image_url, detail })
                 }
                 _ => None,
+            }));
+            let approval_request_start = model_input.len();
+            model_input.extend(approval_request.into_iter().map(|text| UserInput::Text {
+                text,
+                text_elements: Vec::new(),
             }));
             if let Err(error) = bound_guardian_model_input(&mut model_input, approval_request_start)
             {

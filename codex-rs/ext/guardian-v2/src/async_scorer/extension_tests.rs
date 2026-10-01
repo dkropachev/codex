@@ -71,6 +71,7 @@ use super::ParentCompactionError;
 use super::StrictReviewReason;
 use super::encrypted_parent_compaction;
 use super::should_classify_tool;
+use crate::async_scorer::MAX_MODEL_VISIBLE_ACTION_TOKENS;
 use crate::async_scorer::config::CLASSIFICATION_OUTPUT_INSTRUCTIONS;
 use crate::async_scorer::config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS;
 use crate::async_scorer::config::DEFAULT_PARENT_COMPACTION_TOKENS;
@@ -1724,8 +1725,12 @@ enabled = true
         .expect("Luna user content should be an array");
 
     assert_eq!(
-        content[content.len() - 2..],
-        [
+        content
+            .iter()
+            .filter(|item| item["type"] == "input_image")
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![
             json!({
                 "type": "input_image",
                 "image_url": "data:image/png;base64,user-screenshot",
@@ -3133,16 +3138,16 @@ async fn contributor_bounds_oversized_actions_and_fairly_truncates_nested_fields
         .as_str()
         .expect("the current action should be an input text item");
     let action = serde_json::from_str::<serde_json::Value>(action_text)?;
-    let max_action_bytes =
-        TruncationPolicy::Tokens(DEFAULT_MODEL_CONTEXT_ITEM_TOKENS).byte_budget();
+    let serialized_action_text = serde_json::to_string(action_text)?;
+    let max_action_bytes = TruncationPolicy::Tokens(MAX_MODEL_VISIBLE_ACTION_TOKENS).byte_budget();
     assert!(action_text.ends_with('\n'));
     assert!(
-        action_text.len() <= max_action_bytes,
-        "the complete model-visible action must remain bounded"
+        serialized_action_text.len() <= max_action_bytes,
+        "the serialized model-visible action must leave room for its message envelope"
     );
     assert!(
-        action_text.len() >= max_action_bytes * 9 / 10,
-        "water-filling should use the available action budget"
+        serialized_action_text.len() >= max_action_bytes * 9 / 10,
+        "water-filling should use the available serialized action budget"
     );
     assert_eq!(action["tool"], "read_file");
     assert_eq!(action["call_id"], "untrusted-call");

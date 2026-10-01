@@ -210,8 +210,8 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
     };
 
     push_text(headings.intro.to_string());
-    if !authorization.is_empty() {
-        push_text(GuardianAuthorizationContext::from_sections(authorization).render());
+    for section in authorization {
+        push_text(GuardianAuthorizationContext::from_section(section).render());
     }
     push_text(headings.transcript_start.to_string());
     for (index, entry) in transcript_entries.into_iter().enumerate() {

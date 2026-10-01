@@ -474,7 +474,13 @@ fn guardian_prompt_item_bounds_oversized_context_and_action() {
     crate::context::bound_guardian_model_input(&mut items, /*approval_request_start*/ 1)
         .expect("Guardian prompt should fit the model-context item limit");
 
-    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items.last(),
+        Some(&UserInput::Text {
+            text: approval_request.clone(),
+            text_elements: Vec::new(),
+        })
+    );
     assert!(
         crate::context::guardian_model_input_tokens(&items)
             <= crate::context_manager::MAX_MODEL_CONTEXT_ITEM_TOKENS.saturating_sub(64)
@@ -520,17 +526,92 @@ fn guardian_prompt_item_accounts_for_content_kind_metadata() {
     crate::context::bound_guardian_model_input(&mut items, /*approval_request_start*/ 1_200)
         .expect("Guardian prompt should fit the model-context item limit");
 
-    assert_eq!(
-        items,
-        vec![UserInput::Text {
-            text: String::new(),
-            text_elements: Vec::new(),
-        }]
-    );
+    assert!(items.is_empty());
     assert!(
         crate::context::guardian_model_input_tokens(&items)
             <= crate::context_manager::MAX_MODEL_CONTEXT_ITEM_TOKENS.saturating_sub(64)
     );
+}
+
+#[test]
+fn guardian_prompt_item_preserves_prefix_middle_and_suffix_evidence() {
+    use codex_protocol::user_input::UserInput;
+
+    let large_evidence = |prefix: &str, middle: &str, suffix: &str| UserInput::Text {
+        text: format!(
+            "{prefix}{}{middle}{}{suffix}",
+            "a".repeat(20_000),
+            "b".repeat(20_000)
+        ),
+        text_elements: Vec::new(),
+    };
+    let approval_request = UserInput::Text {
+        text: ">>> APPROVAL REQUEST START\n{}\n>>> APPROVAL REQUEST END\n".to_string(),
+        text_elements: Vec::new(),
+    };
+    let mut items = vec![
+        large_evidence("first-prefix", "first-middle", "first-suffix"),
+        large_evidence("second-prefix", "second-middle", "second-suffix"),
+        approval_request.clone(),
+    ];
+
+    crate::context::bound_guardian_model_input(&mut items, /*approval_request_start*/ 2)
+        .expect("Guardian prompt should retain bounded evidence");
+
+    let text = guardian_prompt_text(&items);
+    for marker in [
+        "first-prefix",
+        "first-middle",
+        "first-suffix",
+        "second-prefix",
+        "second-middle",
+        "second-suffix",
+    ] {
+        assert!(text.contains(marker), "missing retained marker: {marker}");
+    }
+    assert_eq!(items.last(), Some(&approval_request));
+    assert!(
+        crate::context::guardian_model_input_tokens(&items)
+            <= crate::context_manager::MAX_MODEL_CONTEXT_ITEM_TOKENS.saturating_sub(64)
+    );
+}
+
+#[test]
+fn guardian_prompt_item_preserves_short_context_boundaries_under_pressure() {
+    use codex_protocol::user_input::UserInput;
+
+    let transcript_start = ">>> TRANSCRIPT START\n";
+    let transcript_end = ">>> TRANSCRIPT END\n";
+    let approval_request = UserInput::Text {
+        text: format!(
+            ">>> APPROVAL REQUEST START\n{}\n>>> APPROVAL REQUEST END\n",
+            "a".repeat(34_000)
+        ),
+        text_elements: Vec::new(),
+    };
+    let mut items = vec![
+        UserInput::Text {
+            text: transcript_start.to_string(),
+            text_elements: Vec::new(),
+        },
+        UserInput::Text {
+            text: "context".repeat(10_000),
+            text_elements: Vec::new(),
+        },
+        UserInput::Text {
+            text: transcript_end.to_string(),
+            text_elements: Vec::new(),
+        },
+        approval_request.clone(),
+    ];
+
+    crate::context::bound_guardian_model_input(&mut items, /*approval_request_start*/ 3)
+        .expect("Guardian prompt should retain structural context boundaries");
+
+    let text = guardian_prompt_text(&items);
+    assert!(text.contains(transcript_start));
+    assert!(text.contains(transcript_end));
+    assert_eq!(items.last(), Some(&approval_request));
 }
 
 fn last_user_message_text_from_body(body: &serde_json::Value) -> String {

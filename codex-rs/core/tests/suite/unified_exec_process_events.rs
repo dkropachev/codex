@@ -8,6 +8,8 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -603,6 +605,16 @@ async fn exec_command_consumes_pushed_remote_process_events(
     );
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let server = start_mock_server().await;
+    let foreign_windows_grant = AdditionalPermissionProfile {
+        file_system: Some(FileSystemPermissions::from_read_write_path_uris(
+            /*read*/ Some(Vec::new()),
+            /*write*/
+            Some(vec![
+                PathUri::parse("file:///C:/workspace/granted").expect("valid Windows grant"),
+            ]),
+        )),
+        ..Default::default()
+    };
     let tool_call = match scenario {
         PushedExecScenario::ForeignWindowsGrantedInterceptedPatch => ev_function_call(
             CALL_ID,
@@ -610,12 +622,7 @@ async fn exec_command_consumes_pushed_remote_process_events(
             &json!({
                 "cmd": "apply_patch <<'PATCH'\n*** Begin Patch\n*** Update File: secret.txt\n@@\n-old\n+new\n*** End Patch\nPATCH",
                 "sandbox_permissions": "with_additional_permissions",
-                "additional_permissions": {
-                    "file_system": {
-                        "read": [],
-                        "write": ["file:///C:/workspace/granted"],
-                    },
-                },
+                "additional_permissions": foreign_windows_grant,
             })
             .to_string(),
         ),
