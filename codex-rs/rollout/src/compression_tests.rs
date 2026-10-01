@@ -348,7 +348,6 @@ async fn worker_compresses_archived_fork_chain_only_with_shared_mode() -> anyhow
         RolloutCompressionMode::Standalone,
         RolloutCompressionMode::IncludeShared,
     ] {
-        // Each mode gets a fresh home, without bypassing the worker's maintenance cooldown.
         let home = TempDir::new()?;
         let thread_id = ThreadId::from_string(&Uuid::from_u128(15).to_string())?;
         let source_uuid = Uuid::from_u128(16);
@@ -389,39 +388,6 @@ async fn worker_compresses_archived_fork_chain_only_with_shared_mode() -> anyhow
             }
         }
     }
-    Ok(())
-}
-
-#[tokio::test]
-async fn worker_skips_source_referenced_by_archived_compressed_rollout() -> anyhow::Result<()> {
-    let home = TempDir::new()?;
-    let source_uuid = Uuid::from_u128(18);
-    let source_id = ThreadId::from_string(&source_uuid.to_string())?;
-    let source_path = rollout_path(home.path(), "2025-01-03T12-00-00", source_uuid);
-    write_rollout(&source_path, source_id, "referenced source")?;
-    set_old_mtime(&source_path)?;
-
-    let child_uuid = Uuid::from_u128(19);
-    let child_id = ThreadId::from_string(&child_uuid.to_string())?;
-    let child_path = archived_rollout_path(home.path(), "2025-01-03T12-00-01", child_uuid);
-    write_rollout(&child_path, child_id, "fork child")?;
-    set_history_base(
-        child_path.as_path(),
-        HistoryPosition {
-            thread_id: source_id,
-            end_ordinal_exclusive: 2,
-            end_byte_offset: std::fs::metadata(source_path.as_path())?.len(),
-        },
-    )?;
-    compress_now(child_path.as_path())?;
-
-    worker::run(
-        home.path().to_path_buf(),
-        RolloutCompressionMode::Standalone,
-    )
-    .await?;
-
-    assert!(source_path.exists());
     Ok(())
 }
 

@@ -10,13 +10,16 @@ mod truncation;
 mod trusted_skills;
 mod trusted_tools;
 
+#[cfg(test)]
+pub(crate) use action::MAX_MODEL_VISIBLE_ACTION_TOKENS;
+pub(crate) use action::render_action_value;
 pub(crate) use config::DEFAULT_MODEL_CONTEXT_ITEM_TOKENS;
 pub(crate) use config::GuardianV2Config;
 pub use extension::StrictReviewReason;
 pub(crate) use extension::install;
 pub(crate) use transcript::MAX_TOOL_ENTRY_TOKENS;
+pub(crate) use transcript::RenderedContext;
 pub(crate) use transcript::RenderedImages;
-pub(crate) use transcript::RenderedTranscript;
 pub(crate) use transcript::TranscriptConfig;
 pub(crate) use transcript::TranscriptSource;
 pub(crate) use transcript::truncate_entry;

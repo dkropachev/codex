@@ -48,6 +48,8 @@ MERGE_CONFLICT_OR_BLOCKING_STATES = {
     "DRAFT",
     "UNKNOWN",
 }
+
+
 class GhCommandError(RuntimeError):
     pass
 
@@ -61,7 +63,9 @@ def parse_args():
     )
     parser.add_argument("--pr", default="auto", help="auto, PR number, or PR URL")
     parser.add_argument("--repo", help="Optional OWNER/REPO override")
-    parser.add_argument("--poll-seconds", type=int, default=30, help="Watch poll interval")
+    parser.add_argument(
+        "--poll-seconds", type=int, default=30, help="Watch poll interval"
+    )
     parser.add_argument(
         "--max-flaky-retries",
         type=int,
@@ -69,7 +73,9 @@ def parse_args():
         help="Max rerun cycles per head/base generation before stop recommendation",
     )
     parser.add_argument("--state-file", help="Path to durable state JSON file")
-    parser.add_argument("--once", action="store_true", help="Emit one snapshot and exit")
+    parser.add_argument(
+        "--once", action="store_true", help="Emit one snapshot and exit"
+    )
     parser.add_argument(
         "--watch",
         action="store_true",
@@ -100,7 +106,12 @@ def parse_args():
         parser.error("--watch cannot be combined with --retry-failed-now")
     if args.wait_for and (args.watch or args.retry_failed_now):
         parser.error("--wait-for cannot be combined with --watch or --retry-failed-now")
-    if not args.once and not args.watch and not args.wait_for and not args.retry_failed_now:
+    if (
+        not args.once
+        and not args.watch
+        and not args.wait_for
+        and not args.retry_failed_now
+    ):
         args.once = True
     return args
 
@@ -145,7 +156,9 @@ def gh_json(args, repo=None):
     try:
         return json.loads(raw)
     except json.JSONDecodeError as err:
-        raise GhCommandError(f"Failed to parse JSON from gh output for {' '.join(args)}") from err
+        raise GhCommandError(
+            f"Failed to parse JSON from gh output for {' '.join(args)}"
+        ) from err
 
 
 def parse_pr_spec(pr_spec):
@@ -265,7 +278,9 @@ def load_state(path):
 def save_state(path, state):
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(state, indent=2, sort_keys=True) + "\n"
-    fd, tmp_name = tempfile.mkstemp(prefix=f"{path.name}.", suffix=".tmp", dir=path.parent)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f"{path.name}.", suffix=".tmp", dir=path.parent
+    )
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
@@ -280,7 +295,9 @@ def save_state(path, state):
 
 
 def default_state_file_for(pr):
-    state_root = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
+    state_root = Path(
+        os.environ.get("CODEX_HOME") or Path.home() / ".codex"
+    ).expanduser()
     repo_slug = re.sub(r"[^A-Za-z0-9_.-]", "-", pr["repo"])
     return state_root / "state" / "babysit-pr" / repo_slug / f"pr-{pr['number']}.json"
 
@@ -356,7 +373,9 @@ def get_workflow_runs_for_sha(repo, head_sha):
     return runs
 
 
-def failed_runs_from_workflow_runs(runs, head_sha, current_run_ids=None, pr_number=None):
+def failed_runs_from_workflow_runs(
+    runs, head_sha, current_run_ids=None, pr_number=None
+):
     current_ids = (
         {str(run_id) for run_id in current_run_ids}
         if current_run_ids is not None
@@ -367,12 +386,11 @@ def failed_runs_from_workflow_runs(runs, head_sha, current_run_ids=None, pr_numb
         for run in runs
         if isinstance(run, dict) and str(run.get("head_sha") or "") == head_sha
     ]
+
     def associated_with_pr(run):
         pull_requests = run.get("pull_requests")
         return not (
-            isinstance(pull_requests, list)
-            and pull_requests
-            and pr_number is not None
+            isinstance(pull_requests, list) and pull_requests and pr_number is not None
         ) or any(
             isinstance(item, dict) and item.get("number") == pr_number
             for item in pull_requests
@@ -428,7 +446,12 @@ def failed_runs_from_workflow_runs(runs, head_sha, current_run_ids=None, pr_numb
                 "html_url": str(run.get("html_url") or ""),
             }
         )
-    failed_runs.sort(key=lambda item: (str(item.get("workflow_name") or ""), str(item.get("run_id") or "")))
+    failed_runs.sort(
+        key=lambda item: (
+            str(item.get("workflow_name") or ""),
+            str(item.get("run_id") or ""),
+        )
+    )
     return failed_runs
 
 
@@ -457,7 +480,10 @@ def failed_jobs_from_workflow_runs(repo, runs, head_sha, current_run_ids=None):
             continue
         run_status = str(run.get("status") or "")
         run_conclusion = str(run.get("conclusion") or "")
-        if run_status.lower() == "completed" and run_conclusion not in FAILED_RUN_CONCLUSIONS:
+        if (
+            run_status.lower() == "completed"
+            and run_conclusion not in FAILED_RUN_CONCLUSIONS
+        ):
             continue
         jobs = get_jobs_for_run(repo, run_id)
         for job in jobs:
@@ -497,7 +523,9 @@ def failed_jobs_from_workflow_runs(repo, runs, head_sha, current_run_ids=None):
 def get_authenticated_login():
     data = gh_json(["api", "user"])
     if not isinstance(data, dict) or not data.get("login"):
-        raise GhCommandError("Unable to determine authenticated GitHub login from `gh api user`")
+        raise GhCommandError(
+            "Unable to determine authenticated GitHub login from `gh api user`"
+        )
     return str(data["login"])
 
 
@@ -588,7 +616,9 @@ def normalize_reviews(items):
                 "id": str(item.get("id") or ""),
                 "author": extract_login(item.get("user")),
                 "author_association": str(item.get("author_association") or ""),
-                "created_at": str(item.get("submitted_at") or item.get("created_at") or ""),
+                "created_at": str(
+                    item.get("submitted_at") or item.get("created_at") or ""
+                ),
                 "body": str(item.get("body") or ""),
                 "path": None,
                 "line": None,
@@ -631,7 +661,9 @@ def fetch_new_review_items(pr, state, fresh_state, authenticated_login=None):
     endpoints = comment_endpoints(repo, pr_number)
 
     issue_payload = gh_api_list_paginated(endpoints["issue_comment"], repo=repo)
-    review_comment_payload = gh_api_list_paginated(endpoints["review_comment"], repo=repo)
+    review_comment_payload = gh_api_list_paginated(
+        endpoints["review_comment"], repo=repo
+    )
     review_payload = gh_api_list_paginated(endpoints["review"], repo=repo)
 
     issue_items = normalize_issue_comments(issue_payload)
@@ -641,7 +673,9 @@ def fetch_new_review_items(pr, state, fresh_state, authenticated_login=None):
         if isinstance(item, dict) and item.get("id") not in (None, "")
     }
     pending_review_ids = {
-        review_id for review_id, review_state in review_states.items() if review_state == "PENDING"
+        review_id
+        for review_id, review_state in review_states.items()
+        if review_state == "PENDING"
     }
     pending_review_comment_ids = {
         str(item.get("id"))
@@ -650,7 +684,9 @@ def fetch_new_review_items(pr, state, fresh_state, authenticated_login=None):
         and item.get("id") not in (None, "")
         and str(item.get("pull_request_review_id") or "") in pending_review_ids
     }
-    review_comment_items = normalize_review_comments(review_comment_payload, review_states)
+    review_comment_items = normalize_review_comments(
+        review_comment_payload, review_states
+    )
     review_items = normalize_reviews(review_payload)
     all_items = issue_items + review_comment_items + review_items
 
@@ -688,7 +724,13 @@ def fetch_new_review_items(pr, state, fresh_state, authenticated_login=None):
 
         new_items.append(item)
 
-    new_items.sort(key=lambda item: (item.get("created_at") or "", item.get("kind") or "", item.get("id") or ""))
+    new_items.sort(
+        key=lambda item: (
+            item.get("created_at") or "",
+            item.get("kind") or "",
+            item.get("id") or "",
+        )
+    )
     state["seen_issue_comment_ids"] = sorted(seen_issue)
     state["seen_review_comment_ids"] = sorted(seen_review_comment)
     state["seen_review_ids"] = sorted(seen_review)
@@ -701,7 +743,9 @@ def mark_review_items_seen(state, items):
         "review_comment": "seen_review_comment_ids",
         "review": "seen_review_ids",
     }
-    seen = {key: {str(value) for value in state.get(key) or []} for key in keys.values()}
+    seen = {
+        key: {str(value) for value in state.get(key) or []} for key in keys.values()
+    }
     for item in items:
         key = keys.get(item.get("kind"))
         item_id = str(item.get("id") or "")
@@ -733,6 +777,8 @@ def current_retry_count(state, key):
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
 def migrate_retry_count(state, head_sha, key):
     retries = state.get("retries_by_sha") or {}
     if key not in retries and head_sha in retries:
@@ -758,7 +804,9 @@ def unique_actions(actions):
     return out
 
 
-def is_pr_ready_to_merge(pr, checks_summary, new_review_items, registration_stable=True):
+def is_pr_ready_to_merge(
+    pr, checks_summary, new_review_items, registration_stable=True
+):
     if pr["closed"] or pr["merged"]:
         return False
     if not registration_stable or not checks_summary["all_terminal"]:
@@ -795,22 +843,35 @@ def recommend_actions(
         actions.append("stop_pr_closed")
         return unique_actions(actions)
 
-    if is_pr_ready_to_merge(
-        pr, checks_summary, new_review_items, registration_stable
-    ) and not failed_runs and not failed_jobs:
+    if (
+        is_pr_ready_to_merge(pr, checks_summary, new_review_items, registration_stable)
+        and not failed_runs
+        and not failed_jobs
+    ):
         actions.append("ready_to_merge")
         return unique_actions(actions)
 
     if new_review_items:
         actions.append("process_review_comment")
 
-    has_failed_pr_checks = checks_summary["failed_count"] > 0 or bool(failed_runs) or bool(failed_jobs)
+    has_failed_pr_checks = (
+        checks_summary["failed_count"] > 0 or bool(failed_runs) or bool(failed_jobs)
+    )
     if has_failed_pr_checks:
-        if registration_stable and checks_summary["all_terminal"] and retries_used >= max_retries:
+        if (
+            registration_stable
+            and checks_summary["all_terminal"]
+            and retries_used >= max_retries
+        ):
             actions.append("stop_exhausted_retries")
         else:
             actions.append("diagnose_ci_failure")
-            if registration_stable and checks_summary["all_terminal"] and failed_runs and retries_used < max_retries:
+            if (
+                registration_stable
+                and checks_summary["all_terminal"]
+                and failed_runs
+                and retries_used < max_retries
+            ):
                 actions.append("retry_failed_checks")
 
     if not actions:
@@ -831,7 +892,9 @@ def collect_snapshot(args):
 def _collect_snapshot(args, pr, state_path):
     load_path = state_path
     if not args.state_file and not state_path.exists():
-        legacy = Path(f"/tmp/codex-babysit-pr-{pr['repo'].replace('/', '-')}-pr{pr['number']}.json")
+        legacy = Path(
+            f"/tmp/codex-babysit-pr-{pr['repo'].replace('/', '-')}-pr{pr['number']}.json"
+        )
         load_path = legacy if legacy.exists() else state_path
     state, fresh_state = load_state(load_path)
 
@@ -853,8 +916,12 @@ def _collect_snapshot(args, pr, state_path):
     # `gh pr checks -R <repo>` requires an explicit PR/branch/url argument.
     # After resolving `--pr auto`, reuse the concrete PR number.
     try:
-        base_ci_revision = ci_wait.get_ci_config_revision(gh_json, state, pr["repo"], pr["base_sha"])
-        head_ci_revision = ci_wait.get_ci_config_revision(gh_json, state, pr["repo"], pr["head_sha"])
+        base_ci_revision = ci_wait.get_ci_config_revision(
+            gh_json, state, pr["repo"], pr["base_sha"]
+        )
+        head_ci_revision = ci_wait.get_ci_config_revision(
+            gh_json, state, pr["repo"], pr["head_sha"]
+        )
         ci_revision_fallback = False
     except (GhCommandError, RuntimeError):
         base_ci_revision = f"sha:{pr['base_sha']}"
@@ -865,7 +932,9 @@ def _collect_snapshot(args, pr, state_path):
     checks_summary = summarize_checks(checks)
     check_details = [ci_wait.normalize_check(check) for check in checks]
     workflow_runs = get_workflow_runs_for_sha(pr["repo"], pr["head_sha"])
-    current_run_ids = {check["run_id"] for check in check_details if check["run_id"] is not None}
+    current_run_ids = {
+        check["run_id"] for check in check_details if check["run_id"] is not None
+    }
     generation_key = retry_key(pr)
     migrate_retry_count(state, pr["head_sha"], generation_key)
     observed_at = time.time()
@@ -887,12 +956,14 @@ def _collect_snapshot(args, pr, state_path):
     previous_registered_base = (
         previous_generation_parts[1] if len(previous_generation_parts) == 2 else ""
     )
-    head_changed = bool(state.get("last_seen_head_sha")) and state.get(
-        "last_seen_head_sha"
-    ) != pr["head_sha"]
-    base_changed = bool(state.get("last_seen_base_sha")) and state.get(
-        "last_seen_base_sha"
-    ) != pr["base_sha"]
+    head_changed = (
+        bool(state.get("last_seen_head_sha"))
+        and state.get("last_seen_head_sha") != pr["head_sha"]
+    )
+    base_changed = (
+        bool(state.get("last_seen_base_sha"))
+        and state.get("last_seen_base_sha") != pr["base_sha"]
+    )
     registered_base_changed = (
         not state.get("last_seen_base_sha")
         and bool(previous_registered_base)
@@ -1008,14 +1079,18 @@ def _collect_snapshot(args, pr, state_path):
         getattr(args, "max_flaky_retries", 3),
         registration_stable,
     )
-    if (rerun_timed_out or check_refresh_timed_out) and not (pr["closed"] or pr["merged"]):
+    if (rerun_timed_out or check_refresh_timed_out) and not (
+        pr["closed"] or pr["merged"]
+    ):
         actions = ["process_review_comment"] if new_review_items else []
         actions.append(
             "stop_rerun_registration_timeout"
             if rerun_timed_out
             else "stop_check_registration_timeout"
         )
-    elif (rerun_pending or not check_set_current) and not (pr["closed"] or pr["merged"]):
+    elif (rerun_pending or not check_set_current) and not (
+        pr["closed"] or pr["merged"]
+    ):
         actions = ["process_review_comment"] if new_review_items else ["idle"]
 
     state["pr"] = {"repo": pr["repo"], "number": pr["number"]}
@@ -1092,7 +1167,9 @@ def retry_failed_now(args):
         max_retries = snapshot["retry_state"]["max_flaky_retries"]
         result = {
             "snapshot": snapshot_for_output(snapshot),
-            "state_file": str(state_path)[: ci_wait.MAX_OUTPUT_CHECK_DETAIL_VALUE_CHARS],
+            "state_file": str(state_path)[
+                : ci_wait.MAX_OUTPUT_CHECK_DETAIL_VALUE_CHARS
+            ],
             "rerun_attempted": False,
             "rerun_count": 0,
             "rerun_run_ids": [],
@@ -1139,7 +1216,10 @@ def retry_failed_now(args):
         key = retry_key(pr)
         mutation_state, _ = load_state(state_path)
         latest_pr = resolve_pr(pr_spec, repo_override=repo_override)
-        if (latest_pr["head_sha"], latest_pr["base_sha"]) != (pr["head_sha"], pr["base_sha"]):
+        if (latest_pr["head_sha"], latest_pr["base_sha"]) != (
+            pr["head_sha"],
+            pr["base_sha"],
+        ):
             result["reason"] = "generation_changed"
             return result
         pending_rerun = mutation_state.get("pending_rerun")
@@ -1150,7 +1230,9 @@ def retry_failed_now(args):
             result["reason"] = "retry_budget_exhausted"
             return result
         latest_checks = get_pr_checks(str(pr["number"]), repo=pr["repo"])
-        latest_check_details = [ci_wait.normalize_check(check) for check in latest_checks]
+        latest_check_details = [
+            ci_wait.normalize_check(check) for check in latest_checks
+        ]
         if ci_wait.check_observation_signature(
             latest_check_details
         ) != ci_wait.check_observation_signature(snapshot["check_details"]):
@@ -1167,7 +1249,8 @@ def retry_failed_now(args):
             if (
                 not run_id
                 or not isinstance(latest_run, dict)
-                or int(latest_run.get("run_attempt") or 1) != int(run.get("run_attempt") or 1)
+                or int(latest_run.get("run_attempt") or 1)
+                != int(run.get("run_attempt") or 1)
                 or str(latest_run.get("status") or "").lower() != "completed"
                 or str(latest_run.get("conclusion") or "") != run.get("conclusion")
             ):
@@ -1203,7 +1286,9 @@ def retry_failed_now(args):
                     ci_wait.check_observation_id(check) for check in run_checks
                 )
             if result["rerun_count"] == 1:
-                set_retry_count(mutation_state, key, current_retry_count(mutation_state, key) + 1)
+                set_retry_count(
+                    mutation_state, key, current_retry_count(mutation_state, key) + 1
+                )
             mutation_state["pending_rerun"] = {
                 "generation": key,
                 "attempts": pending_attempts,
@@ -1254,9 +1339,28 @@ def snapshot_change_key(snapshot):
         int(checks.get("passed_count") or 0),
         int(checks.get("failed_count") or 0),
         int(checks.get("pending_count") or 0),
-        tuple(sorted((ci_wait.check_observation_id(check), str(check.get("status") or "")) for check in snapshot.get("check_details") or [])),
-        tuple(sorted((str(run.get("run_id") or ""), str(run.get("run_attempt") or ""), str(run.get("conclusion") or "")) for run in snapshot.get("failed_runs") or [])),
-        tuple(sorted((str(job.get("run_id") or ""), str(job.get("job_id") or "")) for job in snapshot.get("failed_jobs") or [])),
+        tuple(
+            sorted(
+                (ci_wait.check_observation_id(check), str(check.get("status") or ""))
+                for check in snapshot.get("check_details") or []
+            )
+        ),
+        tuple(
+            sorted(
+                (
+                    str(run.get("run_id") or ""),
+                    str(run.get("run_attempt") or ""),
+                    str(run.get("conclusion") or ""),
+                )
+                for run in snapshot.get("failed_runs") or []
+            )
+        ),
+        tuple(
+            sorted(
+                (str(job.get("run_id") or ""), str(job.get("job_id") or ""))
+                for job in snapshot.get("failed_jobs") or []
+            )
+        ),
         tuple(snapshot.get("actions") or []),
     )
 
@@ -1269,7 +1373,16 @@ def run_watch(args):
         actions = set(snapshot.get("actions") or [])
         current_change_key = snapshot_change_key(snapshot)
         if current_change_key != last_change_key or snapshot.get("new_review_items"):
-            print_event("snapshot", {"snapshot": snapshot_for_output(snapshot), "state_file": str(state_path)[: ci_wait.MAX_OUTPUT_CHECK_DETAIL_VALUE_CHARS], "next_poll_seconds": poll_seconds})
+            print_event(
+                "snapshot",
+                {
+                    "snapshot": snapshot_for_output(snapshot),
+                    "state_file": str(state_path)[
+                        : ci_wait.MAX_OUTPUT_CHECK_DETAIL_VALUE_CHARS
+                    ],
+                    "next_poll_seconds": poll_seconds,
+                },
+            )
             acknowledge_review_items(snapshot, state_path)
         if actions & {
             "stop_pr_closed",
@@ -1277,7 +1390,9 @@ def run_watch(args):
             "stop_rerun_registration_timeout",
             "stop_check_registration_timeout",
         }:
-            print_event("stop", {"actions": snapshot.get("actions"), "pr": snapshot.get("pr")})
+            print_event(
+                "stop", {"actions": snapshot.get("actions"), "pr": snapshot.get("pr")}
+            )
             return 0
 
         changed = current_change_key != last_change_key
@@ -1316,9 +1431,7 @@ def main():
                 if retry_state_file
                 else default_state_file_for(retry_pr)
             )
-            acknowledge_review_items(
-                raw_result.get("snapshot") or {}, retry_state_path
-            )
+            acknowledge_review_items(raw_result.get("snapshot") or {}, retry_state_path)
             return 0
         if args.watch:
             return run_watch(args)
@@ -1333,7 +1446,9 @@ def main():
             )
         snapshot, state_path = collect_snapshot(args)
         output = snapshot_for_output(snapshot)
-        output["state_file"] = str(state_path)[: ci_wait.MAX_OUTPUT_CHECK_DETAIL_VALUE_CHARS]
+        output["state_file"] = str(state_path)[
+            : ci_wait.MAX_OUTPUT_CHECK_DETAIL_VALUE_CHARS
+        ]
         print_json(output)
         acknowledge_review_items(snapshot, state_path)
         return 0

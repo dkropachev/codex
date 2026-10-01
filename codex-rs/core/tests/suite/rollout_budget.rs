@@ -1,6 +1,11 @@
 use anyhow::Result;
 use codex_core::TurnInputRequest;
+use codex_core::config::Config;
 use codex_core::config::RolloutBudgetConfig;
+use codex_extension_api::ExtensionFuture;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::ThreadIdleInput;
+use codex_extension_api::ThreadLifecycleContributor;
 use codex_features::Feature;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -22,11 +27,34 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::sync::Arc;
 use std::time::Duration;
 use test_case::test_case;
+use tokio::sync::Notify;
 use tokio::time::timeout;
 
 const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
+
+#[derive(Default)]
+struct RollbackReady {
+    idle: Notify,
+}
+
+impl ThreadLifecycleContributor<Config> for RollbackReady {
+    fn on_thread_idle<'a>(&'a self, _input: ThreadIdleInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            self.idle.notify_one();
+        })
+    }
+}
+
+impl RollbackReady {
+    async fn wait(&self) {
+        tokio::time::timeout(Duration::from_secs(10), self.idle.notified())
+            .await
+            .expect("thread should become idle before rollback");
+    }
+}
 
 fn rollout_budget() -> RolloutBudgetConfig {
     RolloutBudgetConfig {
@@ -487,7 +515,11 @@ async fn restates_the_current_remainder_after_rollback() -> Result<()> {
         ],
     )
     .await;
+    let rollback_ready = Arc::new(RollbackReady::default());
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(rollback_ready.clone());
     let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {
             config.rollout_budget = Some(RolloutBudgetConfig {
                 reminder_at_remaining_tokens: vec![50],
@@ -498,10 +530,14 @@ async fn restates_the_current_remainder_after_rollback() -> Result<()> {
         .await?;
 
     test.submit_turn("rolled-back turn").await?;
+    rollback_ready.wait().await;
     test.codex
         .submit(Op::ThreadRollback { num_turns: 1 })
         .await?;
     wait_for_event(&test.codex, |event| {
+        if let EventMsg::Error(error) = event {
+            panic!("rollback failed: {error:?}");
+        }
         matches!(event, EventMsg::ThreadRolledBack(_))
     })
     .await;

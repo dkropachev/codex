@@ -111,6 +111,7 @@ mod tests {
         for method in [
             InstallMethod::Npm,
             InstallMethod::Bun,
+            InstallMethod::VitePlus,
             InstallMethod::Pnpm,
             InstallMethod::Brew,
             InstallMethod::Other,

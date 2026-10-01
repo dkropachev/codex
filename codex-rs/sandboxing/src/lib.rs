@@ -15,6 +15,8 @@ mod terminal_queries;
 mod unrestricted_command;
 mod violation;
 mod windows;
+#[cfg(windows)]
+mod windows_mxc;
 
 #[cfg(target_os = "linux")]
 pub use bwrap::find_system_bwrap_in_path;

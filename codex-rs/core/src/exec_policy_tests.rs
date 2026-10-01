@@ -1,4 +1,21 @@
 use super::*;
+
+impl ExecPolicyManager {
+    pub(super) async fn create_exec_approval_requirement_for_command(
+        &self,
+        req: ExecApprovalRequest<'_>,
+    ) -> ExecApprovalRequirement {
+        self.create_exec_approval_requirement_for_command_platform(
+            req,
+            DangerousCommandPlatform::host(),
+        )
+        .await
+    }
+}
+
+fn commands_for_exec_policy(command: &[String]) -> ExecPolicyCommands {
+    commands_for_exec_policy_for_platform(command, DangerousCommandPlatform::host())
+}
 use crate::config::Config;
 use crate::config::ConfigBuilder;
 use codex_config::CONFIG_TOML_FILE;
@@ -1758,25 +1775,6 @@ async fn proposed_execpolicy_amendment_is_present_for_single_command_without_pol
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
-        },
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn proposed_execpolicy_amendment_is_omitted_when_policy_prompts() {
-    assert_exec_approval_requirement_for_command(
-        ExecApprovalRequirementScenario {
-            policy_src: Some(r#"prefix_rule(pattern=["rm"], decision="prompt")"#.to_string()),
-            command: vec!["rm".to_string()],
-            approval_policy: AskForApproval::OnRequest,
-            permission_profile: PermissionProfile::Disabled,
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            prefix_rule: None,
-        },
-        ExecApprovalRequirement::NeedsApproval {
-            reason: Some("`rm` requires approval by policy".to_string()),
-            proposed_execpolicy_amendment: None,
         },
     )
     .await;

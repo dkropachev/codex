@@ -129,6 +129,14 @@ pub enum AgentMessageDelivery {
     Async,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct AsyncUserInputQuestion {
+    pub title: String,
+    pub options: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 /// Assistant-authored message payload used in turn-item streams.
 ///
@@ -151,6 +159,9 @@ pub struct AgentMessageItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub delivery: Option<AgentMessageDelivery>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub questions: Option<Vec<AsyncUserInputQuestion>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]

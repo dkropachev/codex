@@ -86,6 +86,7 @@ use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
 use codex_thread_store::UpdateThreadMetadataParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_git_discovery::GitRootDiscovery;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
@@ -347,6 +348,7 @@ pub(crate) struct ThreadManagerState {
     thread_id_generator: ThreadIdGenerator,
     auth_manager: Arc<AuthManager>,
     models_manager: SharedModelsManager,
+    git_root_discovery: Arc<GitRootDiscovery>,
     environment_manager: Arc<EnvironmentManager>,
     starting_mcp_runtimes: std::sync::Mutex<Vec<std::sync::Weak<AtomicBool>>>,
     skills_service: Arc<HostSkillsService>,
@@ -498,6 +500,7 @@ impl ThreadManager {
                 thread_created_tx,
                 thread_id_generator: default_thread_id_generator(),
                 models_manager,
+                git_root_discovery: Arc::default(),
                 environment_manager,
                 starting_mcp_runtimes: std::sync::Mutex::new(Vec::new()),
                 skills_service,
@@ -649,6 +652,7 @@ impl ThreadManager {
                         /*config_model_catalog*/ None,
                         CollaborationModesConfig::default(),
                     ),
+                git_root_discovery: Arc::default(),
                 environment_manager,
                 starting_mcp_runtimes: std::sync::Mutex::new(Vec::new()),
                 skills_service,
@@ -807,6 +811,10 @@ impl ThreadManager {
                 })?;
         }
         Ok(())
+    }
+
+    pub(crate) fn git_root_discovery(&self) -> Arc<GitRootDiscovery> {
+        Arc::clone(&self.state.git_root_discovery)
     }
 
     pub fn get_models_manager(&self) -> SharedModelsManager {
@@ -2009,6 +2017,7 @@ impl ThreadManagerState {
             installation_id: self.installation_id.clone(),
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
+            git_root_discovery: Arc::clone(&self.git_root_discovery),
             environment_manager: Arc::clone(&self.environment_manager),
             skills_service: Arc::clone(&self.skills_service),
             plugins_manager: Arc::clone(&self.plugins_manager),
