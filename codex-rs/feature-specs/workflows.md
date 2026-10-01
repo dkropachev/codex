@@ -47,8 +47,10 @@ is non-interactive and does not provide `ctx.requestUserInput`.
 
 Workflow mode is visible in the TUI so users can tell when a workflow-oriented interaction is
 active. Command autocomplete should surface workflow commands consistently with other slash
-commands. Workflow command compatibility handling should preserve older command spellings where the
-CLI intentionally supports them.
+commands. A mode selected before the initial thread session finishes attaching remains selected for
+queued input and is synchronized to that thread before the input is submitted. Workflow command
+compatibility handling should preserve older command spellings where the CLI intentionally supports
+them.
 
 Workflow agent roles are built-in role definitions used by the workflow orchestration path. They
 must remain discoverable, renderable in prompts, and compatible with the generic agent-role
@@ -175,6 +177,8 @@ application path.
 - Workflow behavior remains opt-in through explicit workflow commands or mode selection.
 - Workflow commands do not bypass normal approval, sandbox, or permission behavior.
 - Workflow UI state reflects the current workflow mode without changing the underlying turn model.
+- Pre-session workflow-mode selections bind to the initial thread and precede queued turn
+  submission; delayed settings state cannot silently replace a newer local selection.
 - Accepted workflow commands emit one start lifecycle event and one terminal lifecycle event;
   workflow execution must not appear idle while its task is active.
 - Workflow input requests and answers are correlated and delivered directly to workflow code
@@ -257,6 +261,7 @@ switches and disappear after they are answered or resolved.
 #### Test cases
 
 - Workflow mode indicators, running status, and slash-command dispatch are covered: codex-rs/tui/src/chatwidget/tests/workflows__slash_commands.rs:bare_workflow_command_dispatches_structured_workflow_op,bare_workflow_slash_enters_workflow_mode,bare_workflow_slash_reports_disabled_when_feature_off,queued_malformed_workflow_command_reports_error_and_drains_next_input,queued_workflow_command_dispatches_after_active_turn,running_workflow_command_uses_standard_task_status_snapshot,workflow_command_appears_in_slash_popup_when_enabled,workflow_command_is_hidden_and_rejected_when_feature_disabled,workflow_command_preserves_explicit_executor_working_directory,workflow_command_rejects_malformed_args_without_clearing_draft,workflow_command_with_args_dispatches_structured_input_json,workflow_done_slash_exits_to_default_mode,workflow_slash_with_args_dispatches_workflow_cli_command
+- Workflow mode survives initial session attachment and stale settings notifications: codex-rs/tui/src/chatwidget/tests/app_server.rs:pre_session_collaboration_mode_selection_binds_to_configured_thread,stale_thread_settings_do_not_clobber_a_user_selected_workflow_mode
 - TUI schema/hook request shaping is covered: codex-rs/tui/src/bottom_pane/chat_composer/workflow_completion_tests.rs:completion_request_tracks_partial_input_and_active_value,field_and_value_results_become_popup_hints
 - Workflow completion popup rendering is covered: codex-rs/tui/src/bottom_pane/command_popup.rs:workflow_exact_command_shows_schema_field_hints,workflow_option_value_completion_uses_value_hint_enums
 - Pending user-input prompts replay while unresolved and are removed after an answer: codex-rs/tui/src/app/pending_interactive_replay.rs:thread_event_snapshot_keeps_pending_request_user_input,thread_event_snapshot_drops_resolved_request_user_input_after_user_answer,thread_event_snapshot_keeps_newer_request_user_input_pending_when_same_turn_has_queue
