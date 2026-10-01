@@ -510,6 +510,48 @@ async fn stale_thread_settings_do_not_clobber_a_user_selected_workflow_mode() {
 }
 
 #[tokio::test]
+async fn pre_session_collaboration_mode_selection_binds_to_configured_thread() {
+    let (mut chat, mut app_events, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    let workflow_mask = collaboration_modes::mask_for_kind_with_config(
+        chat.model_catalog.as_ref(),
+        ModeKind::Workflow,
+        chat.collaboration_modes_config(),
+    )
+    .expect("workflow mode");
+    chat.set_collaboration_mask_from_user_action(workflow_mask);
+
+    while app_events.try_recv().is_ok() {}
+    chat.submit_user_message(UserMessage::from("queued before session"));
+
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Workflow);
+    let selected = chat.effective_collaboration_mode();
+    assert_matches!(
+        app_events.try_recv(),
+        Ok(AppEvent::SubmitThreadOp {
+            thread_id: event_thread_id,
+            op: Op::OverrideTurnContext {
+                collaboration_mode: Some(requested),
+                ..
+            },
+        }) if event_thread_id == thread_id && requested == selected
+    );
+    assert_matches!(
+        next_submit_op(&mut op_rx),
+        Op::UserTurn {
+            collaboration_mode: Some(requested),
+            ..
+        } if requested == selected
+    );
+
+    chat.on_collaboration_mode_settings_update_failed(thread_id, &selected);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+}
+
+#[tokio::test]
 async fn pending_collaboration_mode_is_scoped_to_one_notification_and_thread() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);

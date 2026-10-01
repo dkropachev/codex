@@ -19,13 +19,28 @@ impl ChatWidget {
         self.set_skills(/*skills*/ None);
         self.session_network_proxy = session.network_proxy.clone();
         let previous_thread_id = self.thread_id;
+        let pending_mode_to_preserve = self
+            .pending_user_collaboration_mode
+            .as_ref()
+            .filter(|pending| {
+                pending
+                    .expires_at
+                    .is_none_or(|expires_at| Instant::now() < expires_at)
+                    && pending.thread_id.map_or_else(
+                        || previous_thread_id.is_none(),
+                        |thread_id| thread_id == session.thread_id,
+                    )
+            })
+            .map(|pending| (pending.mode.clone(), pending.thread_id.is_none()));
         let connector_scope_changed = previous_thread_id != Some(session.thread_id)
             || self.config.cwd.as_path() != session.cwd.as_path();
         self.thread_id = Some(session.thread_id);
         self.bottom_pane
             .set_queue_submissions(/*queue_submissions*/ false);
-        if previous_thread_id != self.thread_id {
+        if self.pending_user_collaboration_mode.is_some() && pending_mode_to_preserve.is_none() {
             self.pending_user_collaboration_mode = None;
+        }
+        if previous_thread_id != self.thread_id {
             self.backend_banner_notice_model = None;
             self.pending_automatic_thread_names.clear();
             self.recent_auto_review_denials = Default::default();
@@ -108,6 +123,19 @@ impl ChatWidget {
                     mask.reasoning_effort = Some(session.reasoning_effort.clone());
                 }
                 self.update_collaboration_mode_indicator();
+            }
+        }
+        if let Some((pending_mode, needs_sync)) = pending_mode_to_preserve {
+            let authoritative_mode = self.effective_collaboration_mode();
+            if let Some(pending) = self.pending_user_collaboration_mode.as_mut() {
+                pending.thread_id = Some(session.thread_id);
+                if needs_sync || authoritative_mode == pending.mode {
+                    pending.previous_mode = authoritative_mode;
+                }
+            }
+            self.set_effective_collaboration_mode(pending_mode);
+            if needs_sync {
+                self.submit_collaboration_mode_settings_update();
             }
         }
         let effort = self.effective_reasoning_effort();

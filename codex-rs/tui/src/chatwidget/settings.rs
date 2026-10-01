@@ -380,7 +380,7 @@ impl ChatWidget {
         let pending = self
             .pending_user_collaboration_mode
             .as_ref()
-            .filter(|pending| pending.thread_id == thread_id);
+            .filter(|pending| pending.thread_id == Some(thread_id));
         let active_pending = pending.filter(|pending| {
             pending
                 .expires_at
@@ -702,7 +702,7 @@ impl ChatWidget {
             .pending_user_collaboration_mode
             .as_ref()
             .filter(|pending| {
-                Some(pending.thread_id) == self.thread_id
+                pending.thread_id == self.thread_id
                     && pending
                         .expires_at
                         .is_none_or(|expires_at| Instant::now() < expires_at)
@@ -712,14 +712,12 @@ impl ChatWidget {
                 |pending| pending.previous_mode.clone(),
             );
         self.set_collaboration_mask(mask);
-        self.pending_user_collaboration_mode =
-            self.thread_id
-                .map(|thread_id| PendingCollaborationModeSelection {
-                    thread_id,
-                    mode: self.effective_collaboration_mode(),
-                    previous_mode,
-                    expires_at: None,
-                });
+        self.pending_user_collaboration_mode = Some(PendingCollaborationModeSelection {
+            thread_id: self.thread_id,
+            mode: self.effective_collaboration_mode(),
+            previous_mode,
+            expires_at: None,
+        });
         self.submit_collaboration_mode_settings_update();
     }
 
@@ -731,7 +729,7 @@ impl ChatWidget {
         let Some(pending) = self.pending_user_collaboration_mode.as_mut() else {
             return;
         };
-        if pending.thread_id != thread_id || &pending.mode != requested_mode {
+        if pending.thread_id != Some(thread_id) || &pending.mode != requested_mode {
             return;
         }
         pending.expires_at = Some(Instant::now() + COLLABORATION_MODE_ACK_TIMEOUT);
@@ -745,7 +743,7 @@ impl ChatWidget {
         let Some(pending) = self.pending_user_collaboration_mode.as_mut() else {
             return;
         };
-        if pending.thread_id == thread_id && &pending.mode == requested_mode {
+        if pending.thread_id == Some(thread_id) && &pending.mode == requested_mode {
             pending.expires_at = Some(Instant::now() + COLLABORATION_MODE_ACK_TIMEOUT);
         }
     }
@@ -758,7 +756,7 @@ impl ChatWidget {
         let Some(pending) = self.pending_user_collaboration_mode.as_ref() else {
             return;
         };
-        if pending.thread_id != thread_id || &pending.mode != requested_mode {
+        if pending.thread_id != Some(thread_id) || &pending.mode != requested_mode {
             return;
         }
         let previous_mode = pending.previous_mode.clone();
@@ -808,7 +806,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn submit_collaboration_mode_settings_update(&self) {
+    pub(super) fn submit_collaboration_mode_settings_update(&self) {
         let Some(thread_id) = self.thread_id else {
             return;
         };
