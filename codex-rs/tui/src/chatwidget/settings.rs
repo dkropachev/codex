@@ -4,6 +4,8 @@ use super::*;
 use crate::app_event::AppEvent;
 use crate::chatwidget::rate_limits::RATE_LIMIT_SWITCH_PROMPT_VIEW_ID;
 
+const COLLABORATION_MODE_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
 impl ChatWidget {
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
@@ -362,7 +364,7 @@ impl ChatWidget {
 
     pub(crate) fn on_thread_settings_updated(
         &mut self,
-        notification: ThreadSettingsUpdatedNotification,
+        mut notification: ThreadSettingsUpdatedNotification,
     ) {
         let Ok(thread_id) = ThreadId::from_string(&notification.thread_id) else {
             tracing::warn!(
@@ -373,6 +375,34 @@ impl ChatWidget {
         };
         if self.thread_id != Some(thread_id) {
             return;
+        }
+
+        let pending = self
+            .pending_user_collaboration_mode
+            .as_ref()
+            .filter(|pending| pending.thread_id == Some(thread_id));
+        let active_pending = pending.filter(|pending| {
+            pending
+                .expires_at
+                .is_none_or(|expires_at| Instant::now() < expires_at)
+        });
+        let preserve = active_pending
+            .filter(|pending| notification.thread_settings.collaboration_mode != pending.mode)
+            .map(|pending| pending.mode.clone());
+        let acknowledged = active_pending
+            .filter(|pending| notification.thread_settings.collaboration_mode == pending.mode)
+            .map(|pending| pending.mode.clone());
+        if pending.is_some() && active_pending.is_none() {
+            self.pending_user_collaboration_mode = None;
+        } else if let Some(acknowledged) = acknowledged
+            && let Some(pending) = self.pending_user_collaboration_mode.as_mut()
+        {
+            pending.previous_mode = acknowledged;
+        }
+        if let Some(mode) = preserve {
+            notification.thread_settings.model = mode.settings.model.clone();
+            notification.thread_settings.effort = mode.settings.reasoning_effort.clone();
+            notification.thread_settings.collaboration_mode = mode;
         }
 
         self.apply_thread_settings(notification.thread_settings);
@@ -668,8 +698,70 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_collaboration_mask_from_user_action(&mut self, mask: CollaborationModeMask) {
+        let previous_mode = self
+            .pending_user_collaboration_mode
+            .as_ref()
+            .filter(|pending| {
+                pending.thread_id == self.thread_id
+                    && pending
+                        .expires_at
+                        .is_none_or(|expires_at| Instant::now() < expires_at)
+            })
+            .map_or_else(
+                || self.effective_collaboration_mode(),
+                |pending| pending.previous_mode.clone(),
+            );
         self.set_collaboration_mask(mask);
+        self.pending_user_collaboration_mode = Some(PendingCollaborationModeSelection {
+            thread_id: self.thread_id,
+            mode: self.effective_collaboration_mode(),
+            previous_mode,
+            expires_at: None,
+        });
         self.submit_collaboration_mode_settings_update();
+    }
+
+    pub(crate) fn on_collaboration_mode_settings_update_succeeded(
+        &mut self,
+        thread_id: ThreadId,
+        requested_mode: &CollaborationMode,
+    ) {
+        let Some(pending) = self.pending_user_collaboration_mode.as_mut() else {
+            return;
+        };
+        if pending.thread_id != Some(thread_id) || &pending.mode != requested_mode {
+            return;
+        }
+        pending.expires_at = Some(Instant::now() + COLLABORATION_MODE_ACK_TIMEOUT);
+    }
+
+    pub(crate) fn on_collaboration_mode_settings_update_unsupported(
+        &mut self,
+        thread_id: ThreadId,
+        requested_mode: &CollaborationMode,
+    ) {
+        let Some(pending) = self.pending_user_collaboration_mode.as_mut() else {
+            return;
+        };
+        if pending.thread_id == Some(thread_id) && &pending.mode == requested_mode {
+            pending.expires_at = Some(Instant::now() + COLLABORATION_MODE_ACK_TIMEOUT);
+        }
+    }
+
+    pub(crate) fn on_collaboration_mode_settings_update_failed(
+        &mut self,
+        thread_id: ThreadId,
+        requested_mode: &CollaborationMode,
+    ) {
+        let Some(pending) = self.pending_user_collaboration_mode.as_ref() else {
+            return;
+        };
+        if pending.thread_id != Some(thread_id) || &pending.mode != requested_mode {
+            return;
+        }
+        let previous_mode = pending.previous_mode.clone();
+        self.pending_user_collaboration_mode = None;
+        self.set_effective_collaboration_mode(previous_mode);
     }
 
     /// Update the active collaboration mask.
@@ -714,7 +806,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn submit_collaboration_mode_settings_update(&self) {
+    pub(super) fn submit_collaboration_mode_settings_update(&self) {
         let Some(thread_id) = self.thread_id else {
             return;
         };

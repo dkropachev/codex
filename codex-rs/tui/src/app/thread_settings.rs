@@ -17,6 +17,14 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ThreadSettingsUpdateOutcome {
+    Updated,
+    Unsupported,
+    Failed,
+    Skipped,
+}
+
 impl App {
     pub(super) async fn sync_active_thread_model_setting(
         &mut self,
@@ -183,7 +191,27 @@ impl App {
             personality: *personality,
             ..ThreadSettingsUpdateParams::default()
         };
-        self.send_thread_settings_update(app_server, params).await;
+        let requested_mode = params.collaboration_mode.clone();
+        let outcome = self
+            .send_thread_settings_update_with_outcome(app_server, params)
+            .await;
+        if let Some(requested_mode) = requested_mode {
+            match outcome {
+                ThreadSettingsUpdateOutcome::Updated => self
+                    .chat_widget
+                    .on_collaboration_mode_settings_update_succeeded(thread_id, &requested_mode),
+                ThreadSettingsUpdateOutcome::Unsupported | ThreadSettingsUpdateOutcome::Skipped => {
+                    self.chat_widget
+                        .on_collaboration_mode_settings_update_unsupported(
+                            thread_id,
+                            &requested_mode,
+                        )
+                }
+                ThreadSettingsUpdateOutcome::Failed => self
+                    .chat_widget
+                    .on_collaboration_mode_settings_update_failed(thread_id, &requested_mode),
+            }
+        }
     }
 
     pub(super) async fn apply_thread_settings_to_cached_session(
@@ -210,16 +238,27 @@ impl App {
         app_server: &mut AppServerSession,
         params: ThreadSettingsUpdateParams,
     ) -> bool {
+        self.send_thread_settings_update_with_outcome(app_server, params)
+            .await
+            == ThreadSettingsUpdateOutcome::Updated
+    }
+
+    async fn send_thread_settings_update_with_outcome(
+        &mut self,
+        app_server: &mut AppServerSession,
+        params: ThreadSettingsUpdateParams,
+    ) -> ThreadSettingsUpdateOutcome {
         if !thread_settings_update_has_changes(&params) {
-            return false;
+            return ThreadSettingsUpdateOutcome::Skipped;
         }
         match app_server.thread_settings_update(params).await {
-            Ok(settings_updated) => settings_updated,
+            Ok(true) => ThreadSettingsUpdateOutcome::Updated,
+            Ok(false) => ThreadSettingsUpdateOutcome::Unsupported,
             Err(err) => {
                 tracing::warn!("failed to update app-server thread settings from TUI: {err}");
                 self.chat_widget
                     .add_error_message(format!("Failed to update thread settings: {err}"));
-                false
+                ThreadSettingsUpdateOutcome::Failed
             }
         }
     }

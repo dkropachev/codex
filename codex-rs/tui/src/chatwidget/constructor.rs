@@ -117,6 +117,7 @@ impl ChatWidget {
             workflow_commands: Vec::new(),
             current_collaboration_mode,
             active_collaboration_mask,
+            pending_user_collaboration_mode: None,
             has_chatgpt_account,
             has_codex_backend_auth,
             model_catalog,
