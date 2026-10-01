@@ -166,18 +166,10 @@ pub(in crate::managed) fn materialize_bun_environment(
     let bun_root = management_root.join("bun");
     let cache_dir = bun_root.join("cache");
     let operations_dir = bun_root.join("operations");
-    fs::create_dir_all(cache_dir.as_path()).with_context(|| {
-        format!(
-            "failed to create managed Bun cache {}",
-            cache_dir.as_path().display()
-        )
-    })?;
-    fs::create_dir_all(operations_dir.as_path()).with_context(|| {
-        format!(
-            "failed to create managed Bun operation root {}",
-            operations_dir.as_path().display()
-        )
-    })?;
+    super::install::ensure_regular_directory_tree(management_root, &cache_dir)
+        .context("failed to create managed Bun cache")?;
+    super::install::ensure_regular_directory_tree(management_root, &operations_dir)
+        .context("failed to create managed Bun operation root")?;
 
     let operation = tempfile::Builder::new()
         .prefix("operation-")
@@ -418,6 +410,10 @@ fn command_plan(
         "--cache-dir".into(),
         environment.cache_dir.as_path().as_os_str().to_os_string(),
     ]);
+    let writable_target = match operation {
+        ManagedBunOperation::Install => target.join("node_modules"),
+        ManagedBunOperation::InspectBinaryLockfile => target.clone(),
+    };
     let mut entries = vec![FileSystemSandboxEntry::new(
         FileSystemPath::Special {
             value: FileSystemSpecialPath::Root,
@@ -426,7 +422,7 @@ fn command_plan(
     )];
     entries.extend(
         [
-            target,
+            &writable_target,
             &environment.cache_dir,
             &environment.temp_dir,
             &environment.home_dir,
