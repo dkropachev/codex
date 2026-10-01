@@ -1,7 +1,7 @@
 use super::*;
 
 impl ExecPolicyManager {
-    async fn create_exec_approval_requirement_for_command(
+    pub(super) async fn create_exec_approval_requirement_for_command(
         &self,
         req: ExecApprovalRequest<'_>,
     ) -> ExecApprovalRequirement {
