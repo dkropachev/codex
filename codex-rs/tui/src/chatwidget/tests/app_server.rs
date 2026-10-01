@@ -486,11 +486,27 @@ async fn stale_thread_settings_do_not_clobber_a_user_selected_workflow_mode() {
     let selected = chat.effective_collaboration_mode();
     let mut acknowledged = thread_settings_for_test(selected.model(), thread_id);
     acknowledged.thread_settings.effort = selected.reasoning_effort();
-    acknowledged.thread_settings.collaboration_mode = selected;
+    acknowledged.thread_settings.collaboration_mode = selected.clone();
     chat.on_thread_settings_updated(acknowledged);
 
-    assert!(chat.pending_user_collaboration_mode.is_none());
+    let mut delayed_stale = thread_settings_for_test("gpt-delayed-stale", thread_id);
+    delayed_stale.thread_settings.collaboration_mode.mode = ModeKind::Default;
+    chat.on_thread_settings_updated(delayed_stale);
+
+    assert!(chat.pending_user_collaboration_mode.is_some());
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Workflow);
+
+    let plan_mask = collaboration_modes::mask_for_kind_with_config(
+        chat.model_catalog.as_ref(),
+        ModeKind::Plan,
+        chat.collaboration_modes_config(),
+    )
+    .expect("plan mode");
+    chat.set_collaboration_mask_from_user_action(plan_mask);
+    let rejected_plan = chat.effective_collaboration_mode();
+    chat.on_collaboration_mode_settings_update_failed(thread_id, &rejected_plan);
+
+    assert_eq!(chat.effective_collaboration_mode(), selected);
 }
 
 #[tokio::test]

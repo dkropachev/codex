@@ -381,16 +381,23 @@ impl ChatWidget {
             .pending_user_collaboration_mode
             .as_ref()
             .filter(|pending| pending.thread_id == thread_id);
-        let preserve = pending
-            .filter(|pending| {
-                pending
-                    .expires_at
-                    .is_none_or(|expires_at| Instant::now() < expires_at)
-                    && notification.thread_settings.collaboration_mode != pending.mode
-            })
+        let active_pending = pending.filter(|pending| {
+            pending
+                .expires_at
+                .is_none_or(|expires_at| Instant::now() < expires_at)
+        });
+        let preserve = active_pending
+            .filter(|pending| notification.thread_settings.collaboration_mode != pending.mode)
             .map(|pending| pending.mode.clone());
-        if pending.is_some() && preserve.is_none() {
+        let acknowledged = active_pending
+            .filter(|pending| notification.thread_settings.collaboration_mode == pending.mode)
+            .map(|pending| pending.mode.clone());
+        if pending.is_some() && active_pending.is_none() {
             self.pending_user_collaboration_mode = None;
+        } else if let Some(acknowledged) = acknowledged
+            && let Some(pending) = self.pending_user_collaboration_mode.as_mut()
+        {
+            pending.previous_mode = acknowledged;
         }
         if let Some(mode) = preserve {
             notification.thread_settings.model = mode.settings.model.clone();
@@ -694,7 +701,12 @@ impl ChatWidget {
         let previous_mode = self
             .pending_user_collaboration_mode
             .as_ref()
-            .filter(|pending| Some(pending.thread_id) == self.thread_id)
+            .filter(|pending| {
+                Some(pending.thread_id) == self.thread_id
+                    && pending
+                        .expires_at
+                        .is_none_or(|expires_at| Instant::now() < expires_at)
+            })
             .map_or_else(
                 || self.effective_collaboration_mode(),
                 |pending| pending.previous_mode.clone(),
