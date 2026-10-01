@@ -5,6 +5,8 @@ use std::collections::hash_map::Entry;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
+use std::time::Instant;
 
 use codex_protocol::RolloutId;
 use codex_protocol::ThreadId;
@@ -39,6 +41,22 @@ impl RolloutReferenceIndex {
             codex_home.join(SESSIONS_SUBDIR),
         ])
         .await
+    }
+
+    /// Scans active and archived metadata without returning an unsafe partial index.
+    pub(crate) async fn scan_until(
+        codex_home: &Path,
+        started_at: Instant,
+        max_runtime: Duration,
+    ) -> io::Result<Option<Self>> {
+        let remaining = max_runtime.saturating_sub(started_at.elapsed());
+        if remaining.is_zero() {
+            return Ok(None);
+        }
+        match tokio::time::timeout(remaining, Self::scan(codex_home)).await {
+            Ok(result) => result.map(Some),
+            Err(_) => Ok(None),
+        }
     }
 
     /// Scans only unarchived rollouts to locate files that still need to be archived.

@@ -19,9 +19,12 @@ use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::context::ContextualUserFragment;
+use crate::context::GuardianAuthorizationContext;
 use crate::context::GuardianReviewEvidence;
 use crate::context::NodeReplReviewEvidence;
 use crate::context::NodeReplReviewEvidenceMode;
+use crate::context::bound_guardian_model_input;
 use crate::context::node_repl_review_evidence_mode;
 use crate::event_mapping::is_contextual_user_message_content;
 use crate::session::session::Session;
@@ -207,8 +210,8 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
     };
 
     push_text(headings.intro.to_string());
-    for text in authorization {
-        push_text(text);
+    if !authorization.is_empty() {
+        push_text(GuardianAuthorizationContext::from_sections(authorization).render());
     }
     push_text(headings.transcript_start.to_string());
     for (index, entry) in transcript_entries.into_iter().enumerate() {
@@ -239,6 +242,7 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
         node_repl_evidence_sequence = fragment.sequence;
         items.extend(fragment.into_inputs(evidence_mode));
     }
+    let approval_request_start = items.len();
     let mut push_text = |text: String| {
         items.push(UserInput::Text {
             text,
@@ -288,6 +292,7 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
     }
     push_text(format!("{}\n", planned_action_json.text));
     push_text(">>> APPROVAL REQUEST END\n".to_string());
+    bound_guardian_model_input(&mut items, approval_request_start).map_err(anyhow::Error::msg)?;
     Ok(GuardianPromptItems {
         items,
         transcript_cursor,

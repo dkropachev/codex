@@ -452,6 +452,87 @@ fn guardian_prompt_text(items: &[codex_protocol::user_input::UserInput]) -> Stri
         .collect::<String>()
 }
 
+#[test]
+fn guardian_prompt_item_bounds_oversized_context_and_action() {
+    use codex_protocol::user_input::UserInput;
+
+    let approval_request = format!(
+        ">>> APPROVAL REQUEST START\naction-start {} action-end\n",
+        "a".repeat(12_000)
+    );
+    let mut items = vec![
+        UserInput::Text {
+            text: format!("context-start {} context-end\n", "c".repeat(80_000)),
+            text_elements: Vec::new(),
+        },
+        UserInput::Text {
+            text: approval_request.clone(),
+            text_elements: Vec::new(),
+        },
+    ];
+
+    crate::context::bound_guardian_model_input(&mut items, /*approval_request_start*/ 1)
+        .expect("Guardian prompt should fit the model-context item limit");
+
+    assert_eq!(items.len(), 1);
+    assert!(
+        crate::context::guardian_model_input_tokens(&items)
+            <= crate::context_manager::MAX_MODEL_CONTEXT_ITEM_TOKENS.saturating_sub(64)
+    );
+    let text = guardian_prompt_text(&items);
+    assert!(text.ends_with(&approval_request));
+    for marker in ["context-start", "context-end"] {
+        assert!(text.contains(marker), "missing retained marker: {marker}");
+    }
+}
+
+#[test]
+fn guardian_prompt_item_rejects_oversized_approval_request() {
+    use codex_protocol::user_input::UserInput;
+
+    let original = vec![UserInput::Text {
+        text: format!(
+            ">>> APPROVAL REQUEST START\n{}\n>>> APPROVAL REQUEST END\n",
+            "a".repeat(80_000)
+        ),
+        text_elements: Vec::new(),
+    }];
+    let mut items = original.clone();
+
+    assert_eq!(
+        crate::context::bound_guardian_model_input(&mut items, /*approval_request_start*/ 0),
+        Err("Guardian approval request exceeds the model-context item limit".to_string())
+    );
+    assert_eq!(items, original);
+}
+
+#[test]
+fn guardian_prompt_item_accounts_for_content_kind_metadata() {
+    use codex_protocol::user_input::UserInput;
+
+    let mut items = (0..1_200)
+        .map(|_| UserInput::Text {
+            text: String::new(),
+            text_elements: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+
+    crate::context::bound_guardian_model_input(&mut items, /*approval_request_start*/ 1_200)
+        .expect("Guardian prompt should fit the model-context item limit");
+
+    assert_eq!(
+        items,
+        vec![UserInput::Text {
+            text: String::new(),
+            text_elements: Vec::new(),
+        }]
+    );
+    assert!(
+        crate::context::guardian_model_input_tokens(&items)
+            <= crate::context_manager::MAX_MODEL_CONTEXT_ITEM_TOKENS.saturating_sub(64)
+    );
+}
+
 fn last_user_message_text_from_body(body: &serde_json::Value) -> String {
     body["input"]
         .as_array()

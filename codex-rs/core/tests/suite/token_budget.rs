@@ -359,6 +359,49 @@ async fn experimental_context_requires_codex_backend(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn experimental_context_rejects_ineligible_auth() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    for auth in [
+        CodexAuth::from_external_chatgpt_tokens(
+            "header.e30.signature",
+            "free-account",
+            Some("free"),
+        )?,
+        CodexAuth::from_api_key("test-api-key"),
+    ] {
+        let server = start_mock_server().await;
+        let response = mount_sse_once(&server, sse_completed("resp-1")).await;
+        let base_url = format!("{}/backend-api/codex", server.uri());
+        let test = test_codex()
+            .with_auth(auth)
+            .with_config(move |config| {
+                config.model_provider.base_url = Some(base_url);
+                config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
+                config
+                    .features
+                    .enable(Feature::ContextManagement)
+                    .expect("test config should allow experimental context");
+            })
+            .build_with_auto_env(&server)
+            .await?;
+
+        test.submit_turn("inspect ineligible experimental context activation")
+            .await?;
+
+        let request = response.single_request();
+        assert!(
+            !tool_names(&request)
+                .iter()
+                .any(|name| name == "new_context")
+        );
+        assert!(token_budget_contexts(&request).is_empty());
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn token_budget_uses_model_message_defaults() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

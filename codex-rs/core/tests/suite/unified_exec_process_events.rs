@@ -73,6 +73,7 @@ enum PushedExecScenario {
     SandboxedDirectPatchRetry,
     UnsandboxedInterceptedPatch,
     FullDiskInterceptedPatch,
+    ForeignWindowsGrantedInterceptedPatch,
     LegacyExit,
     ReplayGap,
 }
@@ -158,6 +159,7 @@ async fn respond_environment_info(
         scenario,
         PushedExecScenario::ElevatedPowerShell
             | PushedExecScenario::RejectedLongWindowsDangerousCommand
+            | PushedExecScenario::ForeignWindowsGrantedInterceptedPatch
     ) {
         json!({ "name": "powershell", "path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" })
     } else {
@@ -166,6 +168,7 @@ async fn respond_environment_info(
     let platform_os = matches!(
         scenario,
         PushedExecScenario::RejectedLongWindowsDangerousCommand
+            | PushedExecScenario::ForeignWindowsGrantedInterceptedPatch
     )
     .then_some("windows");
     send_exec_server_json(
@@ -216,6 +219,7 @@ async fn serve_exec_with_pushed_events(
                 if matches!(
                     scenario,
                     PushedExecScenario::SandboxedInterceptedPatch
+                        | PushedExecScenario::ForeignWindowsGrantedInterceptedPatch
                         | PushedExecScenario::SandboxedDirectPatch
                         | PushedExecScenario::SandboxedDirectPatchDenied
                         | PushedExecScenario::SandboxedDirectPatchRetry
@@ -277,6 +281,7 @@ async fn serve_exec_with_pushed_events(
                 if matches!(
                     scenario,
                     PushedExecScenario::SandboxedInterceptedPatch
+                        | PushedExecScenario::ForeignWindowsGrantedInterceptedPatch
                         | PushedExecScenario::SandboxedDirectPatch
                         | PushedExecScenario::SandboxedDirectPatchRetry
                         | PushedExecScenario::UnsandboxedInterceptedPatch
@@ -420,6 +425,7 @@ async fn serve_exec_with_pushed_events(
             .await;
         }
         PushedExecScenario::SandboxedInterceptedPatch
+        | PushedExecScenario::ForeignWindowsGrantedInterceptedPatch
         | PushedExecScenario::SandboxedDirectPatch
         | PushedExecScenario::SandboxedDirectPatchDenied
         | PushedExecScenario::SandboxedDirectPatchRetry => {
@@ -482,6 +488,7 @@ async fn serve_exec_with_pushed_events(
                         panic!("dangerous command must not read a remote process")
                     }
                     PushedExecScenario::SandboxedInterceptedPatch
+                    | PushedExecScenario::ForeignWindowsGrantedInterceptedPatch
                     | PushedExecScenario::SandboxedDirectPatch
                     | PushedExecScenario::SandboxedDirectPatchDenied
                     | PushedExecScenario::SandboxedDirectPatchRetry => {
@@ -574,6 +581,7 @@ async fn serve_exec_with_pushed_events(
 #[test_case(PushedExecScenario::ElevatedPowerShell, ManagedNetworkScenario::None, true ; "windows_elevated_powershell_disables_profile")]
 #[cfg_attr(not(windows), test_case(PushedExecScenario::RejectedLongWindowsDangerousCommand, ManagedNetworkScenario::None, true ; "remote_windows_dangerous_command_rejection_is_bounded"))]
 #[cfg_attr(not(windows), test_case(PushedExecScenario::SandboxedInterceptedPatch, ManagedNetworkScenario::None, true ; "foreign_windows_intercepted_patch_is_sandboxed"))]
+#[cfg_attr(not(windows), test_case(PushedExecScenario::ForeignWindowsGrantedInterceptedPatch, ManagedNetworkScenario::None, true ; "foreign_windows_request_permissions_grant_is_reused"))]
 #[cfg_attr(not(windows), test_case(PushedExecScenario::SandboxedDirectPatch, ManagedNetworkScenario::None, true ; "foreign_windows_direct_patch_is_sandboxed"))]
 #[cfg_attr(not(windows), test_case(PushedExecScenario::SandboxedDirectPatchDenied, ManagedNetworkScenario::None, true ; "foreign_windows_direct_patch_denial_requests_approval"))]
 #[cfg_attr(not(windows), test_case(PushedExecScenario::SandboxedDirectPatchRetry, ManagedNetworkScenario::None, true ; "foreign_windows_direct_patch_denial_approval_retries_unsandboxed"))]
@@ -596,6 +604,21 @@ async fn exec_command_consumes_pushed_remote_process_events(
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let server = start_mock_server().await;
     let tool_call = match scenario {
+        PushedExecScenario::ForeignWindowsGrantedInterceptedPatch => ev_function_call(
+            CALL_ID,
+            "exec_command",
+            &json!({
+                "cmd": "apply_patch <<'PATCH'\n*** Begin Patch\n*** Update File: secret.txt\n@@\n-old\n+new\n*** End Patch\nPATCH",
+                "sandbox_permissions": "with_additional_permissions",
+                "additional_permissions": {
+                    "file_system": {
+                        "read": [],
+                        "write": ["file:///C:/workspace/granted"],
+                    },
+                },
+            })
+            .to_string(),
+        ),
         PushedExecScenario::SandboxedDirectPatch
         | PushedExecScenario::SandboxedDirectPatchDenied
         | PushedExecScenario::SandboxedDirectPatchRetry => ev_apply_patch_custom_tool_call(
@@ -625,22 +648,57 @@ async fn exec_command_consumes_pushed_remote_process_events(
             .to_string(),
         ),
     };
-    let response_mock = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                tool_call,
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("msg-2", "done"),
-                ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
+    let mut response_sequence = Vec::new();
+    if matches!(
+        scenario,
+        PushedExecScenario::ForeignWindowsGrantedInterceptedPatch
+    ) {
+        response_sequence.push(sse(vec![
+            ev_response_created("resp-permissions"),
+            ev_function_call(
+                "permissions-call",
+                "request_permissions",
+                &json!({
+                    "environment_id": codex_exec_server::REMOTE_ENVIRONMENT_ID,
+                    "reason": "Allow the requested Windows path",
+                    "permissions": {
+                        "file_system": {
+                            "write": ["granted"],
+                        },
+                    },
+                })
+                .to_string(),
+            ),
+            ev_completed("resp-permissions"),
+        ]));
+        response_sequence.push(sse(vec![
+            ev_response_created("resp-permissions-review"),
+            ev_assistant_message(
+                "msg-permissions-review",
+                &json!({
+                    "risk_level": "low",
+                    "user_authorization": "high",
+                    "outcome": "allow",
+                    "rationale": "Exercise reuse of the foreign Windows permission grant.",
+                })
+                .to_string(),
+            ),
+            ev_completed("resp-permissions-review"),
+        ]));
+    }
+    response_sequence.extend([
+        sse(vec![
+            ev_response_created("resp-1"),
+            tool_call,
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-2", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ]);
+    let response_mock = mount_sse_sequence(&server, response_sequence).await;
     let exec_server_url = format!("ws://{}", listener.local_addr()?);
     let exec_server = tokio::spawn(serve_exec_with_pushed_events(listener, scenario));
     let mut builder = test_codex().with_exec_server_url(exec_server_url);
@@ -708,6 +766,20 @@ timeout = 900
         if matches!(scenario, PushedExecScenario::ElevatedPowerShell) {
             config.set_windows_elevated_sandbox_enabled(/*value*/ true);
         }
+        if matches!(
+            scenario,
+            PushedExecScenario::ForeignWindowsGrantedInterceptedPatch
+        ) {
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config
+                .features
+                .enable(codex_features::Feature::ExecPermissionApprovals)
+                .expect("test config should enable exec permission approvals");
+            config
+                .features
+                .enable(codex_features::Feature::RequestPermissionsTool)
+                .expect("test config should enable request_permissions");
+        }
         if managed_network_configured {
             #[cfg(windows)]
             config.set_windows_sandbox_enabled(/*value*/ true);
@@ -765,6 +837,7 @@ timeout = 900
                             scenario,
                             PushedExecScenario::SandboxedDirectPatchDenied
                                 | PushedExecScenario::SandboxedDirectPatchRetry
+                                | PushedExecScenario::ForeignWindowsGrantedInterceptedPatch
                         )
                     {
                         AskForApproval::OnRequest
@@ -821,6 +894,22 @@ timeout = 900
                             },
                         })
                         .await?;
+                }
+                EventMsg::RequestPermissions(request)
+                    if matches!(
+                        scenario,
+                        PushedExecScenario::ForeignWindowsGrantedInterceptedPatch
+                    ) =>
+                {
+                    panic!("foreign Windows auto-review should not prompt the user: {request:?}");
+                }
+                EventMsg::ExecApprovalRequest(approval)
+                    if matches!(
+                        scenario,
+                        PushedExecScenario::ForeignWindowsGrantedInterceptedPatch
+                    ) =>
+                {
+                    panic!("foreign Windows grant should preapprove exec: {approval:?}");
                 }
                 EventMsg::TurnComplete(_) => break,
                 _ => {}
@@ -879,7 +968,9 @@ timeout = 900
     }
     if matches!(
         scenario,
-        PushedExecScenario::SandboxedInterceptedPatch | PushedExecScenario::SandboxedDirectPatch
+        PushedExecScenario::SandboxedInterceptedPatch
+            | PushedExecScenario::ForeignWindowsGrantedInterceptedPatch
+            | PushedExecScenario::SandboxedDirectPatch
     ) {
         assert!(!saw_exec_command_begin);
         let request = response_mock
@@ -1043,6 +1134,7 @@ timeout = 900
             assert_eq!(process_read_requests, 0, "unexpected compatibility read");
         }
         PushedExecScenario::SandboxedInterceptedPatch
+        | PushedExecScenario::ForeignWindowsGrantedInterceptedPatch
         | PushedExecScenario::SandboxedDirectPatch
         | PushedExecScenario::SandboxedDirectPatchDenied
         | PushedExecScenario::SandboxedDirectPatchRetry => {

@@ -780,7 +780,7 @@ foo = true"#;
 }
 
 #[tokio::test]
-async fn strict_config_accepts_removed_shared_compression_key_without_changing_compression() {
+async fn strict_config_preserves_shared_compression_compatibility_key() {
     for enabled in [false, true] {
         let tmp = tempdir().expect("tempdir");
         let removed = !enabled;
@@ -806,6 +806,12 @@ async fn strict_config_accepts_removed_shared_compression_key_without_changing_c
                 .features
                 .enabled(Feature::LocalThreadStoreCompression),
             enabled
+        );
+        assert_eq!(
+            config
+                .features
+                .enabled(Feature::LocalThreadStoreSharedCompression),
+            removed
         );
     }
 }

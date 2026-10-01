@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
+use std::time::Instant;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::HistoryPosition;
@@ -9,6 +11,18 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use super::RolloutReferenceIndex;
+
+#[tokio::test]
+async fn bounded_scan_returns_none_after_deadline() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+
+    assert!(
+        RolloutReferenceIndex::scan_until(home.path(), Instant::now(), Duration::ZERO)
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
 
 #[tokio::test]
 async fn scans_active_archived_and_compressed_history_bases() -> anyhow::Result<()> {

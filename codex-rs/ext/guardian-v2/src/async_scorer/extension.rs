@@ -12,8 +12,11 @@ use codex_analytics::GuardianV2Event;
 use codex_analytics::GuardianV2EventKind;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core::context::ContextualUserFragment;
+use codex_core::context::GuardianAuthorizationContext;
 use codex_core::context::GuardianReviewEvidence;
 use codex_core::context::NodeReplReviewEvidence;
+use codex_core::context::bound_guardian_model_input;
 use codex_extension_api::ApprovalReviewContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
@@ -48,6 +51,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::protocol::has_full_access;
 use codex_protocol::security_risk::SecurityRiskScore;
+use codex_protocol::user_input::UserInput;
 
 use super::action::GuardianAction;
 use super::action::RenderedAction;
@@ -683,10 +687,15 @@ impl GuardianV2Extension {
                     return;
                 }
             };
-            let mut classification_input = transcript.authorization;
+            let mut classification_input = if transcript.authorization.is_empty() {
+                Vec::new()
+            } else {
+                vec![GuardianAuthorizationContext::from_sections(transcript.authorization).render()]
+            };
             classification_input.push(">>> TRANSCRIPT START\n".to_owned());
             classification_input.extend(transcript.entries);
             classification_input.push(">>> TRANSCRIPT END\n\n".to_owned());
+            let approval_request_start = classification_input.len();
             let trusted_review_evidence = sync_reviews
                 .iter()
                 .filter(|review| {
@@ -706,6 +715,48 @@ impl GuardianV2Extension {
                 format!("{planned_action}\n"),
                 ">>> APPROVAL REQUEST END\n".to_owned(),
             ]);
+            let mut model_input = classification_input
+                .into_iter()
+                .map(|text| UserInput::Text {
+                    text,
+                    text_elements: Vec::new(),
+                })
+                .collect::<Vec<_>>();
+            model_input.extend(images.into_iter().filter_map(|item| match item {
+                codex_protocol::models::ContentItem::InputImage { image_url, detail } => {
+                    Some(UserInput::Image { image_url, detail })
+                }
+                _ => None,
+            }));
+            if let Err(error) = bound_guardian_model_input(&mut model_input, approval_request_start)
+            {
+                Self::record_fail_closed_score(thread.thread_extension_data(), sampled_at);
+                record_classification(
+                    metrics.as_deref(),
+                    classification_started_at.elapsed(),
+                    "failure",
+                );
+                event_sink.emit_warning(ExtensionWarning {
+                    thread_id,
+                    turn_id: Some(turn_id),
+                    message: format!("Guardian V2 input could not be bounded: {error}"),
+                });
+                return;
+            }
+            let mut classification_input = Vec::new();
+            let mut images = Vec::new();
+            for item in model_input {
+                match item {
+                    UserInput::Text { text, .. } => classification_input.push(text),
+                    UserInput::Image { image_url, detail } => {
+                        images.push(codex_protocol::models::ContentItem::InputImage {
+                            image_url,
+                            detail,
+                        });
+                    }
+                    _ => {}
+                }
+            }
             let mut classification_risk = None;
             let mut classification_finished_at = None;
             let result: Result<ClassificationOutcome, String> = async {

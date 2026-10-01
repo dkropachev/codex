@@ -1,4 +1,21 @@
 use super::*;
+
+impl ExecPolicyManager {
+    async fn create_exec_approval_requirement_for_command(
+        &self,
+        req: ExecApprovalRequest<'_>,
+    ) -> ExecApprovalRequirement {
+        self.create_exec_approval_requirement_for_command_platform(
+            req,
+            DangerousCommandPlatform::host(),
+        )
+        .await
+    }
+}
+
+fn commands_for_exec_policy(command: &[String]) -> ExecPolicyCommands {
+    commands_for_exec_policy_for_platform(command, DangerousCommandPlatform::host())
+}
 use crate::config::Config;
 use crate::config::ConfigBuilder;
 use codex_config::CONFIG_TOML_FILE;

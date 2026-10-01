@@ -312,18 +312,6 @@ impl ExecPolicyManager {
         self.policy.load_full()
     }
 
-    #[cfg(test)]
-    pub(crate) async fn create_exec_approval_requirement_for_command(
-        &self,
-        req: ExecApprovalRequest<'_>,
-    ) -> ExecApprovalRequirement {
-        self.create_exec_approval_requirement_for_command_platform(
-            req,
-            DangerousCommandPlatform::host(),
-        )
-        .await
-    }
-
     async fn create_exec_approval_requirement_for_command_platform(
         &self,
         req: ExecApprovalRequest<'_>,
@@ -866,11 +854,6 @@ fn profile_has_managed_filesystem_restrictions(permission_profile: &PermissionPr
 
 pub(crate) fn default_policy_path(codex_home: &Path) -> PathBuf {
     codex_home.join(RULES_DIR_NAME).join(DEFAULT_POLICY_FILE)
-}
-
-#[cfg(test)]
-fn commands_for_exec_policy(command: &[String]) -> ExecPolicyCommands {
-    commands_for_exec_policy_for_platform(command, DangerousCommandPlatform::host())
 }
 
 fn commands_for_exec_policy_for_platform(
