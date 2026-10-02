@@ -69,6 +69,7 @@ pub(crate) use environments_instructions::EnvironmentsInstructions;
 pub(crate) use guardian_approved_action::GuardianApprovedAction;
 pub use guardian_authorization_context::GuardianAuthorizationContext;
 pub use guardian_authorization_context::bound_guardian_model_input;
+pub use guardian_authorization_context::guardian_model_context_item_is_bounded;
 #[cfg(test)]
 pub(crate) use guardian_authorization_context::guardian_model_input_tokens;
 pub(crate) use guardian_followup_review_reminder::GuardianFollowupReviewReminder;

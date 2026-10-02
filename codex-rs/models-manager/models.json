@@ -116,7 +116,7 @@
           "reasoning_effort": null,
           "transcript": null,
           "max_action_tokens": null,
-          "max_classifier_instruction_tokens": null,
+          "max_classifier_instruction_tokens": 10000,
           "reuse_parent_compaction": null,
           "max_parent_compaction_tokens": null
         },

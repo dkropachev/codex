@@ -89,6 +89,12 @@ pub fn bound_guardian_model_input(
     Ok(())
 }
 
+/// Returns whether one fully constructed Guardian request item fits the model-context item cap.
+pub fn guardian_model_context_item_is_bounded(item: &ResponseItem) -> bool {
+    estimate_item_token_count(item)
+        <= i64::try_from(MAX_MODEL_CONTEXT_ITEM_TOKENS).unwrap_or(i64::MAX)
+}
+
 fn best_guardian_context_candidate(
     context: &[UserInput],
     approval_request: &[UserInput],

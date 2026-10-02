@@ -2561,7 +2561,7 @@ async fn contributor_uses_catalog_policy_without_a_configured_override() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn contributor_preserves_uncapped_classifier_instructions() -> Result<()> {
+async fn contributor_bounds_classifier_instructions_by_default() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let guardian_policy = format!(
@@ -2575,19 +2575,20 @@ async fn contributor_preserves_uncapped_classifier_instructions() -> Result<()> 
     )
     .await?;
 
-    assert_eq!(
-        request["input"][1],
-        json!({
-            "type": "message",
-            "id": request["input"][1]["id"],
-            "role": "developer",
-            "content": [{
-                "type": "input_text",
-                "text": crate::async_scorer::config::DEFAULT_CLASSIFIER_INSTRUCTIONS
-                    .replace("{{ tenant_policy_config }}", &guardian_policy),
-            }],
-        })
-    );
+    let instructions = request["input"][1]["content"][0]["text"]
+        .as_str()
+        .expect("Luna request should contain developer instructions");
+    let (prefix, suffix) = crate::async_scorer::config::DEFAULT_CLASSIFIER_INSTRUCTIONS
+        .split_once("{{ tenant_policy_config }}")
+        .expect("default classifier prompt should contain the policy placeholder");
+    assert!(instructions.starts_with(&format!("{prefix}Reject unsafe uploads.")));
+    assert!(instructions.contains("<truncated omitted_approx_tokens="));
+    assert!(instructions.contains("Require explicit approval."));
+    assert!(instructions.ends_with(suffix));
+    let item: ResponseItem = serde_json::from_value(request["input"][1].clone())?;
+    assert!(codex_core::context::guardian_model_context_item_is_bounded(
+        &item
+    ));
 
     Ok(())
 }
