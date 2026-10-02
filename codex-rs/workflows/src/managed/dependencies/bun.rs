@@ -32,16 +32,14 @@ use super::ValidatedDependencySources;
 
 mod paths;
 
-use paths::absolute_from_path;
-use paths::paths_overlap;
-
+use paths::ensure_candidate_outside_environment;
 const PUBLIC_REGISTRY: &str = "https://registry.npmjs.org/";
 const TRUSTED_BUNFIG: &str =
     "env = false\ntelemetry = false\n\n[install]\nregistry = \"https://registry.npmjs.org/\"\n";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ManagedBunOperation {
-    Install,
+    Install(ManagedBunInstallLockfile),
     InspectBinaryLockfile,
 }
 
@@ -292,14 +290,11 @@ pub(in crate::managed) fn managed_bun_install_command_plan(
     environment: &ManagedBunEnvironment,
 ) -> anyhow::Result<ManagedBunCommandPlan> {
     reject_untrusted_candidate_bun_configuration(candidate)?;
-    if paths_overlap(candidate, &environment.cache_dir)?
-        || paths_overlap(
-            candidate,
-            &absolute_from_path(environment.operation.path())?,
-        )?
-    {
-        bail!("managed Bun environment and workflow candidate must not overlap");
-    }
+    ensure_candidate_outside_environment(
+        candidate,
+        &environment.cache_dir,
+        environment.operation.path(),
+    )?;
     let bun_executable = validate_bun_executable(
         bun_executable,
         &[
@@ -324,7 +319,7 @@ pub(in crate::managed) fn managed_bun_install_command_plan(
         &bun_executable,
         candidate,
         environment,
-        ManagedBunOperation::Install,
+        ManagedBunOperation::Install(lockfile),
         NetworkSandboxPolicy::Enabled,
         &read_only_paths,
     ))
@@ -336,8 +331,14 @@ pub(in crate::managed) fn managed_bun_install_command_plan(
 /// environment's scratch directory. Copying and executing the plan are intentionally separate.
 pub(in crate::managed) fn managed_bun_binary_inspection_command_plan(
     bun_executable: &AbsolutePathBuf,
+    candidate: &AbsolutePathBuf,
     environment: &ManagedBunEnvironment,
 ) -> anyhow::Result<ManagedBunCommandPlan> {
+    ensure_candidate_outside_environment(
+        candidate,
+        &environment.cache_dir,
+        environment.operation.path(),
+    )?;
     let bun_executable = validate_bun_executable(
         bun_executable,
         &[
@@ -345,6 +346,7 @@ pub(in crate::managed) fn managed_bun_binary_inspection_command_plan(
             &environment.cache_dir,
             &environment.temp_dir,
             &environment.home_dir,
+            candidate,
         ],
     )?;
     Ok(command_plan(
@@ -393,11 +395,21 @@ fn command_plan(
     network: NetworkSandboxPolicy,
     read_only_paths: &[AbsolutePathBuf],
 ) -> ManagedBunCommandPlan {
+    let cache_dir = match operation {
+        ManagedBunOperation::Install(_) => &environment.cache_dir,
+        ManagedBunOperation::InspectBinaryLockfile => &environment.xdg_cache_dir,
+    };
     let mut config_argument = OsString::from("--config=");
     config_argument.push(environment.bunfig.as_path());
     let mut args = vec!["--no-env-file".into(), config_argument, "install".into()];
-    if operation == ManagedBunOperation::InspectBinaryLockfile {
-        args.extend(["--save-text-lockfile".into(), "--lockfile-only".into()]);
+    match operation {
+        ManagedBunOperation::Install(ManagedBunInstallLockfile::Text) => {}
+        ManagedBunOperation::Install(ManagedBunInstallLockfile::Binary) => {
+            args.push("--no-save".into());
+        }
+        ManagedBunOperation::InspectBinaryLockfile => {
+            args.extend(["--save-text-lockfile".into(), "--lockfile-only".into()]);
+        }
     }
     args.extend([
         "--frozen-lockfile".into(),
@@ -405,10 +417,10 @@ fn command_plan(
         "--backend=copyfile".into(),
         format!("--registry={PUBLIC_REGISTRY}").into(),
         "--cache-dir".into(),
-        environment.cache_dir.as_path().as_os_str().to_os_string(),
+        cache_dir.as_path().as_os_str().to_os_string(),
     ]);
     let writable_target = match operation {
-        ManagedBunOperation::Install => target.join("node_modules"),
+        ManagedBunOperation::Install(_) => target.join("node_modules"),
         ManagedBunOperation::InspectBinaryLockfile => target.clone(),
     };
     let mut entries = vec![FileSystemSandboxEntry::new(
@@ -420,7 +432,7 @@ fn command_plan(
     entries.extend(
         [
             &writable_target,
-            &environment.cache_dir,
+            cache_dir,
             &environment.temp_dir,
             &environment.home_dir,
         ]
@@ -444,13 +456,20 @@ fn command_plan(
         program: bun_executable.clone(),
         args,
         cwd: target.clone(),
-        env: command_environment(environment),
+        env: command_environment(environment, operation),
         permissions,
         operation: Arc::clone(&environment.operation),
     }
 }
 
-fn command_environment(environment: &ManagedBunEnvironment) -> BTreeMap<OsString, OsString> {
+fn command_environment(
+    environment: &ManagedBunEnvironment,
+    operation: ManagedBunOperation,
+) -> BTreeMap<OsString, OsString> {
+    let cache_dir = match operation {
+        ManagedBunOperation::Install(_) => &environment.cache_dir,
+        ManagedBunOperation::InspectBinaryLockfile => &environment.xdg_cache_dir,
+    };
     let mut env = BTreeMap::new();
     for (name, value) in [
         ("HOME", &environment.home_dir),
@@ -464,7 +483,7 @@ fn command_environment(environment: &ManagedBunEnvironment) -> BTreeMap<OsString
         ("TMPDIR", &environment.temp_dir),
         ("TEMP", &environment.temp_dir),
         ("TMP", &environment.temp_dir),
-        ("BUN_INSTALL_CACHE_DIR", &environment.cache_dir),
+        ("BUN_INSTALL_CACHE_DIR", cache_dir),
         ("BUN_CONFIG_FILE", &environment.bunfig),
         ("NPM_CONFIG_USERCONFIG", &environment.npmrc),
         ("NPM_CONFIG_GLOBALCONFIG", &environment.npmrc),
