@@ -74,6 +74,32 @@ fn stages_exact_bytes_and_only_the_two_inputs() {
             ("package.json".to_string(), PACKAGE_JSON.to_vec()),
         ])
     );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let modes = [
+            fixture
+                .environment
+                .scratch_dir
+                .parent()
+                .expect("operation root"),
+            fixture.scratch("package.json"),
+            fixture.scratch("bun.lockb"),
+        ]
+        .map(|path| fs::metadata(path).expect("metadata").permissions().mode() & 0o077);
+        assert_eq!(modes, [0; 3]);
+    }
+}
+
+#[test]
+fn write_failure_removes_inputs_created_by_the_attempt() {
+    let fixture = Fixture::new();
+    let path = fixture.scratch("package.json");
+    let error = write_staged_inputs(&[(path.clone(), PACKAGE_JSON), (path, BINARY_LOCK)])
+        .expect_err("duplicate target should fail");
+    assert!(error.to_string().contains("failed to stage"), "{error:#}");
+    assert_eq!(fixture.scratch_contents(), BTreeMap::new());
 }
 
 #[test]
@@ -81,7 +107,11 @@ fn nonempty_scratch_fails_without_partial_writes() {
     let fixture = Fixture::new();
     fs::write(fixture.scratch("sentinel").as_path(), b"unchanged").expect("write sentinel");
     let error = fixture.stage().expect_err("reject nonempty scratch");
-    assert!(error.to_string().contains("scratch directory was not empty"));
+    assert!(
+        error
+            .to_string()
+            .contains("scratch directory was not empty")
+    );
     assert_eq!(
         fixture.scratch_contents(),
         BTreeMap::from([("sentinel".to_string(), b"unchanged".to_vec())])
@@ -108,11 +138,15 @@ fn rejects_directory_inputs() {
 
 #[cfg(unix)]
 #[test]
-fn rejects_special_input_files() {
+fn rejects_fifo_inputs_without_blocking() {
+    use rustix::fs::CWD;
+    use rustix::fs::Mode;
+    use rustix::fs::mkfifoat;
+
     let fixture = Fixture::new();
     let input = fixture.input("bun.lockb");
     fs::remove_file(input.as_path()).expect("remove input");
-    let _socket = std::os::unix::net::UnixListener::bind(input.as_path()).expect("bind socket");
+    mkfifoat(CWD, input.as_path(), Mode::RUSR | Mode::WUSR).expect("create FIFO");
     let error = fixture.stage().expect_err("reject special input");
     assert!(
         error
@@ -122,17 +156,15 @@ fn rejects_special_input_files() {
     assert_eq!(fixture.scratch_contents(), BTreeMap::new());
 }
 
-#[cfg(any(unix, windows))]
+#[cfg(unix)]
 #[test]
-fn rejects_symlink_or_reparse_point_inputs() {
+fn rejects_symlink_inputs() {
     for name in ["package.json", "bun.lockb"] {
         let fixture = Fixture::new();
         let input = fixture.input(name);
         let target = fixture.input(&format!("{name}.target"));
         fs::rename(input.as_path(), target.as_path()).expect("move input");
-        if !create_file_alias(target.as_path(), input.as_path()) {
-            return;
-        }
+        std::os::unix::fs::symlink(target.as_path(), input.as_path()).expect("create file alias");
         let error = fixture.stage().expect_err("reject aliased input");
         assert!(
             error
@@ -142,6 +174,30 @@ fn rejects_symlink_or_reparse_point_inputs() {
         );
         assert_eq!(fixture.scratch_contents(), BTreeMap::new());
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn rejects_reparse_point_inputs() {
+    let fixture = Fixture::new();
+    let input = fixture.input("bun.lockb");
+    let target = fixture.input("bun.lockb.target");
+    fs::remove_file(input.as_path()).expect("remove input");
+    fs::create_dir(target.as_path()).expect("create junction target");
+    create_directory_alias(target.as_path(), input.as_path());
+    let metadata = super::super::file::open_no_follow(input.as_path())
+        .expect("open junction itself")
+        .metadata()
+        .expect("junction metadata");
+    assert!(super::super::file::is_windows_reparse_point(&metadata));
+    let error = fixture.stage().expect_err("reject reparse-point input");
+    assert!(
+        error
+            .to_string()
+            .contains("must be a regular file without aliases")
+    );
+    remove_directory_alias(input.as_path());
+    assert_eq!(fixture.scratch_contents(), BTreeMap::new());
 }
 
 #[test]
@@ -198,49 +254,40 @@ fn rejects_non_directory_scratch() {
 fn rejects_aliased_scratch_directory() {
     let fixture = Fixture::new();
     let target = fixture.candidate.join("scratch-target");
-    fs::rename(
-        fixture.environment.scratch_dir.as_path(),
-        target.as_path(),
-    )
-    .expect("move scratch directory");
-    if !create_directory_alias(target.as_path(), fixture.environment.scratch_dir.as_path()) {
-        return;
-    }
+    fs::rename(fixture.environment.scratch_dir.as_path(), target.as_path())
+        .expect("move scratch directory");
+    create_directory_alias(target.as_path(), fixture.environment.scratch_dir.as_path());
     let error = fixture.stage().expect_err("reject aliased scratch");
     assert!(
         error
             .to_string()
             .contains("must be a regular directory without aliases")
     );
+    remove_directory_alias(fixture.environment.scratch_dir.as_path());
 }
 
 #[cfg(unix)]
-fn create_file_alias(target: &Path, link: &Path) -> bool {
-    std::os::unix::fs::symlink(target, link).expect("create file alias");
-    true
-}
-
-#[cfg(unix)]
-fn create_directory_alias(target: &Path, link: &Path) -> bool {
+fn create_directory_alias(target: &Path, link: &Path) {
     std::os::unix::fs::symlink(target, link).expect("create directory alias");
-    true
+}
+
+#[cfg(unix)]
+fn remove_directory_alias(link: &Path) {
+    fs::remove_file(link).expect("remove directory alias");
 }
 
 #[cfg(windows)]
-fn create_file_alias(target: &Path, link: &Path) -> bool {
-    create_windows_alias(std::os::windows::fs::symlink_file(target, link))
+fn create_directory_alias(target: &Path, link: &Path) {
+    let output = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()
+        .expect("create directory junction");
+    assert!(output.status.success(), "mklink /J failed");
 }
 
 #[cfg(windows)]
-fn create_directory_alias(target: &Path, link: &Path) -> bool {
-    create_windows_alias(std::os::windows::fs::symlink_dir(target, link))
-}
-
-#[cfg(windows)]
-fn create_windows_alias(result: std::io::Result<()>) -> bool {
-    match result {
-        Ok(()) => true,
-        Err(error) if error.raw_os_error() == Some(1314) => false,
-        Err(error) => panic!("failed to create alias: {error}"),
-    }
+fn remove_directory_alias(link: &Path) {
+    fs::remove_dir(link).expect("remove directory junction");
 }
