@@ -193,6 +193,7 @@ impl ChatWidget {
         if std::mem::take(&mut self.input_queue.rate_limit_recovery_pending) {
             self.submit_initial_user_message_if_pending();
             self.maybe_send_next_queued_input();
+            self.request_automatic_handoff_check();
         }
     }
 
@@ -219,6 +220,7 @@ impl ChatWidget {
         snapshot: Option<RateLimitSnapshot>,
         source: RateLimitSnapshotSource,
     ) {
+        let mut automatic_handoff_blocker_cleared = false;
         if let Some(mut snapshot) = snapshot {
             let limit_id = snapshot
                 .limit_id
@@ -284,10 +286,12 @@ impl ChatWidget {
                 match self.rate_limit_switch_prompt {
                     RateLimitSwitchPromptState::Pending => {
                         self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
+                        automatic_handoff_blocker_cleared = true;
                     }
                     RateLimitSwitchPromptState::Shown => {
                         self.bottom_pane
                             .dismiss_view_by_id(RATE_LIMIT_SWITCH_PROMPT_VIEW_ID);
+                        automatic_handoff_blocker_cleared = true;
                     }
                     RateLimitSwitchPromptState::Idle => {}
                 }
@@ -359,6 +363,9 @@ impl ChatWidget {
             self.rate_limit_snapshots_by_limit_id.clear();
             self.codex_rate_limit_reached_type = None;
             self.codex_spend_control_reached = None;
+        }
+        if automatic_handoff_blocker_cleared {
+            self.request_automatic_handoff_check();
         }
         self.refresh_status_line();
     }

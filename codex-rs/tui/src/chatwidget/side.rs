@@ -26,6 +26,9 @@ impl ChatWidget {
         if self.blocks_direct_input && !active {
             self.bottom_pane.set_parent_owned_thread();
         }
+        if !active {
+            self.request_automatic_handoff_check();
+        }
     }
 
     pub(crate) fn side_conversation_active(&self) -> bool {

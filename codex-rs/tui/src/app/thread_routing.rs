@@ -76,6 +76,7 @@ impl App {
         let Some(active_id) = self.active_thread_id else {
             return;
         };
+        self.chat_widget.cancel_automatic_handoff_for_navigation();
         let input_state = self.chat_widget.capture_thread_input_state();
         let recap_progress = self.recap.progress();
         if let Some(channel) = self.thread_event_channels.get_mut(&active_id) {
@@ -681,7 +682,15 @@ impl App {
                             .turn_steer(thread_id, steer_turn_id.clone(), items.to_vec())
                             .await
                         {
-                            Ok(_) => return Ok(true),
+                            Ok(_) => {
+                                if self.active_thread_id == Some(thread_id)
+                                    && self.chat_widget.thread_id() == Some(thread_id)
+                                {
+                                    self.chat_widget
+                                        .bind_handoff_turn_start(&steer_turn_id, items);
+                                }
+                                return Ok(true);
+                            }
                             Err(error) => {
                                 if let Some(turn_error) =
                                     active_turn_not_steerable_turn_error(&error)
@@ -769,6 +778,8 @@ impl App {
                     if self.active_thread_id == Some(thread_id)
                         && self.chat_widget.thread_id() == Some(thread_id)
                     {
+                        self.chat_widget
+                            .bind_handoff_turn_start(&response.turn.id, items);
                         self.chat_widget
                             .record_safety_buffering_turn(response.turn.id, op);
                     }
@@ -908,6 +919,7 @@ impl App {
                     self.refresh_pending_thread_approvals().await;
                     self.refresh_side_parent_status_from_store(thread_id).await;
                 }
+                self.chat_widget.request_automatic_handoff_check();
                 Ok(true)
             }
             Err(err) => {
@@ -1105,6 +1117,9 @@ impl App {
             self.clear_side_parent_action_status(thread_id);
         }
         self.refresh_pending_thread_approvals().await;
+        if turn_stopped || is_thread_closed {
+            self.chat_widget.request_automatic_handoff_check();
+        }
         Ok(())
     }
 
@@ -1587,6 +1602,13 @@ impl App {
             replay_filter::snapshot_has_pending_interactive_request(&snapshot);
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ true);
+        if let Some(input) = snapshot
+            .input_state
+            .as_mut()
+            .filter(|input| input.recovered_queue)
+        {
+            input.reconcile_handoff_turns(&snapshot.turns);
+        }
         if let Some(session) = snapshot.session {
             if session.reasoning_effort != Some(ReasoningEffortConfig::Ultra) {
                 self.chat_widget
@@ -1600,6 +1622,26 @@ impl App {
                 self.chat_widget.handle_thread_session(session);
             }
         }
+        let replay_contains_recovered_handoff = snapshot
+            .input_state
+            .as_ref()
+            .is_some_and(|input| input.recovered_queue)
+            && snapshot
+                .input_state
+                .as_ref()
+                .and_then(|input| input.pending_handoff_submission_text())
+                .is_some_and(|expected| {
+                    snapshot.turns.iter().flat_map(|turn| &turn.items).any(|item| {
+                        let codex_app_server_protocol::ThreadItem::UserMessage { content, .. } =
+                            item
+                        else {
+                            return false;
+                        };
+                        content.iter().any(|item| {
+                            matches!(item, codex_app_server_protocol::UserInput::Text { text, .. } if text == expected)
+                        })
+                    })
+                });
         let recovered_input = snapshot
             .input_state
             .as_ref()
@@ -1610,6 +1652,7 @@ impl App {
             snapshot.input_state,
             ThreadInputStateRestoreMode {
                 preserve_in_flight_turn: true,
+                redisplay_pending_handoff: false,
             },
         );
         if !snapshot.turns.is_empty() {
@@ -1633,6 +1676,8 @@ impl App {
         }
         if recovered_input.is_some() {
             self.chat_widget.restore_reconnected_input(recovered_input);
+            self.chat_widget
+                .reconcile_replayed_pending_handoff_submission(replay_contains_recovered_handoff);
         }
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ false);
@@ -1642,6 +1687,10 @@ impl App {
         if resume_restored_queue {
             self.chat_widget.maybe_send_next_queued_input();
         }
+        self.chat_widget
+            .advance_restored_manual_handoff_after_snapshot();
+        self.chat_widget.redisplay_pending_handoff();
+        self.chat_widget.request_automatic_handoff_check();
         self.refresh_status_line();
     }
 

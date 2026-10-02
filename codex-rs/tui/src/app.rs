@@ -219,6 +219,7 @@ mod connector_mentions;
 mod event_dispatch;
 mod exit_summary;
 mod file_change_approvals;
+mod handoff;
 mod history_pagination;
 mod history_ui;
 mod input;
@@ -619,6 +620,10 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
+    /// Runtime-only deferred handoffs keyed by thread. These deliberately are not persisted, but
+    /// survive in-process thread navigation and direct resume operations.
+    pending_handoffs: HashMap<ThreadId, crate::handoff::PendingHandoffState>,
+    handoff_passive_states: HashMap<ThreadId, crate::handoff::PassiveHandoffState>,
     dynamic_tool_status_updates:
         tokio::sync::broadcast::Sender<codex_app_server_protocol::ThreadStatusChangedNotification>,
     dynamic_tool_tasks: HashMap<codex_app_server_protocol::RequestId, (String, JoinHandle<()>)>,

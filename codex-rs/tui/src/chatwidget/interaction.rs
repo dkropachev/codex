@@ -4,6 +4,13 @@ use super::*;
 use crate::bottom_pane::BottomPaneView;
 
 impl ChatWidget {
+    pub(crate) fn set_app_overlay_active(&mut self, active: bool) {
+        self.app_overlay_active = active;
+        if !active {
+            self.request_automatic_handoff_check();
+        }
+    }
+
     pub(crate) fn set_agents_navigation_enabled(&mut self, enabled: bool) {
         self.bottom_pane.set_agents_navigation_enabled(enabled);
     }

@@ -25,6 +25,8 @@ mod model_catalog;
 mod patch_approval_tests;
 #[path = "tests/permission_shortcuts_tests.rs"]
 mod permission_shortcuts_tests;
+#[path = "tests/plan_handoff__session_transfer.rs"]
+mod plan_handoff_session_transfer;
 mod plugin_catalog;
 mod rate_limits;
 #[path = "tests/recap_generation_tests.rs"]
@@ -5566,6 +5568,8 @@ async fn make_test_app() -> App {
         primary_session_configured: None,
         pending_primary_events: VecDeque::new(),
         pending_app_server_requests: PendingAppServerRequests::default(),
+        pending_handoffs: HashMap::new(),
+        handoff_passive_states: HashMap::new(),
         dynamic_tool_status_updates: tokio::sync::broadcast::channel(/*capacity*/ 64).0,
         dynamic_tool_tasks: HashMap::new(),
         pending_startup_thread_start: false,
@@ -5650,6 +5654,8 @@ async fn make_test_app_with_channels() -> (
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            pending_handoffs: HashMap::new(),
+            handoff_passive_states: HashMap::new(),
             dynamic_tool_status_updates: tokio::sync::broadcast::channel(/*capacity*/ 64).0,
             dynamic_tool_tasks: HashMap::new(),
             pending_startup_thread_start: false,

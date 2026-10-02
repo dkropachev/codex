@@ -549,6 +549,7 @@ async fn queued_inline_rename_does_not_drain_again_before_turn_started() {
         /*input_state*/ None,
         ThreadInputStateRestoreMode {
             preserve_in_flight_turn: true,
+            redisplay_pending_handoff: true,
         },
     );
     assert!(!chat.input_queue.user_turn_pending_start);
@@ -556,6 +557,7 @@ async fn queued_inline_rename_does_not_drain_again_before_turn_started() {
         Some(input_state),
         ThreadInputStateRestoreMode {
             preserve_in_flight_turn: true,
+            redisplay_pending_handoff: true,
         },
     );
     assert!(chat.input_queue.user_turn_pending_start);
@@ -1016,6 +1018,7 @@ async fn restored_queued_goal_slash_command_emits_set_goal_event() {
         Some(input_state),
         ThreadInputStateRestoreMode {
             preserve_in_flight_turn: true,
+            redisplay_pending_handoff: true,
         },
     );
     let thread_id = ThreadId::new();

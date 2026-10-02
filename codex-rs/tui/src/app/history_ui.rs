@@ -306,6 +306,7 @@ impl App {
 
     pub(super) fn reset_transcript_state_after_clear(&mut self) {
         self.overlay = None;
+        self.chat_widget.set_app_overlay_active(/*active*/ false);
         self.transcript_cells.clear();
         self.last_rendered_history_tail = None;
         self.last_thread_usage_status_cell = None;

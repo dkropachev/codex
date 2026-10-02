@@ -5,6 +5,8 @@ mod account_pool_live;
 mod focus_palette;
 #[path = "mcp__live.rs"]
 mod mcp_live;
+#[path = "plan_handoff__live.rs"]
+mod plan_handoff_live;
 #[path = "plugins__live.rs"]
 mod plugins_live;
 #[cfg(unix)]

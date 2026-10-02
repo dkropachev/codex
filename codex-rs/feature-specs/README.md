@@ -274,6 +274,7 @@ relay, or WebSocket service-boundary behavior.
 
 - [account-pool](account-pool.md)
 - [mcp](mcp.md)
+- [plan-handoff](plan-handoff.md)
 - [plugins](plugins.md)
 - [skills](skills.md)
 - [workflows](workflows.md)

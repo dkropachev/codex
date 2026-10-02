@@ -226,6 +226,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         animations: true,
         show_tooltips: true,
         tui_auto_recap: true,
+        tui_auto_handoff_threshold_percent: None,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,

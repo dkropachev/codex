@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests/plan_handoff__state.rs
+expression: hint
+---
+• Context is getting full. Use /handoff to continue safely in a fresh session.

@@ -232,6 +232,7 @@ impl ChatWidget {
     /// When there are queued user messages, restore them into the composer
     /// separated by newlines rather than auto-submitting the next one.
     pub(super) fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
+        self.cancel_handoff_for_unsuccessful_turn(HandoffTelemetryReason::TurnInterrupted);
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
         let send_pending_steers_immediately =
@@ -271,6 +272,7 @@ impl ChatWidget {
             self.restore_composer_state(combined);
         }
         self.refresh_pending_input_preview();
+        self.request_automatic_handoff_check();
         self.request_redraw();
     }
 
@@ -477,6 +479,7 @@ impl ChatWidget {
                 .submit_pending_steers_after_interrupt,
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
+            handoff_state: self.handoff_state.clone(),
             task_running: self.bottom_pane.is_task_running(),
             agent_turn_running: self.turn_lifecycle.agent_turn_running,
         })
@@ -494,6 +497,7 @@ impl ChatWidget {
             self.input_queue.recovered_queue = input_state.recovered_queue;
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
+            self.handoff_state = input_state.handoff_state;
             self.safety_buffering_prompt = input_state.safety_buffering_prompt;
             self.turn_lifecycle.restore_running(
                 preserve_in_flight_turn && input_state.agent_turn_running,
@@ -557,11 +561,15 @@ impl ChatWidget {
                 self.input_queue.queued_user_messages.len(),
                 UserMessageHistoryRecord::UserMessageText,
             );
+            if restore_mode.redisplay_pending_handoff {
+                self.redisplay_pending_handoff();
+            }
         } else {
             self.turn_lifecycle
                 .restore_running(/*running*/ false, Instant::now());
             self.safety_buffering_prompt = None;
             self.input_queue.clear();
+            self.handoff_state = handoff::HandoffState::default();
             self.restore_composer_state(Default::default());
         }
         self.input_queue.recovered_queue &= self.input_queue.has_queued_follow_up_messages()
@@ -577,10 +585,14 @@ impl ChatWidget {
             self.refresh_status_surfaces();
         }
         self.refresh_pending_input_preview();
+        self.request_automatic_handoff_check();
         self.request_redraw();
     }
 
     pub(crate) fn set_queue_autosend_suppressed(&mut self, suppressed: bool) {
         self.input_queue.suppress_queue_autosend = suppressed;
+        if !suppressed {
+            self.request_automatic_handoff_check();
+        }
     }
 }

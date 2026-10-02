@@ -372,6 +372,10 @@ pub(crate) enum AppEvent {
     NewSession {
         name: Option<String>,
     },
+    ConfirmNewSessionWithPendingHandoff {
+        name: Option<String>,
+    },
+    RestoreMisalignmentPrecaution,
 
     /// Change the working directory of the originating idle primary thread.
     ChangeWorkingDirectory {
@@ -419,6 +423,43 @@ pub(crate) enum AppEvent {
     /// sees only the explicit prompt carried in `text` once the new session is configured.
     ClearUiAndSubmitUserMessage {
         text: String,
+    },
+
+    /// Start a fresh thread from a validated handoff plan. `Ask` is resolved in the TUI before
+    /// this event is emitted, so only proceed and defer dispositions reach the app lifecycle.
+    StartHandoffTransfer {
+        source_thread_id: ThreadId,
+        generation: u64,
+        plan: String,
+        disposition: crate::handoff::HandoffDisposition,
+        trigger: crate::handoff::HandoffTrigger,
+    },
+
+    /// Keep the current source thread in Handoff mode after dismissing the decision prompt.
+    StayInHandoff {
+        source_thread_id: ThreadId,
+        generation: u64,
+        trigger: crate::handoff::HandoffTrigger,
+    },
+
+    /// Remove a handoff only after its exact submitted prompt is committed.
+    PendingHandoffConsumed {
+        thread_id: ThreadId,
+        completion: Option<(
+            crate::handoff::HandoffTrigger,
+            crate::handoff::HandoffDisposition,
+        )>,
+    },
+
+    /// Ask the app-level safety gate to start the latched automatic handoff sequence.
+    AutomaticHandoffCandidate {
+        thread_id: ThreadId,
+    },
+
+    /// Recheck app-owned gates after automatic wrap-up before entering Handoff planning.
+    AdvanceAutomaticHandoffPlanning {
+        source_thread_id: ThreadId,
+        generation: u64,
     },
 
     /// Open the resume picker inside the running TUI session.

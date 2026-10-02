@@ -23,8 +23,8 @@ impl ChatWidget {
                 completed_at,
                 duration_ms,
             } = turn;
+            self.turn_lifecycle.last_turn_id = Some(turn_id.clone());
             if matches!(status, TurnStatus::InProgress) {
-                self.turn_lifecycle.last_turn_id = Some(turn_id.clone());
                 self.last_non_retry_error = None;
                 self.on_task_started();
             }
@@ -114,7 +114,9 @@ impl ChatWidget {
                     from_replay,
                 );
             }
-            ThreadItem::Plan { text, .. } => self.on_plan_item_completed(text),
+            ThreadItem::Plan { text, .. } => {
+                self.on_plan_item_completed_for_turn(text, Some(turn_id.clone()))
+            }
             ThreadItem::Reasoning {
                 summary, content, ..
             } => {

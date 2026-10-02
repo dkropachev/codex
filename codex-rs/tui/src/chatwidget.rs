@@ -300,6 +300,7 @@ use crate::exec_cell::new_active_exec_command;
 use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::get_git_diff::get_git_diff;
+use crate::handoff::HandoffTelemetryReason;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
@@ -345,6 +346,7 @@ use self::goal_status::GoalStatusState;
 #[cfg(test)]
 use self::goal_status::goal_status_indicator_from_app_goal;
 mod goal_menu;
+mod handoff;
 mod ide_context;
 use self::ide_context::IdeContextState;
 mod input_queue;
@@ -570,6 +572,7 @@ pub(crate) struct ChatWidget {
     pub(crate) remote_connection: Option<RemoteConnectionStatus>,
     token_info: Option<TokenUsageInfo>,
     token_usage_pending: bool,
+    handoff_state: handoff::HandoffState,
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
@@ -671,6 +674,7 @@ pub(crate) struct ChatWidget {
     pending_automatic_thread_names: HashSet<String>,
     thread_rename_block_message: Option<String>,
     active_side_conversation: bool,
+    app_overlay_active: bool,
     blocks_direct_input: bool,
     misalignment_policy_violation: bool,
     normal_placeholder_text: String,
@@ -1271,6 +1275,7 @@ impl ChatWidget {
     }
 
     fn on_committed_user_message(&mut self, items: &[UserInput], from_replay: bool) {
+        self.reconcile_committed_pending_handoff_submission(items);
         let display = Self::user_message_display_from_inputs(items);
         if from_replay {
             self.bottom_pane

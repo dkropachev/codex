@@ -221,6 +221,7 @@ impl App {
             self.transcript_cells.clone(),
             self.keymap.pager.clone(),
         ));
+        self.chat_widget.set_app_overlay_active(/*active*/ true);
         if self.scrollback_has_older_history
             && let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut()
         {
@@ -241,6 +242,8 @@ impl App {
             );
         }
         self.overlay = None;
+        self.chat_widget.set_app_overlay_active(/*active*/ false);
+        self.chat_widget.request_automatic_handoff_check();
         if self.pending_thread_usage_history_refresh
             && let Err(err) = self.refresh_thread_usage_history_tail(tui)
         {

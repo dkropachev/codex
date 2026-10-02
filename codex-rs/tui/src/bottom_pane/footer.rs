@@ -90,6 +90,7 @@ pub(crate) struct FooterProps {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CollaborationModeIndicator {
     Plan,
+    Handoff,
     Config,
     Workflow,
 }
@@ -148,6 +149,7 @@ impl CollaborationModeIndicator {
         };
         match self {
             CollaborationModeIndicator::Plan => format!("Plan mode{suffix}"),
+            CollaborationModeIndicator::Handoff => format!("Handoff mode{suffix}"),
             CollaborationModeIndicator::Config => format!("Config mode{suffix}"),
             CollaborationModeIndicator::Workflow => format!("Workflow mode{suffix}"),
         }
@@ -157,6 +159,7 @@ impl CollaborationModeIndicator {
         let label = self.label(show_cycle_hint);
         match self {
             CollaborationModeIndicator::Plan => Span::from(label).magenta(),
+            CollaborationModeIndicator::Handoff => Span::from(label).magenta(),
             CollaborationModeIndicator::Config => Span::from(label).magenta(),
             CollaborationModeIndicator::Workflow => Span::from(label).green(),
         }
@@ -1812,6 +1815,13 @@ mod tests {
             /*width*/ 120,
             &props,
             Some(CollaborationModeIndicator::Plan),
+        );
+
+        snapshot_footer_with_mode_indicator(
+            "footer_mode_indicator_handoff",
+            /*width*/ 120,
+            &props,
+            Some(CollaborationModeIndicator::Handoff),
         );
 
         snapshot_footer_with_mode_indicator(

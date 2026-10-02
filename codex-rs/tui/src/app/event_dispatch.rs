@@ -15,6 +15,7 @@ use crate::app_server_session::UnsupportedLegacyPermissionProfile;
 use crate::app_server_session::turn_permissions_overrides;
 use crate::config_update::format_config_error;
 use crate::external_agent_config_migration::flow::ExternalAgentConfigMigrationFlowOutcome;
+use crate::handoff::HandoffTelemetryEvent;
 use crate::pager_overlay::TranscriptHistoryState;
 use crate::session_resume::cwds_differ;
 use codex_app_server_protocol::ThreadGoalStatus;
@@ -38,6 +39,10 @@ impl App {
                     | AppEvent::BeginInitialHistoryReplayBuffer
                     | AppEvent::BeginThreadSwitchHistoryReplayBuffer
                     | AppEvent::EndInitialHistoryReplayBuffer
+                    | AppEvent::StartHandoffTransfer { .. }
+                    | AppEvent::StayInHandoff { .. }
+                    | AppEvent::PendingHandoffConsumed { .. }
+                    | AppEvent::AdvanceAutomaticHandoffPlanning { .. }
                     | AppEvent::FatalExitRequest(_)
             )
         {
@@ -66,6 +71,7 @@ impl App {
             | AppEvent::PluginMentionsLoaded { ref cwd, .. }
                 if cwds_differ(cwd, self.config.cwd.as_path()) => {}
             AppEvent::NewSession { name } => {
+                self.discard_pending_handoff_for_current_thread();
                 self.start_fresh_session_with_summary_hint(
                     tui, app_server, /*session_start_source*/ None,
                     /*initial_user_message*/ None, name,
@@ -198,6 +204,7 @@ impl App {
                 self.chat_widget.copy_selection(text, label);
             }
             AppEvent::ClearUi { name } => {
+                self.discard_pending_handoff_for_current_thread();
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
 
@@ -209,6 +216,20 @@ impl App {
                     name,
                 )
                 .await;
+            }
+            AppEvent::ConfirmNewSessionWithPendingHandoff { name } => {
+                let confirmation_shown = if self.chat_widget.has_misalignment_policy_violation() {
+                    self.chat_widget
+                        .confirm_misalignment_new_pending_handoff(name.clone())
+                } else {
+                    self.chat_widget.confirm_new_pending_handoff(name.clone())
+                };
+                if !confirmation_shown {
+                    self.app_event_tx.send(AppEvent::NewSession { name });
+                }
+            }
+            AppEvent::RestoreMisalignmentPrecaution => {
+                self.chat_widget.show_misalignment_policy_precaution();
             }
             AppEvent::RawOutputModeChanged { enabled } => {
                 self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
@@ -229,6 +250,61 @@ impl App {
                     /*new_thread_name*/ None,
                 )
                 .await;
+            }
+            AppEvent::StartHandoffTransfer {
+                source_thread_id,
+                generation,
+                plan,
+                disposition,
+                trigger,
+            } => {
+                self.start_handoff_transfer(
+                    tui,
+                    app_server,
+                    source_thread_id,
+                    generation,
+                    plan,
+                    disposition,
+                    trigger,
+                )
+                .await?;
+            }
+            AppEvent::StayInHandoff {
+                source_thread_id,
+                generation,
+                trigger,
+            } => {
+                if self.current_displayed_thread_id() == Some(source_thread_id)
+                    && self.chat_widget.is_current_handoff_source(source_thread_id)
+                {
+                    self.chat_widget.stay_in_handoff(generation, trigger);
+                }
+            }
+            AppEvent::PendingHandoffConsumed {
+                thread_id,
+                completion,
+            } => {
+                self.pending_handoffs.remove(&thread_id);
+                if let Some((trigger, disposition)) = completion {
+                    HandoffTelemetryEvent::Completion {
+                        trigger,
+                        disposition,
+                    }
+                    .record(&self.session_telemetry);
+                }
+                if self.chat_widget.thread_id() == Some(thread_id) {
+                    self.chat_widget.discard_pending_handoff();
+                }
+            }
+            AppEvent::AutomaticHandoffCandidate { thread_id } => {
+                self.maybe_start_automatic_handoff(thread_id).await;
+            }
+            AppEvent::AdvanceAutomaticHandoffPlanning {
+                source_thread_id,
+                generation,
+            } => {
+                self.maybe_advance_automatic_handoff_planning(source_thread_id, generation)
+                    .await;
             }
             AppEvent::OpenResumePicker => {
                 let picker_app_server = match crate::start_app_server_for_picker(
@@ -338,6 +414,10 @@ impl App {
                 return Ok(self.archive_current_thread(app_server).await);
             }
             AppEvent::DeleteCurrentThread => {
+                if let Some(thread_id) = self.chat_widget.thread_id() {
+                    self.handoff_passive_states.remove(&thread_id);
+                }
+                self.discard_pending_handoff_for_current_thread();
                 return Ok(self.delete_current_thread(app_server).await);
             }
             AppEvent::ForkCurrentSession { name } => {
@@ -379,6 +459,8 @@ impl App {
                             } else {
                                 None
                             };
+                            self.chat_widget
+                                .cancel_automatic_handoff_for_navigation();
                             self.shutdown_current_thread(app_server).await;
                             match self
                                 .replace_chat_widget_with_app_server_thread(
@@ -535,6 +617,8 @@ impl App {
                 };
                 match started {
                     Ok(forked) => {
+                        self.chat_widget
+                            .cancel_automatic_handoff_for_navigation();
                         self.shutdown_current_thread(app_server).await;
                         match self
                             .replace_chat_widget_with_app_server_thread(
@@ -844,6 +928,7 @@ impl App {
                     "D I F F".to_string(),
                     self.keymap.pager.clone(),
                 ));
+                self.chat_widget.set_app_overlay_active(/*active*/ true);
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenAppLink {
@@ -1638,6 +1723,7 @@ impl App {
                         self.chat_widget
                             .set_queue_autosend_suppressed(/*suppressed*/ false);
                         self.chat_widget.maybe_send_next_queued_input();
+                        self.chat_widget.request_automatic_handoff_check();
                     }
                 }
             }
@@ -2827,6 +2913,7 @@ impl App {
                         "P A T C H".to_string(),
                         self.keymap.pager.clone(),
                     ));
+                    self.chat_widget.set_app_overlay_active(/*active*/ true);
                 }
                 ApprovalRequest::Exec(request) => {
                     let _ = tui.enter_alt_screen();
@@ -2837,6 +2924,7 @@ impl App {
                         "E X E C".to_string(),
                         self.keymap.pager.clone(),
                     ));
+                    self.chat_widget.set_app_overlay_active(/*active*/ true);
                 }
                 ApprovalRequest::Permissions(request) => {
                     let _ = tui.enter_alt_screen();
@@ -2865,6 +2953,7 @@ impl App {
                         "P E R M I S S I O N S".to_string(),
                         self.keymap.pager.clone(),
                     ));
+                    self.chat_widget.set_app_overlay_active(/*active*/ true);
                 }
                 ApprovalRequest::McpElicitation(request) => {
                     let _ = tui.enter_alt_screen();
@@ -2879,6 +2968,7 @@ impl App {
                         "E L I C I T A T I O N".to_string(),
                         self.keymap.pager.clone(),
                     ));
+                    self.chat_widget.set_app_overlay_active(/*active*/ true);
                 }
             },
             AppEvent::StatusLineSetup {

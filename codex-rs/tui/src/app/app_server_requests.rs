@@ -94,6 +94,12 @@ impl PendingAppServerRequests {
         self.mcp_requests.clear();
     }
 
+    pub(super) fn has_pending_user_input(&self) -> bool {
+        self.user_inputs
+            .values()
+            .any(|requests| !requests.is_empty())
+    }
+
     pub(super) fn note_server_request(
         &mut self,
         request: &ServerRequest,

@@ -39,6 +39,7 @@ pub enum SlashCommand {
     Compact,
     Recap,
     Plan,
+    Handoff,
     Workflow,
     Config,
     Goal,
@@ -128,6 +129,7 @@ impl SlashCommand {
             }
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Plan => "switch to Plan mode",
+            SlashCommand::Handoff => "transfer work safely to a fresh session",
             SlashCommand::Workflow => "switch to Workflow mode or run workflow commands",
             SlashCommand::Config => "plan Codex configuration changes",
             SlashCommand::Goal => "set or view the goal for a long-running task",
@@ -170,6 +172,7 @@ impl SlashCommand {
                 | SlashCommand::Clear
                 | SlashCommand::Fork
                 | SlashCommand::Plan
+                | SlashCommand::Handoff
                 | SlashCommand::Workflow
                 | SlashCommand::Config
                 | SlashCommand::Goal
@@ -225,6 +228,7 @@ impl SlashCommand {
             | SlashCommand::Memories
             | SlashCommand::Import
             | SlashCommand::Plan
+            | SlashCommand::Handoff
             | SlashCommand::Workflow
             | SlashCommand::Config
             | SlashCommand::Cd

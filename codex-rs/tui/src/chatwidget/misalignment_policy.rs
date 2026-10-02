@@ -29,6 +29,7 @@ impl ChatWidget {
         }
 
         self.misalignment_policy_violation = true;
+        self.cancel_handoff_for_unsuccessful_turn(HandoffTelemetryReason::Misalignment);
         self.input_queue.clear();
         self.finalize_turn();
         self.refresh_pending_input_preview();
@@ -47,7 +48,9 @@ impl ChatWidget {
         let mut items = vec![
             SelectionItem {
                 name: "New chat".to_string(),
-                actions: vec![Box::new(|tx| tx.send(AppEvent::NewSession { name: None }))],
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::ConfirmNewSessionWithPendingHandoff { name: None });
+                })],
                 dismiss_on_select: true,
                 ..Default::default()
             },

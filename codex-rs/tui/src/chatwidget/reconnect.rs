@@ -26,6 +26,7 @@ impl ChatWidget {
             // comparing against partial history or automatically submitting it again.
             if input.user_turn_pending_start
                 && let Some(prompt) = input.safety_buffering_prompt.take()
+                && !input.recover_pending_handoff_submission(&prompt)
             {
                 input.queued_user_messages.push_front(prompt.into());
                 input
@@ -43,6 +44,7 @@ impl ChatWidget {
                 Some(input),
                 ThreadInputStateRestoreMode {
                     preserve_in_flight_turn: false,
+                    redisplay_pending_handoff: false,
                 },
             );
         }
