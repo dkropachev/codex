@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_core::context::guardian_model_context_item_is_bounded;
 use codex_extension_api::ExtensionMetrics;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
@@ -39,9 +40,11 @@ use super::CLASSIFICATION_TOKEN_USAGE_METRIC;
 use super::INITIAL_WEBSOCKET_CONNECTIONS;
 use super::LunaSampler;
 use super::LunaSamplerConfig;
+use super::LunaSamplerError;
 use super::LunaSamplingRequest;
 use super::MAX_SAMPLING_RETRIES;
 use super::MAX_WEBSOCKET_CONNECTIONS;
+use super::bounded_trusted_review_evidence_item;
 
 impl LunaSampler {
     /// Waits for warm sockets to enter the client pool, beyond the server handshake.
@@ -54,6 +57,40 @@ impl LunaSampler {
         .await?;
         Ok(())
     }
+}
+
+#[test]
+fn trusted_review_evidence_keeps_newest_reviews_within_item_limit() {
+    let reviews = (0..8)
+        .map(|index| format!("review-{index}:{}", "\\".repeat(2_800)))
+        .collect();
+
+    let item = bounded_trusted_review_evidence_item(reviews).expect("bounded review evidence");
+    assert!(guardian_model_context_item_is_bounded(&item));
+    let ResponseItem::Message { content, .. } = item else {
+        panic!("review evidence should be a message");
+    };
+    assert!(content.len() < 9, "oldest reviews should be dropped");
+    assert!(content.iter().all(|item| match item {
+        codex_protocol::models::ContentItem::InputText { text } => !text.starts_with("review-0:"),
+        _ => false,
+    }));
+    assert!(content.iter().any(|item| match item {
+        codex_protocol::models::ContentItem::InputText { text } => text.starts_with("review-7:"),
+        _ => false,
+    }));
+}
+
+#[tokio::test]
+async fn sampler_rejects_oversized_items_before_connecting() {
+    let sampler = LunaSampler::new(sampler_config("http://127.0.0.1:1/v1".to_owned()));
+    let mut request = sample_request("turn-1");
+    request.instructions = "x".repeat(50_000);
+
+    assert!(matches!(
+        sampler.sample(request).await,
+        Err(LunaSamplerError::InputTooLarge)
+    ));
 }
 
 fn assert_connection_metadata(

@@ -15,9 +15,12 @@ use super::transcript::TranscriptSource;
 use super::transcript::truncate_entry;
 
 pub(crate) const DEFAULT_MODEL_CONTEXT_ITEM_TOKENS: usize = 10_000;
-pub(crate) const DEFAULT_PARENT_COMPACTION_TOKENS: usize = 25_000;
+pub(crate) const DEFAULT_PARENT_COMPACTION_TOKENS: usize = 10_000;
 const MIN_MODEL_CONTEXT_ITEM_TOKENS: usize = 100;
 const MAX_MODEL_CONTEXT_ITEM_TOKENS: usize = 100_000;
+// Reserve room for the enclosing developer message, its ID, and content metadata.
+const MAX_CLASSIFIER_INSTRUCTION_TOKENS: usize = 9_936;
+const MAX_PARENT_COMPACTION_TOKENS: usize = 10_000;
 const DEFAULT_REVIEW_THRESHOLD: f64 = 0.5;
 const LEGACY_REVIEW_THRESHOLD: f64 = 0.8;
 const DEFAULT_MAX_TOOL_CALL_LAG: usize = 2;
@@ -39,8 +42,7 @@ pub(crate) struct GuardianV2Config {
     pub(crate) max_tool_call_lag: usize,
     pub(crate) reasoning_effort: ReasoningEffort,
     pub(crate) max_action_tokens: usize,
-    /// No truncation limit is applied unless local or model configuration supplies one.
-    pub(crate) max_classifier_instruction_tokens: Option<usize>,
+    pub(crate) max_classifier_instruction_tokens: usize,
     pub(crate) reuse_parent_compaction: bool,
     pub(crate) max_parent_compaction_tokens: usize,
     pub(crate) review_scope: GuardianV2ReviewScope,
@@ -169,15 +171,18 @@ impl GuardianV2Config {
             DEFAULT_MODEL_CONTEXT_ITEM_TOKENS,
             "max_action_tokens",
         )?;
-        let max_classifier_instruction_tokens = configured
-            .max_classifier_instruction_tokens
-            .map(|tokens| bounded_tokens(Some(tokens), tokens, "max_classifier_instruction_tokens"))
-            .transpose()?;
+        let max_classifier_instruction_tokens = bounded_tokens(
+            configured.max_classifier_instruction_tokens,
+            DEFAULT_MODEL_CONTEXT_ITEM_TOKENS,
+            "max_classifier_instruction_tokens",
+        )?
+        .min(MAX_CLASSIFIER_INSTRUCTION_TOKENS);
         let max_parent_compaction_tokens = bounded_tokens(
             configured.max_parent_compaction_tokens,
             DEFAULT_PARENT_COMPACTION_TOKENS,
             "max_parent_compaction_tokens",
-        )?;
+        )?
+        .min(MAX_PARENT_COMPACTION_TOKENS);
         let transcript_config = configured.transcript.as_ref();
         let max_message_entry_tokens = bounded_tokens(
             transcript_config.and_then(|transcript| transcript.max_message_entry_tokens),
@@ -298,10 +303,7 @@ impl GuardianV2Config {
         } else {
             format!("{instructions}\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}")
         };
-        match self.max_classifier_instruction_tokens {
-            Some(max_tokens) => truncate_entry(&instructions, max_tokens),
-            None => instructions,
-        }
+        truncate_entry(&instructions, self.max_classifier_instruction_tokens)
     }
 }
 
