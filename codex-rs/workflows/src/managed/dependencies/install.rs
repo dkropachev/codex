@@ -22,6 +22,10 @@ use super::bun::ManagedBunInstallLockfile;
 use super::bun::ManagedBunSandboxPreparation;
 use super::lockfile::ManagedBunLockfile;
 
+mod file;
+
+use file::validate_directory_component;
+
 /// Inputs whose paths and dependency classification are revalidated before materialization.
 pub(in crate::managed) struct ManagedDependencyMaterializationRequest<'a> {
     pub(in crate::managed) package: &'a crate::WorkflowPackage,
@@ -54,7 +58,7 @@ pub(in crate::managed) fn materialize_managed_dependencies(
     runtime: LocalSandboxRuntime<'_>,
 ) -> anyhow::Result<ManagedDependencyMaterializationOutcome> {
     materialize_with_executor(request, |plan, deadline, limits, cancelled| {
-        match plan.prepare(runtime)? {
+        match plan.prepare(&runtime)? {
             ManagedBunSandboxPreparation::Prepared(command) => Ok(ManagedBunExecution::Output(
                 command.run(deadline, limits, cancelled)?,
             )),
@@ -227,17 +231,6 @@ pub(super) fn ensure_regular_directory_tree(
     Ok(())
 }
 
-fn validate_directory_component(path: &Path, metadata: &fs::Metadata) -> anyhow::Result<()> {
-    if !metadata.is_dir() || metadata.file_type().is_symlink() || is_windows_reparse_point(metadata)
-    {
-        bail!(
-            "managed path component {} must be a regular directory without aliases",
-            path.display()
-        );
-    }
-    Ok(())
-}
-
 fn reject_existing_node_modules(path: &AbsolutePathBuf) -> anyhow::Result<()> {
     match fs::symlink_metadata(path.as_path()) {
         Ok(_) => bail!("managed workflow candidate already contains node_modules"),
@@ -293,19 +286,6 @@ fn remove_created_tree(path: &AbsolutePathBuf) -> anyhow::Result<()> {
     validate_directory_component(path.as_path(), &metadata)
         .context("refusing to follow replaced managed node_modules")?;
     fs::remove_dir_all(path.as_path()).context("failed to remove managed node_modules")
-}
-
-#[cfg(windows)]
-fn is_windows_reparse_point(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn is_windows_reparse_point(_metadata: &fs::Metadata) -> bool {
-    false
 }
 
 #[cfg(test)]

@@ -275,7 +275,7 @@ fn required_sandbox_preparation_never_falls_back_to_unrestricted() {
         plan.args.push(std::ffi::OsString::from_vec(vec![0xff]));
     }
     let outcome = plan
-        .prepare(LocalSandboxRuntime {
+        .prepare(&LocalSandboxRuntime {
             direct_spawn: SandboxDirectSpawnRuntime {
                 codex_home: &root,
                 windows_sandbox_wrapper_executable: None,
