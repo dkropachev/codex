@@ -150,6 +150,19 @@ async fn service_tier_commands_lowercase_catalog_names() {
 }
 
 #[tokio::test]
+async fn bundled_gpt_6_astra_fast_slash_command_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-6-astra")).await;
+    chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
+    chat.bottom_pane
+        .set_composer_text("/fa".to_string(), Vec::new(), Vec::new());
+
+    assert_chatwidget_snapshot!(
+        "bundled_gpt_6_astra_fast_slash_command",
+        render_bottom_popup(&chat, /*width*/ 80),
+    );
+}
+
+#[tokio::test]
 async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
