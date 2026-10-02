@@ -29,8 +29,12 @@ use crate::CompletionRequest;
 use crate::WorkflowManifest;
 
 mod process_tree;
+mod run_config;
 
 use process_tree::WorkflowProcessTree;
+pub use run_config::WORKFLOW_OUTPUT_MAX_BYTES;
+pub use run_config::WORKFLOW_OUTPUT_MIN_BYTES;
+pub use run_config::WorkflowRunConfig;
 
 /// JavaScript materialized into a run-private file for every workflow operation.
 ///
@@ -42,7 +46,6 @@ pub const WORKFLOW_CONTROL_PREFIX: &str = "\u{1e}CODEX_WORKFLOW_CONTROL ";
 pub const WORKFLOW_CONTROL_VERSION: u8 = 1;
 pub const MAX_WORKFLOW_CONTROL_FRAME_BYTES: usize = 16 * 1024;
 pub const MAX_WORKFLOW_CONTROL_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
-pub const WORKFLOW_OUTPUT_MAX_BYTES: usize = 8 * 1024;
 pub const MAX_WORKFLOW_COMPLETION_FRAME_BYTES: usize = WORKFLOW_OUTPUT_MAX_BYTES * 6 + 1_024;
 pub const MAX_WORKFLOW_RUN_FRAME_BYTES: usize = 1024 * 1024 + 1_024;
 pub const MAX_RUNNER_INPUT_BYTES: usize = 1024 * 1024;
@@ -108,8 +111,9 @@ impl RunnerOperation {
 
 /// Run-private files and bounded command-line arguments for the embedded runner.
 ///
-/// The source, payload, and expected manifest live in files so large workflow input never crosses
-/// platform command-line or environment-size limits. Keep this value alive until the child exits.
+/// The source, payload, expected manifest, and run configuration live in files so large workflow
+/// input never crosses platform command-line or environment-size limits. Keep this value alive
+/// until the child exits.
 pub struct PreparedRunner {
     _temp_dir: tempfile::TempDir,
     arguments: Vec<OsString>,
@@ -223,6 +227,26 @@ impl PreparedRunner {
         payload: Option<&str>,
         expected: Option<&WorkflowManifest>,
     ) -> anyhow::Result<Self> {
+        if operation == RunnerOperation::Run {
+            bail!("workflow run preparation requires a WorkflowRunConfig");
+        }
+        Self::new_with_run_config(operation, payload, expected, /*config*/ None)
+    }
+
+    pub fn new_run(
+        payload: Option<&str>,
+        expected: Option<&WorkflowManifest>,
+        config: WorkflowRunConfig,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_run_config(RunnerOperation::Run, payload, expected, Some(config))
+    }
+
+    fn new_with_run_config(
+        operation: RunnerOperation,
+        payload: Option<&str>,
+        expected: Option<&WorkflowManifest>,
+        config: Option<WorkflowRunConfig>,
+    ) -> anyhow::Result<Self> {
         let temp_dir = tempfile::tempdir().context("failed to create workflow runner directory")?;
         let runner_path = temp_dir.path().join("runner.mjs");
         fs::write(&runner_path, RUNNER_SOURCE)
@@ -242,6 +266,13 @@ impl PreparedRunner {
             "expected-manifest.json",
             expected.as_deref(),
         )?;
+        let config = config
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .context("failed to serialize workflow run configuration")?;
+        let config_path =
+            write_runner_value(temp_dir.path(), "run-config.json", config.as_deref())?;
         Ok(Self {
             _temp_dir: temp_dir,
             arguments: vec![
@@ -252,6 +283,7 @@ impl PreparedRunner {
                 OsString::from(operation.as_str()),
                 payload_path.into_os_string(),
                 expected_path.into_os_string(),
+                config_path.into_os_string(),
             ],
         })
     }
@@ -294,14 +326,22 @@ pub fn run_cli_workflow(
     workflow_dir: &Path,
     expected: &WorkflowManifest,
     input: &Value,
+    config: WorkflowRunConfig,
 ) -> anyhow::Result<ExitStatus> {
-    run_cli_workflow_cancellable(workflow_dir, expected, input, &AtomicBool::new(false))
+    run_cli_workflow_cancellable(
+        workflow_dir,
+        expected,
+        input,
+        config,
+        &AtomicBool::new(false),
+    )
 }
 
 pub fn run_cli_workflow_cancellable(
     workflow_dir: &Path,
     expected: &WorkflowManifest,
     input: &Value,
+    config: WorkflowRunConfig,
     cancelled: &AtomicBool,
 ) -> anyhow::Result<ExitStatus> {
     let mut stdout = std::io::stdout().lock();
@@ -310,6 +350,7 @@ pub fn run_cli_workflow_cancellable(
         workflow_dir,
         expected,
         input,
+        config,
         &mut stdout,
         Some(cancelled),
     )
@@ -320,6 +361,7 @@ fn run_cli_workflow_with_bun(
     workflow_dir: &Path,
     expected: &WorkflowManifest,
     input: &Value,
+    config: WorkflowRunConfig,
     markdown_writer: &mut impl Write,
     cancelled: Option<&AtomicBool>,
 ) -> anyhow::Result<ExitStatus> {
@@ -333,7 +375,7 @@ fn run_cli_workflow_with_bun(
     if payload.len() > MAX_RUNNER_INPUT_BYTES {
         bail!("workflow input exceeded {MAX_RUNNER_INPUT_BYTES} bytes");
     }
-    let prepared = PreparedRunner::new(RunnerOperation::Run, Some(&payload), Some(expected))?;
+    let prepared = PreparedRunner::new_run(Some(&payload), Some(expected), config)?;
     let control_dir = tempfile::tempdir().context("failed to create workflow control directory")?;
     let control_path = control_dir.path().join("control.jsonl");
     let control_file = fs::OpenOptions::new()
@@ -500,7 +542,8 @@ fn run_cli_workflow_with_bun(
                             "workflow completion frame exceeded {MAX_WORKFLOW_COMPLETION_FRAME_BYTES} bytes"
                         );
                     }
-                    let markdown = crate::parse_completion(payload).map_err(anyhow::Error::msg)?;
+                    let markdown =
+                        crate::parse_completion(payload, config).map_err(anyhow::Error::msg)?;
                     let response = WorkflowControlResponse {
                         v: WORKFLOW_CONTROL_VERSION,
                         id: frame.id,

@@ -10,6 +10,7 @@ use serde_json::json;
 
 use super::*;
 use crate::runner::WORKFLOW_CONTROL_VERSION;
+use crate::runner::WorkflowRunConfig;
 
 fn option(label: &str) -> RequestUserInputQuestionOption {
     RequestUserInputQuestionOption {
@@ -316,7 +317,7 @@ fn request_ids_are_not_confused_with_the_host_enforced_request_count() {
 
 #[test]
 fn completion_frame_preserves_escaped_markdown_within_output_cap() {
-    let markdown = "\"\n".repeat(3_000);
+    let markdown = "\"\n".repeat(10_000);
     let payload = json!({
         "v": WORKFLOW_CONTROL_VERSION,
         "id": 0,
@@ -328,8 +329,35 @@ fn completion_frame_preserves_escaped_markdown_within_output_cap() {
     assert!(payload.len() > crate::runner::WORKFLOW_OUTPUT_MAX_BYTES);
     assert!(markdown.len() <= crate::runner::WORKFLOW_OUTPUT_MAX_BYTES);
     assert_eq!(
-        parse_completion(&payload).expect("completion frame should parse"),
+        parse_completion(&payload, WorkflowRunConfig::default())
+            .expect("completion frame should parse"),
         markdown
+    );
+}
+
+#[test]
+fn completion_frame_enforces_the_per_run_output_limit() {
+    let config = WorkflowRunConfig::new(/*output_max_bytes*/ 64).expect("valid limit");
+    let frame = |markdown: String| {
+        json!({
+            "v": WORKFLOW_CONTROL_VERSION,
+            "id": 0,
+            "method": "complete",
+            "params": { "markdown": markdown },
+        })
+        .to_string()
+    };
+
+    let at_limit = "é".repeat(32);
+    assert_eq!(
+        parse_completion(&frame(at_limit.clone()), config)
+            .expect("exact-boundary completion should parse"),
+        at_limit
+    );
+    assert_eq!(
+        parse_completion(&frame(format!("{at_limit}x")), config)
+            .expect_err("forged oversized completion should be rejected"),
+        "workflow markdown exceeded 64 bytes"
     );
 }
 

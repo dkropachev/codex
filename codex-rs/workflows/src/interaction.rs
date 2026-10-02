@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::runner::MAX_WORKFLOW_CONTROL_FRAME_BYTES;
 use crate::runner::WORKFLOW_CONTROL_VERSION;
-use crate::runner::WORKFLOW_OUTPUT_MAX_BYTES;
+use crate::runner::WorkflowRunConfig;
 
 pub(super) const MAX_WORKFLOW_QUESTION_HEADER_CHARS: usize = 12;
 pub(super) const MAX_WORKFLOW_OPTIONS: usize = 10;
@@ -46,7 +46,7 @@ struct WorkflowCompletionParams {
     markdown: String,
 }
 
-pub fn parse_completion(payload: &str) -> Result<String, String> {
+pub fn parse_completion(payload: &str, config: WorkflowRunConfig) -> Result<String, String> {
     let completion = serde_json::from_str::<WorkflowCompletion>(payload)
         .map_err(|err| format!("invalid workflow completion frame: {err}"))?;
     if completion.v != WORKFLOW_CONTROL_VERSION
@@ -55,9 +55,10 @@ pub fn parse_completion(payload: &str) -> Result<String, String> {
     {
         return Err("invalid workflow completion frame header".to_string());
     }
-    if completion.params.markdown.len() > WORKFLOW_OUTPUT_MAX_BYTES {
+    let output_max_bytes = config.output_max_bytes();
+    if completion.params.markdown.len() > output_max_bytes {
         return Err(format!(
-            "workflow markdown exceeded {WORKFLOW_OUTPUT_MAX_BYTES} bytes"
+            "workflow markdown exceeded {output_max_bytes} bytes"
         ));
     }
     Ok(completion.params.markdown)

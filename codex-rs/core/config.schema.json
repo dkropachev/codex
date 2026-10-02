@@ -6430,6 +6430,20 @@
         }
       ]
     },
+    "WorkflowsToml": {
+      "additionalProperties": false,
+      "description": "Workflow execution settings loaded from config.toml.",
+      "properties": {
+        "output_max_bytes": {
+          "description": "Maximum bytes retained from formatted workflow markdown output.",
+          "format": "uint",
+          "maximum": 32768.0,
+          "minimum": 64.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "WorkspaceRootsToml": {
       "type": "object"
     }
@@ -7560,6 +7574,14 @@
       ],
       "default": null,
       "description": "Windows-specific configuration."
+    },
+    "workflows": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/WorkflowsToml"
+        }
+      ],
+      "description": "Workflow execution settings."
     }
   },
   "title": "ConfigToml",

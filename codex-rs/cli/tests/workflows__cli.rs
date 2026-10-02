@@ -14,6 +14,7 @@ struct FakeBun {
     bin_dir: TempDir,
     capture_cwd: PathBuf,
     capture_input: PathBuf,
+    capture_run_config: PathBuf,
 }
 
 impl FakeBun {
@@ -24,6 +25,7 @@ impl FakeBun {
         let bin_dir = TempDir::new()?;
         let capture_cwd = codex_home.join("captured-cwd.txt");
         let capture_input = codex_home.join("captured-input.json");
+        let capture_run_config = codex_home.join("captured-run-config.json");
         let fake_bun = bin_dir.path().join("bun");
         fs::write(
             &fake_bun,
@@ -44,6 +46,7 @@ if [ "${2:-}" = "scan" ]; then
 fi
 if [ "${2:-}" = "run" ]; then
   cat "${3:?}" > "$CODEX_TEST_WORKFLOW_INPUT"
+  cat "${5:?}" > "$CODEX_TEST_WORKFLOW_RUN_CONFIG"
   printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{"v":1,"id":1,"method":"contract","params":{"inputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true},"outputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true}}}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
   IFS= read -r _response
   printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{"v":1,"id":2,"method":"validateOutput","params":{"output":{}}}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
@@ -61,6 +64,7 @@ fi
             bin_dir,
             capture_cwd,
             capture_input,
+            capture_run_config,
         })
     }
 
@@ -72,7 +76,8 @@ fi
         )?;
         cmd.env("PATH", path)
             .env("CODEX_TEST_WORKFLOW_CWD", &self.capture_cwd)
-            .env("CODEX_TEST_WORKFLOW_INPUT", &self.capture_input);
+            .env("CODEX_TEST_WORKFLOW_INPUT", &self.capture_input)
+            .env("CODEX_TEST_WORKFLOW_RUN_CONFIG", &self.capture_run_config);
         Ok(())
     }
 
@@ -83,6 +88,12 @@ fi
     fn captured_workflow_input(&self) -> Result<Value> {
         Ok(serde_json::from_str(&fs::read_to_string(
             &self.capture_input,
+        )?)?)
+    }
+
+    fn captured_run_config(&self) -> Result<Value> {
+        Ok(serde_json::from_str(&fs::read_to_string(
+            &self.capture_run_config,
         )?)?)
     }
 
@@ -497,6 +508,62 @@ fn workflow_run_invokes_bun_with_structured_input() -> Result<()> {
             "maxCount": 3,
             "workingDirectory": existing_path_display(project.path())?,
         })
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn workflow_run_passes_the_effective_output_limit_to_bun() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let project = TempDir::new()?;
+    let project_key = project.path().to_string_lossy().replace('\\', "\\\\");
+    fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"[features]
+workflows = true
+
+[workflows]
+output_max_bytes = 128
+
+[projects."{project_key}"]
+trust_level = "trusted"
+"#,
+        ),
+    )?;
+    scaffold_canonical_workflow(
+        codex_home.path(),
+        project.path(),
+        "configured-output",
+        "configured-output",
+    )?;
+    let fake_bun = FakeBun::new(codex_home.path())?;
+
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    fake_bun.apply_to_command(&mut cmd)?;
+    cmd.args(["workflow", "run", "configured-output"])
+        .assert()
+        .success();
+    assert_eq!(
+        fake_bun.captured_run_config()?,
+        json!({ "outputMaxBytes": 128 })
+    );
+
+    fs::create_dir(project.path().join(".codex"))?;
+    fs::write(
+        project.path().join(".codex/config.toml"),
+        "[workflows]\noutput_max_bytes = 64\n",
+    )?;
+    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    fake_bun.apply_to_command(&mut cmd)?;
+    cmd.args(["workflow", "run", "configured-output"])
+        .assert()
+        .success();
+    assert_eq!(
+        fake_bun.captured_run_config()?,
+        json!({ "outputMaxBytes": 64 })
     );
 
     Ok(())

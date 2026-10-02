@@ -7,11 +7,10 @@ use codex_workflows::normalize_workflow_input_with_working_directory;
 use codex_workflows::runner::MAX_WORKFLOW_COMPLETION_FRAME_BYTES;
 use codex_workflows::runner::MAX_WORKFLOW_CONTROL_RESPONSE_BYTES;
 use codex_workflows::runner::PreparedRunner;
-use codex_workflows::runner::RunnerOperation;
 use codex_workflows::runner::WORKFLOW_CONTROL_PREFIX;
 use codex_workflows::runner::WORKFLOW_CONTROL_VERSION;
-use codex_workflows::runner::WORKFLOW_OUTPUT_MAX_BYTES;
 use codex_workflows::runner::WorkflowControlResponse;
+use codex_workflows::runner::WorkflowRunConfig;
 use codex_workflows::runner::encode_control_response;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -39,6 +38,9 @@ const RUNNER_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 10);
 #[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
 async fn bun_runner_serializes_concurrent_user_input_requests() {
     let bun = which::which("bun").expect("workflow runtime tests require Bun");
+    let output_max_bytes = 4 * 1024;
+    let run_config =
+        WorkflowRunConfig::new(output_max_bytes).expect("custom output limit should be valid");
 
     let temp_dir = tempfile::tempdir().expect("create workflow directory");
     let source_dir = temp_dir.path().join("src");
@@ -109,9 +111,8 @@ export default {
         .expect("create control file");
     let control_reader = control_file.try_clone().expect("clone control file");
 
-    let prepared_runner =
-        PreparedRunner::new(RunnerOperation::Run, Some("{}"), /*expected*/ None)
-            .expect("prepare workflow runner");
+    let prepared_runner = PreparedRunner::new_run(Some("{}"), /*expected*/ None, run_config)
+        .expect("prepare workflow runner");
     let mut child = Command::new(&bun)
         .current_dir(temp_dir.path())
         .args(prepared_runner.arguments())
@@ -230,9 +231,11 @@ export default {
     let markdown = completion["params"]["markdown"]
         .as_str()
         .expect("completion markdown");
-    assert!(markdown.len() <= WORKFLOW_OUTPUT_MAX_BYTES);
+    // The byte cutoff lands inside a two-byte `é`, so the UTF-8-safe prefix is one byte shorter.
+    assert_eq!(markdown.len(), output_max_bytes - 1);
+    assert!(markdown.is_char_boundary(markdown.len()));
     assert!(markdown.ends_with(&format!(
-        "[Workflow output truncated to {WORKFLOW_OUTPUT_MAX_BYTES} bytes.]"
+        "[Workflow output truncated to {output_max_bytes} bytes.]"
     )));
     let (json, _) = markdown
         .split_once('\u{fffd}')
@@ -301,9 +304,12 @@ export default {
         .open(&control_path)
         .expect("create control file");
     let control_reader = control_file.try_clone().expect("clone control file");
-    let prepared_runner =
-        PreparedRunner::new(RunnerOperation::Run, Some("{}"), /*expected*/ None)
-            .expect("prepare workflow runner");
+    let prepared_runner = PreparedRunner::new_run(
+        Some("{}"),
+        /*expected*/ None,
+        WorkflowRunConfig::default(),
+    )
+    .expect("prepare workflow runner");
     let mut child = Command::new(&bun)
         .current_dir(temp_dir.path())
         .args(prepared_runner.arguments())
@@ -428,13 +434,35 @@ fn hosted_progress_frames_are_accepted_without_becoming_input_requests() {
     };
 
     assert!(matches!(
-        decode_workflow_control_event(&line),
+        decode_workflow_control_event(&line, WorkflowRunConfig::default()),
         Ok(WorkflowControlEvent::Progress)
     ));
 }
 
 #[test]
 fn hosted_completion_frames_enforce_frame_and_markdown_bounds() {
+    let custom_output_max_bytes = 128;
+    let run_config = WorkflowRunConfig::new(custom_output_max_bytes)
+        .expect("custom workflow output limit should be valid");
+    let boundary_markdown = "x".repeat(custom_output_max_bytes);
+    let boundary = BoundedLine {
+        bytes: format!(
+            "{WORKFLOW_CONTROL_PREFIX}{}",
+            json!({
+                "v": WORKFLOW_CONTROL_VERSION,
+                "id": 0,
+                "method": "complete",
+                "params": { "markdown": boundary_markdown },
+            })
+        )
+        .into_bytes(),
+        oversized: false,
+    };
+    assert!(matches!(
+        decode_workflow_control_event(&boundary, run_config),
+        Ok(WorkflowControlEvent::Completion(markdown)) if markdown == boundary_markdown
+    ));
+
     let oversized_markdown = BoundedLine {
         bytes: format!(
             "{WORKFLOW_CONTROL_PREFIX}{}",
@@ -442,18 +470,18 @@ fn hosted_completion_frames_enforce_frame_and_markdown_bounds() {
                 "v": WORKFLOW_CONTROL_VERSION,
                 "id": 0,
                 "method": "complete",
-                "params": { "markdown": "x".repeat(WORKFLOW_OUTPUT_MAX_BYTES + 1) },
+                "params": { "markdown": "x".repeat(custom_output_max_bytes + 1) },
             })
         )
         .into_bytes(),
         oversized: false,
     };
-    let Err(error) = decode_workflow_control_event(&oversized_markdown) else {
+    let Err(error) = decode_workflow_control_event(&oversized_markdown, run_config) else {
         panic!("oversized markdown must be rejected");
     };
     assert_eq!(
         error,
-        format!("workflow markdown exceeded {WORKFLOW_OUTPUT_MAX_BYTES} bytes")
+        format!("workflow markdown exceeded {custom_output_max_bytes} bytes")
     );
 
     let oversized_frame = BoundedLine {
@@ -471,7 +499,8 @@ fn hosted_completion_frames_enforce_frame_and_markdown_bounds() {
         .into_bytes(),
         oversized: false,
     };
-    let Err(error) = decode_workflow_control_event(&oversized_frame) else {
+    let Err(error) = decode_workflow_control_event(&oversized_frame, WorkflowRunConfig::default())
+    else {
         panic!("oversized completion frame must be rejected");
     };
     assert_eq!(

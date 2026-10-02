@@ -306,6 +306,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         tool_registry: Default::default(),
         code_mode: Default::default(),
         background_terminal_max_timeout: 300_000,
+        workflow_output_max_bytes: 32 * 1024,
         ghost_snapshot: GhostSnapshotConfig::default(),
         multi_agent_v2: MultiAgentV2Config::default(),
         max_goal_token_budget: None,

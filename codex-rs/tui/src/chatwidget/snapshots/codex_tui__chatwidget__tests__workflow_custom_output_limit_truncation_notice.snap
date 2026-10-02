@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/workflows__slash_commands.rs
+expression: "lines_to_single_string(&cells[0])"
+---
+• # Workflow report
+  
+  Partial output.
+  
+  [Workflow output truncated to 128 bytes.]
