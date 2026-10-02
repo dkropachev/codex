@@ -7,6 +7,7 @@ use anyhow::Context;
 use anyhow::bail;
 
 mod bun;
+mod install;
 mod lockfile;
 
 pub(in crate::managed) use lockfile::ManagedBunLockfile;

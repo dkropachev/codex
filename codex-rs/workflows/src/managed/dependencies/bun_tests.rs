@@ -211,7 +211,7 @@ fn plans_install_and_inspection_with_exact_argv_environment_and_permissions() {
             NetworkSandboxPolicy::Enabled,
             vec![
                 ("root".into(), FileSystemAccessMode::Read),
-                path_access(&candidate, FileSystemAccessMode::Write),
+                path_access(&candidate.join("node_modules"), FileSystemAccessMode::Write),
                 path_access(&environment.cache_dir, FileSystemAccessMode::Write),
                 path_access(&environment.temp_dir, FileSystemAccessMode::Write),
                 path_access(&environment.home_dir, FileSystemAccessMode::Write),
