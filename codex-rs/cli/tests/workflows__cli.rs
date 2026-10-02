@@ -518,7 +518,8 @@ fn workflow_run_invokes_bun_with_structured_input() -> Result<()> {
 fn workflow_run_passes_the_effective_output_limit_to_bun() -> Result<()> {
     let codex_home = TempDir::new()?;
     let project = TempDir::new()?;
-    let project_key = project.path().to_string_lossy().replace('\\', "\\\\");
+    let project_path = project.path().canonicalize()?;
+    let project_key = project_path.to_string_lossy().replace('\\', "\\\\");
     fs::write(
         codex_home.path().join("config.toml"),
         format!(
@@ -535,13 +536,13 @@ trust_level = "trusted"
     )?;
     scaffold_canonical_workflow(
         codex_home.path(),
-        project.path(),
+        &project_path,
         "configured-output",
         "configured-output",
     )?;
     let fake_bun = FakeBun::new(codex_home.path())?;
 
-    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    let mut cmd = codex_command(codex_home.path(), &project_path)?;
     fake_bun.apply_to_command(&mut cmd)?;
     cmd.args(["workflow", "run", "configured-output"])
         .assert()
@@ -551,12 +552,12 @@ trust_level = "trusted"
         json!({ "outputMaxBytes": 128 })
     );
 
-    fs::create_dir(project.path().join(".codex"))?;
+    fs::create_dir(project_path.join(".codex"))?;
     fs::write(
-        project.path().join(".codex/config.toml"),
+        project_path.join(".codex/config.toml"),
         "[workflows]\noutput_max_bytes = 64\n",
     )?;
-    let mut cmd = codex_command(codex_home.path(), project.path())?;
+    let mut cmd = codex_command(codex_home.path(), &project_path)?;
     fake_bun.apply_to_command(&mut cmd)?;
     cmd.args(["workflow", "run", "configured-output"])
         .assert()
