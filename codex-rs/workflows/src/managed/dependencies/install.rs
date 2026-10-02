@@ -18,13 +18,88 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::ValidatedManagedDependencies;
 use super::bun::ManagedBunCommandPlan;
+use super::bun::ManagedBunEnvironment;
 use super::bun::ManagedBunInstallLockfile;
 use super::bun::ManagedBunSandboxPreparation;
+use super::bun::PreparedManagedBunCommand;
 use super::lockfile::ManagedBunLockfile;
 
 mod file;
 
 use file::validate_directory_component;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ManagedBunPhase {
+    Install,
+}
+
+enum ManagedBunPreparation<Prepared> {
+    Prepared(Prepared),
+    SandboxUnavailable(LocalSandboxUnavailableReason),
+}
+
+/// Separates sandbox preparation from bounded Bun execution.
+///
+/// Production implementations prepare commands through the local sandbox runtime. Tests use a
+/// private fake to assert that each accepted plan is prepared before its prepared value is consumed
+/// by exactly one `run` call. Implementations must return sandbox unavailability as a typed
+/// preparation outcome; execution failures remain errors.
+trait ManagedBunExecutor {
+    type Prepared;
+
+    /// Prepares `plan` for `phase` without executing it.
+    fn prepare(
+        &mut self,
+        phase: ManagedBunPhase,
+        plan: ManagedBunCommandPlan,
+    ) -> anyhow::Result<ManagedBunPreparation<Self::Prepared>>;
+
+    /// Consumes one successfully prepared command and runs it with the supplied bounds.
+    fn run(
+        &mut self,
+        phase: ManagedBunPhase,
+        prepared: Self::Prepared,
+        environment: &ManagedBunEnvironment,
+        deadline: crate::runner::CommandDeadline,
+        limits: crate::runner::CommandOutputLimits,
+        cancelled: Option<&AtomicBool>,
+    ) -> anyhow::Result<crate::runner::BoundedCommandOutput>;
+}
+
+struct LocalManagedBunExecutor<'a, 'runtime> {
+    runtime: &'a LocalSandboxRuntime<'runtime>,
+}
+
+impl ManagedBunExecutor for LocalManagedBunExecutor<'_, '_> {
+    type Prepared = PreparedManagedBunCommand;
+
+    fn prepare(
+        &mut self,
+        _phase: ManagedBunPhase,
+        plan: ManagedBunCommandPlan,
+    ) -> anyhow::Result<ManagedBunPreparation<Self::Prepared>> {
+        Ok(match plan.prepare(self.runtime)? {
+            ManagedBunSandboxPreparation::Prepared(command) => {
+                ManagedBunPreparation::Prepared(command)
+            }
+            ManagedBunSandboxPreparation::Unavailable(reason) => {
+                ManagedBunPreparation::SandboxUnavailable(reason)
+            }
+        })
+    }
+
+    fn run(
+        &mut self,
+        _phase: ManagedBunPhase,
+        prepared: Self::Prepared,
+        _environment: &ManagedBunEnvironment,
+        deadline: crate::runner::CommandDeadline,
+        limits: crate::runner::CommandOutputLimits,
+        cancelled: Option<&AtomicBool>,
+    ) -> anyhow::Result<crate::runner::BoundedCommandOutput> {
+        prepared.run(deadline, limits, cancelled)
+    }
+}
 
 /// Inputs whose paths and dependency classification are revalidated before materialization.
 pub(in crate::managed) struct ManagedDependencyMaterializationRequest<'a> {
@@ -43,11 +118,6 @@ pub(in crate::managed) enum ManagedDependencyMaterializationOutcome {
     SandboxUnavailable(LocalSandboxUnavailableReason),
 }
 
-enum ManagedBunExecution {
-    Output(crate::runner::BoundedCommandOutput),
-    SandboxUnavailable(LocalSandboxUnavailableReason),
-}
-
 /// Materializes text-lock dependencies exactly once in a mandatory sandbox.
 ///
 /// This rereads package manifests and the lockfile, but intentionally does not establish candidate
@@ -57,26 +127,12 @@ pub(in crate::managed) fn materialize_managed_dependencies(
     request: ManagedDependencyMaterializationRequest<'_>,
     runtime: LocalSandboxRuntime<'_>,
 ) -> anyhow::Result<ManagedDependencyMaterializationOutcome> {
-    materialize_with_executor(request, |plan, deadline, limits, cancelled| {
-        match plan.prepare(&runtime)? {
-            ManagedBunSandboxPreparation::Prepared(command) => Ok(ManagedBunExecution::Output(
-                command.run(deadline, limits, cancelled)?,
-            )),
-            ManagedBunSandboxPreparation::Unavailable(reason) => {
-                Ok(ManagedBunExecution::SandboxUnavailable(reason))
-            }
-        }
-    })
+    materialize_with_executor(request, &mut LocalManagedBunExecutor { runtime: &runtime })
 }
 
-fn materialize_with_executor(
+fn materialize_with_executor<E: ManagedBunExecutor>(
     request: ManagedDependencyMaterializationRequest<'_>,
-    execute: impl FnOnce(
-        ManagedBunCommandPlan,
-        crate::runner::CommandDeadline,
-        crate::runner::CommandOutputLimits,
-        Option<&AtomicBool>,
-    ) -> anyhow::Result<ManagedBunExecution>,
+    executor: &mut E,
 ) -> anyhow::Result<ManagedDependencyMaterializationOutcome> {
     request.deadline.check(request.cancelled)?;
     let fresh_package = crate::WorkflowPackage::load(&request.package.root)
@@ -122,29 +178,36 @@ fn materialize_with_executor(
         )
     })?;
     let mut cleanup = CreatedNodeModules::new(node_modules);
-    let execution = match execute(plan, request.deadline, request.limits, request.cancelled) {
-        Ok(execution) => execution,
-        Err(error) => return Err(cleanup.with_original(error)),
-    };
-    match execution {
-        ManagedBunExecution::SandboxUnavailable(reason) => {
+    let prepared = match executor.prepare(ManagedBunPhase::Install, plan) {
+        Ok(ManagedBunPreparation::Prepared(prepared)) => prepared,
+        Ok(ManagedBunPreparation::SandboxUnavailable(reason)) => {
             if let Err(cleanup_error) = cleanup.cleanup() {
                 bail!(
                     "managed Bun sandbox was unavailable ({reason:?}); cleanup also failed: {cleanup_error:#}"
                 );
             }
-            Ok(ManagedDependencyMaterializationOutcome::SandboxUnavailable(
+            return Ok(ManagedDependencyMaterializationOutcome::SandboxUnavailable(
                 reason,
-            ))
+            ));
         }
-        ManagedBunExecution::Output(output) => {
-            if let Err(error) = classify_output(&output) {
-                return Err(cleanup.with_original(error));
-            }
-            cleanup.preserve();
-            Ok(ManagedDependencyMaterializationOutcome::Materialized)
-        }
+        Err(error) => return Err(cleanup.with_original(error)),
+    };
+    let output = match executor.run(
+        ManagedBunPhase::Install,
+        prepared,
+        &environment,
+        request.deadline,
+        request.limits,
+        request.cancelled,
+    ) {
+        Ok(output) => output,
+        Err(error) => return Err(cleanup.with_original(error)),
+    };
+    if let Err(error) = classify_output(&output) {
+        return Err(cleanup.with_original(error));
     }
+    cleanup.preserve();
+    Ok(ManagedDependencyMaterializationOutcome::Materialized)
 }
 
 fn classify_output(output: &crate::runner::BoundedCommandOutput) -> anyhow::Result<()> {

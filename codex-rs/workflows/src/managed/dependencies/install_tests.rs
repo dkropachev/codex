@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::fs;
 use std::path::Path;
 use std::process::ExitStatus;
@@ -99,14 +98,126 @@ fn absolute(path: &Path) -> AbsolutePathBuf {
     AbsolutePathBuf::from_absolute_path_checked(path).expect("absolute fixture path")
 }
 
-fn output(code: i32, stdout_oversized: bool, stderr_oversized: bool) -> ManagedBunExecution {
-    ManagedBunExecution::Output(crate::runner::BoundedCommandOutput {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FakeExecutorEvent {
+    Prepare(ManagedBunPhase),
+    Run(ManagedBunPhase),
+}
+
+enum FakePreparation {
+    Prepared,
+    SandboxUnavailable(LocalSandboxUnavailableReason),
+    Error(&'static str),
+}
+
+struct FakePrepared(ManagedBunCommandPlan);
+
+type FakeRun<'a> = Box<
+    dyn FnOnce(
+            &ManagedBunEnvironment,
+            crate::runner::CommandDeadline,
+            crate::runner::CommandOutputLimits,
+            Option<&AtomicBool>,
+        ) -> anyhow::Result<crate::runner::BoundedCommandOutput>
+        + 'a,
+>;
+
+struct FakeManagedBunExecutor<'a> {
+    preparation: Option<FakePreparation>,
+    run: Option<FakeRun<'a>>,
+    events: Vec<FakeExecutorEvent>,
+}
+
+impl<'a> FakeManagedBunExecutor<'a> {
+    fn successful() -> Self {
+        Self::output(output(
+            /*code*/ 0, /*stdout_oversized*/ false, /*stderr_oversized*/ false,
+        ))
+    }
+
+    fn output(output: crate::runner::BoundedCommandOutput) -> Self {
+        Self::run_with(move |_, _, _, _| Ok(output))
+    }
+
+    fn unavailable(reason: LocalSandboxUnavailableReason) -> Self {
+        Self {
+            preparation: Some(FakePreparation::SandboxUnavailable(reason)),
+            run: None,
+            events: Vec::new(),
+        }
+    }
+
+    fn prepare_error(message: &'static str) -> Self {
+        Self {
+            preparation: Some(FakePreparation::Error(message)),
+            run: None,
+            events: Vec::new(),
+        }
+    }
+
+    fn run_with(
+        run: impl FnOnce(
+            &ManagedBunEnvironment,
+            crate::runner::CommandDeadline,
+            crate::runner::CommandOutputLimits,
+            Option<&AtomicBool>,
+        ) -> anyhow::Result<crate::runner::BoundedCommandOutput>
+        + 'a,
+    ) -> Self {
+        Self {
+            preparation: Some(FakePreparation::Prepared),
+            run: Some(Box::new(run)),
+            events: Vec::new(),
+        }
+    }
+}
+
+impl ManagedBunExecutor for FakeManagedBunExecutor<'_> {
+    type Prepared = FakePrepared;
+
+    fn prepare(
+        &mut self,
+        phase: ManagedBunPhase,
+        plan: ManagedBunCommandPlan,
+    ) -> anyhow::Result<ManagedBunPreparation<Self::Prepared>> {
+        self.events.push(FakeExecutorEvent::Prepare(phase));
+        match self.preparation.take().expect("prepare exactly once") {
+            FakePreparation::Prepared => Ok(ManagedBunPreparation::Prepared(FakePrepared(plan))),
+            FakePreparation::SandboxUnavailable(reason) => {
+                Ok(ManagedBunPreparation::SandboxUnavailable(reason))
+            }
+            FakePreparation::Error(message) => Err(anyhow::anyhow!(message)),
+        }
+    }
+
+    fn run(
+        &mut self,
+        phase: ManagedBunPhase,
+        prepared: Self::Prepared,
+        environment: &ManagedBunEnvironment,
+        deadline: crate::runner::CommandDeadline,
+        limits: crate::runner::CommandOutputLimits,
+        cancelled: Option<&AtomicBool>,
+    ) -> anyhow::Result<crate::runner::BoundedCommandOutput> {
+        self.events.push(FakeExecutorEvent::Run(phase));
+        let FakePrepared(plan) = prepared;
+        drop(plan);
+        self.run.take().expect("run exactly once")(environment, deadline, limits, cancelled)
+    }
+}
+
+fn output(
+    code: i32,
+    stdout_oversized: bool,
+    stderr_oversized: bool,
+) -> crate::runner::BoundedCommandOutput {
+    crate::runner::BoundedCommandOutput {
         status: exit_status(code),
         stdout: b"stdout-secret".to_vec(),
         stderr: b"stderr-secret".to_vec(),
         stdout_oversized,
         stderr_oversized,
-    })
+    }
 }
 
 #[cfg(unix)]
@@ -125,9 +236,8 @@ fn exit_status(code: i32) -> ExitStatus {
 fn dependency_classification_controls_zero_mutation_and_exactly_one_install() {
     for lock in [Lock::None, Lock::Binary] {
         let fixture = Fixture::new(lock);
-        let result = materialize_with_executor(fixture.normal_request(), |_, _, _, _| {
-            panic!("non-text package executed Bun")
-        });
+        let mut executor = FakeManagedBunExecutor::successful();
+        let result = materialize_with_executor(fixture.normal_request(), &mut executor);
         match lock {
             Lock::None => assert_eq!(
                 result.expect("dependency-free package"),
@@ -141,39 +251,46 @@ fn dependency_classification_controls_zero_mutation_and_exactly_one_install() {
             ),
             Lock::Text => unreachable!(),
         }
+        assert_eq!(executor.events, []);
         assert!(!fixture.management.as_path().exists());
         assert!(!fixture.node_modules().exists());
     }
 
     let fixture = Fixture::new(Lock::Text);
-    let calls = Cell::new(0);
-    let outcome = materialize_with_executor(fixture.normal_request(), |plan, _, limits, cancel| {
-        calls.set(calls.get() + 1);
-        drop(plan);
+    let mut executor = FakeManagedBunExecutor::run_with(|_, _, limits, cancel| {
         assert_eq!(limits.stdout_bytes, 32);
         assert!(cancel.is_none());
         assert!(fixture.node_modules().is_dir());
         Ok(output(
             /*code*/ 0, /*stdout_oversized*/ false, /*stderr_oversized*/ false,
         ))
-    })
-    .expect("install text lock");
+    });
+    let outcome = materialize_with_executor(fixture.normal_request(), &mut executor)
+        .expect("install text lock");
     assert_eq!(
         outcome,
         ManagedDependencyMaterializationOutcome::Materialized
     );
-    assert_eq!(calls.get(), 1);
+    assert_eq!(
+        executor.events,
+        [
+            FakeExecutorEvent::Prepare(ManagedBunPhase::Install),
+            FakeExecutorEvent::Run(ManagedBunPhase::Install),
+        ]
+    );
     assert!(fixture.node_modules().is_dir());
 
     let cancelled = AtomicBool::new(true);
     for lock in [Lock::None, Lock::Binary] {
         let fixture = Fixture::new(lock);
+        let mut executor = FakeManagedBunExecutor::successful();
         let error = materialize_with_executor(
             fixture.request(&fixture.management, Some(&cancelled)),
-            |_, _, _, _| panic!("pre-cancelled package executed Bun"),
+            &mut executor,
         )
         .expect_err("cancel before dependency classification");
         assert!(error.to_string().contains("cancelled"));
+        assert_eq!(executor.events, []);
         assert!(!fixture.management.as_path().exists());
         assert!(!fixture.node_modules().exists());
     }
@@ -182,41 +299,53 @@ fn dependency_classification_controls_zero_mutation_and_exactly_one_install() {
 #[test]
 fn unavailable_errors_cancellation_and_partial_output_clean_up() {
     let fixture = Fixture::new(Lock::Text);
+    let mut executor =
+        FakeManagedBunExecutor::unavailable(LocalSandboxUnavailableReason::SelectionUnavailable);
     assert_eq!(
-        materialize_with_executor(fixture.normal_request(), |plan, _, _, _| {
-            drop(plan);
-            Ok(ManagedBunExecution::SandboxUnavailable(
-                LocalSandboxUnavailableReason::SelectionUnavailable,
-            ))
-        })
-        .expect("typed sandbox result"),
+        materialize_with_executor(fixture.normal_request(), &mut executor)
+            .expect("typed sandbox result"),
         ManagedDependencyMaterializationOutcome::SandboxUnavailable(
             LocalSandboxUnavailableReason::SelectionUnavailable
         )
     );
+    assert_eq!(
+        executor.events,
+        [FakeExecutorEvent::Prepare(ManagedBunPhase::Install)]
+    );
     assert!(!fixture.node_modules().exists());
+
+    let prepare_failed = Fixture::new(Lock::Text);
+    let mut executor = FakeManagedBunExecutor::prepare_error("sandbox preparation failed");
+    let error = materialize_with_executor(prepare_failed.normal_request(), &mut executor)
+        .expect_err("reject failed preparation");
+    assert!(error.to_string().contains("sandbox preparation failed"));
+    assert_eq!(
+        executor.events,
+        [FakeExecutorEvent::Prepare(ManagedBunPhase::Install)]
+    );
+    assert!(!prepare_failed.node_modules().exists());
 
     let failed = Fixture::new(Lock::Text);
     let node_modules = failed.node_modules();
-    let error = materialize_with_executor(failed.normal_request(), |plan, _, _, _| {
-        drop(plan);
+    let mut executor = FakeManagedBunExecutor::run_with(|_, _, _, _| {
         fs::create_dir_all(node_modules.join("partial/tree")).expect("write partial tree");
-        Err(anyhow::anyhow!("sandbox preparation failed"))
-    })
-    .expect_err("reject failed preparation");
-    assert!(error.to_string().contains("sandbox preparation failed"));
+        Err(anyhow::anyhow!("sandbox execution failed"))
+    });
+    let error = materialize_with_executor(failed.normal_request(), &mut executor)
+        .expect_err("reject failed execution");
+    assert!(error.to_string().contains("sandbox execution failed"));
     assert!(!node_modules.exists());
 
     let running = Fixture::new(Lock::Text);
     let cancelled = AtomicBool::new(false);
+    let mut executor = FakeManagedBunExecutor::run_with(|_, deadline, _, signal| {
+        cancelled.store(true, Ordering::Relaxed);
+        deadline.check(signal)?;
+        unreachable!()
+    });
     let result = materialize_with_executor(
         running.request(&running.management, Some(&cancelled)),
-        |plan, deadline, _, signal| {
-            drop(plan);
-            cancelled.store(true, Ordering::Relaxed);
-            deadline.check(signal)?;
-            unreachable!()
-        },
+        &mut executor,
     );
     assert!(
         result
@@ -228,9 +357,10 @@ fn unavailable_errors_cancellation_and_partial_output_clean_up() {
 
     let fixture = Fixture::new(Lock::Text);
     let cancelled = AtomicBool::new(true);
+    let mut executor = FakeManagedBunExecutor::successful();
     let result = materialize_with_executor(
         fixture.request(&fixture.management, Some(&cancelled)),
-        |_, _, _, _| panic!("pre-cancelled install executed"),
+        &mut executor,
     );
     assert!(
         result
@@ -238,6 +368,7 @@ fn unavailable_errors_cancellation_and_partial_output_clean_up() {
             .to_string()
             .contains("cancelled")
     );
+    assert_eq!(executor.events, []);
     assert!(!fixture.management.as_path().exists());
 }
 
@@ -249,13 +380,11 @@ fn bounded_output_failures_use_the_production_classifier_without_secrets() {
         (0, false, true, "stderr exceeded"),
     ] {
         let fixture = Fixture::new(Lock::Text);
-        let error = materialize_with_executor(fixture.normal_request(), |plan, _, _, _| {
-            drop(plan);
-            Ok(output(
-                code, /*stdout_oversized*/ stdout, /*stderr_oversized*/ stderr,
-            ))
-        })
-        .expect_err("reject bounded output");
+        let mut executor = FakeManagedBunExecutor::output(output(
+            code, /*stdout_oversized*/ stdout, /*stderr_oversized*/ stderr,
+        ));
+        let error = materialize_with_executor(fixture.normal_request(), &mut executor)
+            .expect_err("reject bounded output");
         let message = format!("{error:#}");
         assert!(message.contains(expected));
         assert!(!message.contains("stdout-secret") && !message.contains("stderr-secret"));
@@ -267,28 +396,30 @@ fn bounded_output_failures_use_the_production_classifier_without_secrets() {
 fn stale_existing_and_overlapping_candidates_fail_before_mutation() {
     let existing = Fixture::new(Lock::Text);
     fs::create_dir(existing.node_modules()).expect("create existing node_modules");
-    assert!(
-        materialize_with_executor(existing.normal_request(), |_, _, _, _| unreachable!()).is_err()
-    );
+    let mut executor = FakeManagedBunExecutor::successful();
+    assert!(materialize_with_executor(existing.normal_request(), &mut executor).is_err());
+    assert_eq!(executor.events, []);
     assert!(!existing.management.as_path().exists());
 
     let special = Fixture::new(Lock::Text);
     fs::write(special.management.as_path(), "not a directory").expect("write special root");
-    assert!(
-        materialize_with_executor(special.normal_request(), |_, _, _, _| unreachable!()).is_err()
-    );
+    let mut executor = FakeManagedBunExecutor::successful();
+    assert!(materialize_with_executor(special.normal_request(), &mut executor).is_err());
+    assert_eq!(executor.events, []);
     assert!(!special.management.join("bun").as_path().exists());
 
     for suffix in ["", "node_modules/management"] {
         let fixture = Fixture::new(Lock::Text);
         let management = absolute(&fixture.package.root.join(suffix));
+        let mut executor = FakeManagedBunExecutor::successful();
         assert!(
             materialize_with_executor(
                 fixture.request(&management, /*cancelled*/ None),
-                |_, _, _, _| unreachable!()
+                &mut executor,
             )
             .is_err()
         );
+        assert_eq!(executor.events, []);
         assert!(!fixture.node_modules().exists());
         assert!(!fixture.package.root.join("bun").exists());
     }
@@ -299,9 +430,9 @@ fn stale_existing_and_overlapping_candidates_fail_before_mutation() {
         r#"{"dependencies":{"other":"1"}}"#,
     )
     .expect("change package.json");
-    assert!(
-        materialize_with_executor(changed.normal_request(), |_, _, _, _| unreachable!()).is_err()
-    );
+    let mut executor = FakeManagedBunExecutor::successful();
+    assert!(materialize_with_executor(changed.normal_request(), &mut executor).is_err());
+    assert_eq!(executor.events, []);
     assert!(!changed.management.as_path().exists());
 }
 
@@ -315,13 +446,15 @@ fn aliases_are_rejected_and_replaced_cleanup_roots_are_reported() {
     let real = parent.join("real-management");
     fs::create_dir(real.as_path()).expect("create alias target");
     symlink(real.as_path(), aliased.management.as_path()).expect("alias management root");
+    let mut executor = FakeManagedBunExecutor::successful();
     assert!(
         materialize_with_executor(
             aliased.request(&aliased.management, /*cancelled*/ None),
-            |_, _, _, _| unreachable!()
+            &mut executor,
         )
         .is_err()
     );
+    assert_eq!(executor.events, []);
     assert!(!real.join("bun").as_path().exists());
 
     let replaced = Fixture::new(Lock::Text);
@@ -333,18 +466,18 @@ fn aliases_are_rejected_and_replaced_cleanup_roots_are_reported() {
         .join("external");
     fs::create_dir(external.as_path()).expect("create external tree");
     fs::write(external.join("keep").as_path(), "keep").expect("write marker");
-    let error = materialize_with_executor(replaced.normal_request(), |plan, _, _, _| {
-        drop(plan);
+    let mut executor = FakeManagedBunExecutor::run_with(|_, _, _, _| {
         fs::remove_dir(&node_modules).expect("remove node_modules");
         symlink(external.as_path(), &node_modules).expect("replace with alias");
         Err(anyhow::anyhow!("install failed"))
-    })
-    .expect_err("surface cleanup failure");
+    });
+    let error = materialize_with_executor(replaced.normal_request(), &mut executor)
+        .expect_err("surface cleanup failure");
     let message = format!("{error:#}");
     assert!(message.contains("install failed") && message.contains("cleanup also failed"));
     assert!(external.join("keep").as_path().is_file());
     assert!(
-        fs::symlink_metadata(node_modules)
+        fs::symlink_metadata(&node_modules)
             .expect("retained alias")
             .file_type()
             .is_symlink()
