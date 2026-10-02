@@ -9,10 +9,10 @@ const CONTROL_VERSION = 1;
 const DRAFT_2020_12 = "https://json-schema.org/draft/2020-12/schema";
 const INPUT_REQUEST_MAX_BYTES = 16 * 1024;
 const INPUT_REQUEST_MAX_COUNT = 64;
-const OUTPUT_MAX_BYTES = 8 * 1024;
+const OUTPUT_MIN_BYTES = 64;
+const OUTPUT_MAX_BYTES = 32 * 1024;
 const OUTPUT_JSON_MAX_BYTES = 1024 * 1024;
 const RUN_CONTROL_FRAME_MAX_BYTES = 1024 * 1024;
-const OUTPUT_TRUNCATION_NOTICE = "\n\n[Workflow output truncated to 8192 bytes.]";
 const COMPLETION_REQUEST_MAX_BYTES = 64 * 1024;
 const COMPLETION_OUTPUT_MAX_BYTES = 64 * 1024;
 const COMPLETION_ERROR_MAX_BYTES = 4 * 1024;
@@ -396,18 +396,19 @@ function createContext(input, allowInteraction) {
   return context;
 }
 
-function truncateWorkflowOutput(markdown) {
+function truncateWorkflowOutput(markdown, maximumBytes) {
   if (!markdown.endsWith("\n")) markdown += "\n";
   const bytes = Buffer.from(markdown);
   const decoder = new TextDecoder("utf-8", { fatal: true });
-  if (bytes.length <= OUTPUT_MAX_BYTES) return decoder.decode(bytes);
-  const maxPrefixBytes = OUTPUT_MAX_BYTES - byteLength(OUTPUT_TRUNCATION_NOTICE);
+  if (bytes.length <= maximumBytes) return decoder.decode(bytes);
+  const notice = `\n\n[Workflow output truncated to ${maximumBytes} bytes.]`;
+  const maxPrefixBytes = maximumBytes - byteLength(notice);
   for (let end = maxPrefixBytes; end >= 0; end -= 1) {
     try {
-      return decoder.decode(bytes.subarray(0, end)) + OUTPUT_TRUNCATION_NOTICE;
+      return decoder.decode(bytes.subarray(0, end)) + notice;
     } catch {}
   }
-  return OUTPUT_TRUNCATION_NOTICE;
+  return notice;
 }
 
 function truncateUtf8(value, maximumBytes) {
@@ -430,6 +431,23 @@ function parseJsonArgument(raw, label) {
     throw new Error(`${label} is not valid JSON: ${error}`);
   }
   return value;
+}
+
+function parseWorkflowRunConfig(raw) {
+  const config = parseJsonArgument(raw, "Workflow run configuration");
+  if (!isPlainJsonObject(config)
+      || Reflect.ownKeys(config).length !== 1
+      || !Object.hasOwn(config, "outputMaxBytes")) {
+    throw new Error("Workflow run configuration must contain only outputMaxBytes.");
+  }
+  if (!Number.isSafeInteger(config.outputMaxBytes)
+      || config.outputMaxBytes < OUTPUT_MIN_BYTES
+      || config.outputMaxBytes > OUTPUT_MAX_BYTES) {
+    throw new Error(
+      `Workflow output limit must be an integer between ${OUTPUT_MIN_BYTES} and ${OUTPUT_MAX_BYTES} bytes.`,
+    );
+  }
+  return config;
 }
 
 function workflowInspection(workflow, inputSchema, outputSchema) {
@@ -619,7 +637,7 @@ function writeBoundedJson(value, maximumBytes, label) {
   process.stdout.write(`${encoded}\n`);
 }
 
-async function executeRun(workflow, inputSchema, outputSchema, rawInput) {
+async function executeRun(workflow, inputSchema, outputSchema, rawInput, config) {
   const input = parseJsonArgument(rawInput ?? "{}", "Workflow input");
   if (!isPlainJsonObject(input)) throw new Error("Workflow input must be a JSON object.");
   await requestContractValidation(inputSchema, outputSchema);
@@ -631,7 +649,7 @@ async function executeRun(workflow, inputSchema, outputSchema, rawInput) {
   if (!isPlainJsonObject(formatted) || typeof formatted.markdown !== "string") {
     throw new Error("Workflow formatter must return { markdown: string } for markdown.v1.");
   }
-  const markdown = truncateWorkflowOutput(formatted.markdown);
+  const markdown = truncateWorkflowOutput(formatted.markdown, config.outputMaxBytes);
   if (!CONTROL_PATH) {
     process.stdout.write(markdown);
     return;
@@ -657,6 +675,13 @@ try {
   const operation = process.argv[2];
   const payload = readRunnerFile(process.argv[3], "workflow runner payload");
   const expectedManifestJson = readRunnerFile(process.argv[4], "expected workflow manifest");
+  const runConfigJson = readRunnerFile(process.argv[5], "workflow run configuration");
+  let runConfig;
+  if (operation === "run") {
+    runConfig = parseWorkflowRunConfig(runConfigJson);
+  } else if (runConfigJson !== undefined) {
+    throw new Error("Workflow run configuration is only valid for run operations.");
+  }
   if (operation === "scan") {
     writeBoundedJson(scanWorkflowSources(), INSPECTION_OUTPUT_MAX_BYTES, "Workflow source scan output");
   } else {
@@ -664,7 +689,7 @@ try {
     validateExpectedManifest(workflow, expectedManifestJson);
     switch (operation) {
     case "run":
-      await executeRun(workflow, inputSchema, outputSchema, payload);
+      await executeRun(workflow, inputSchema, outputSchema, payload, runConfig);
       break;
     case "inspect":
       writeBoundedJson(workflowInspection(workflow, inputSchema, outputSchema), INSPECTION_OUTPUT_MAX_BYTES, "Workflow inspection output");

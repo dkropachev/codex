@@ -16,6 +16,7 @@ use codex_workflows::WorkflowCommand;
 use codex_workflows::WorkflowPackage;
 use codex_workflows::discover_workflow_commands;
 use codex_workflows::normalize_workflow_id;
+use codex_workflows::runner::WorkflowRunConfig;
 use codex_workflows::runner::run_cli_workflow_cancellable;
 use codex_workflows::scaffold_workflow;
 use codex_workflows::validate_workflow as validate_workflow_package;
@@ -478,10 +479,15 @@ async fn run_workflow(
         }
         input.insert("action".to_string(), Value::String("resume".to_string()));
     }
-    run_workflow_process(command, input).await
+    let run_config = WorkflowRunConfig::new(config.workflow_output_max_bytes)?;
+    run_workflow_process(command, input, run_config).await
 }
 
-async fn run_workflow_process(command: &WorkflowCommand, input: Value) -> anyhow::Result<()> {
+async fn run_workflow_process(
+    command: &WorkflowCommand,
+    input: Value,
+    run_config: WorkflowRunConfig,
+) -> anyhow::Result<()> {
     let workflow_dir = command.workflow_dir.clone();
     let command_name = command.command.clone();
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -496,6 +502,7 @@ async fn run_workflow_process(command: &WorkflowCommand, input: Value) -> anyhow
             &workflow_dir,
             &package.manifest,
             &input,
+            run_config,
             worker_cancelled.as_ref(),
         )
     });

@@ -22,11 +22,11 @@ use codex_workflows::runner::MAX_WORKFLOW_CONTROL_FRAME_BYTES;
 use codex_workflows::runner::MAX_WORKFLOW_RUN_FRAME_BYTES;
 use codex_workflows::runner::PreparedRunner;
 use codex_workflows::runner::RUNNER_EXIT_TIMEOUT;
-use codex_workflows::runner::RunnerOperation;
 use codex_workflows::runner::WORKFLOW_CONTROL_PREFIX;
 use codex_workflows::runner::WORKFLOW_CONTROL_VERSION;
 use codex_workflows::runner::WorkflowControlResponse;
 use codex_workflows::runner::WorkflowProgressParams;
+use codex_workflows::runner::WorkflowRunConfig;
 use codex_workflows::runner::decode_control_frame;
 use codex_workflows::runner::encode_control_response;
 use codex_workflows::validate_user_input_response;
@@ -68,6 +68,7 @@ enum WorkflowControlEvent<'a> {
 pub(super) async fn run_workflow_for_tui(
     workflow_dir: &Path,
     input: &Value,
+    run_config: WorkflowRunConfig,
     session: Arc<Session>,
     turn_context: Arc<TurnContext>,
     cancellation_token: &CancellationToken,
@@ -127,12 +128,9 @@ pub(super) async fn run_workflow_for_tui(
             "workflow input exceeded {MAX_RUNNER_INPUT_BYTES} bytes"
         ));
     }
-    let prepared_runner = PreparedRunner::new(
-        RunnerOperation::Run,
-        Some(&input_json),
-        Some(&package.manifest),
-    )
-    .map_err(|err| format!("failed to prepare workflow runner: {err:#}"))?;
+    let prepared_runner =
+        PreparedRunner::new_run(Some(&input_json), Some(&package.manifest), run_config)
+            .map_err(|err| format!("failed to prepare workflow runner: {err:#}"))?;
 
     let control_dir = tempfile::tempdir()
         .map_err(|err| format!("failed to create workflow control directory: {err}"))?;
@@ -207,7 +205,7 @@ pub(super) async fn run_workflow_for_tui(
                 return Err(workflow_exit_error(status, &stderr, &stdout));
             }
         };
-        match decode_workflow_control_event(&line)? {
+        match decode_workflow_control_event(&line, run_config)? {
             WorkflowControlEvent::Completion(markdown) => {
                 if contract.is_none() || !output_validated {
                     return Err(
@@ -379,7 +377,7 @@ pub(super) async fn run_workflow_for_tui(
                                 format!("failed to read workflow control channel: {err}")
                             })?;
                             if matches!(
-                                decode_workflow_control_event(&line)?,
+                                decode_workflow_control_event(&line, run_config)?,
                                 WorkflowControlEvent::Progress
                             ) {
                                 continue;
@@ -417,7 +415,10 @@ pub(super) async fn run_workflow_for_tui(
     }
 }
 
-fn decode_workflow_control_event(line: &BoundedLine) -> Result<WorkflowControlEvent<'_>, String> {
+fn decode_workflow_control_event(
+    line: &BoundedLine,
+    run_config: WorkflowRunConfig,
+) -> Result<WorkflowControlEvent<'_>, String> {
     if line.oversized {
         return Err(format!(
             "workflow control frame exceeded {MAX_WORKFLOW_RUN_FRAME_BYTES} bytes"
@@ -436,7 +437,7 @@ fn decode_workflow_control_event(line: &BoundedLine) -> Result<WorkflowControlEv
                     "workflow completion frame exceeded {MAX_WORKFLOW_COMPLETION_FRAME_BYTES} bytes"
                 ));
             }
-            parse_completion(payload).map(WorkflowControlEvent::Completion)
+            parse_completion(payload, run_config).map(WorkflowControlEvent::Completion)
         }
         "contract" => {
             if frame.id == 0 {

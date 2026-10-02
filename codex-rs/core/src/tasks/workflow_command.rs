@@ -9,7 +9,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_thread_store::PersistContext;
 use codex_workflows::runner::MAX_RUNNER_ERROR_BYTES;
-use codex_workflows::runner::WORKFLOW_OUTPUT_MAX_BYTES;
+use codex_workflows::runner::WorkflowRunConfig;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
@@ -72,9 +72,28 @@ impl SessionTask for WorkflowCommandTask {
         });
         session.send_event(turn_context.as_ref(), event).await;
 
+        let run_config = match WorkflowRunConfig::new(turn_context.config.workflow_output_max_bytes)
+        {
+            Ok(run_config) => run_config,
+            Err(err) => {
+                session
+                    .send_event(
+                        turn_context.as_ref(),
+                        EventMsg::Error(ErrorEvent {
+                            misalignment: None,
+                            message: format!("invalid workflow run configuration: {err:#}"),
+                            codex_error_info: None,
+                        }),
+                    )
+                    .await;
+                return Ok(None);
+            }
+        };
+
         let markdown = match run_workflow_for_tui(
             &self.workflow_dir,
             &self.input,
+            run_config,
             Arc::clone(&session),
             Arc::clone(&turn_context),
             &cancellation_token,
@@ -99,7 +118,7 @@ impl SessionTask for WorkflowCommandTask {
         };
 
         Ok(Some(
-            record_workflow_output(session, turn_context, markdown).await,
+            record_workflow_output(session, turn_context, markdown, run_config).await,
         ))
     }
 }
@@ -108,8 +127,9 @@ pub(crate) async fn record_workflow_output(
     session: Arc<Session>,
     turn_context: Arc<TurnContext>,
     markdown: String,
+    run_config: WorkflowRunConfig,
 ) -> String {
-    let markdown = truncate_workflow_output(markdown);
+    let markdown = truncate_workflow_output(markdown, run_config);
     session
         .record_response_item_and_emit_turn_item(
             turn_context.as_ref(),
@@ -130,13 +150,14 @@ pub(crate) async fn record_workflow_output(
     markdown
 }
 
-fn truncate_workflow_output(mut text: String) -> String {
-    if text.len() <= WORKFLOW_OUTPUT_MAX_BYTES {
+fn truncate_workflow_output(mut text: String, run_config: WorkflowRunConfig) -> String {
+    let output_max_bytes = run_config.output_max_bytes();
+    if text.len() <= output_max_bytes {
         return text;
     }
 
-    let notice = format!("\n\n[Workflow output truncated to {WORKFLOW_OUTPUT_MAX_BYTES} bytes.]");
-    let max_text_bytes = WORKFLOW_OUTPUT_MAX_BYTES.saturating_sub(notice.len());
+    let notice = format!("\n\n[Workflow output truncated to {output_max_bytes} bytes.]");
+    let max_text_bytes = output_max_bytes.saturating_sub(notice.len());
     let boundary = previous_char_boundary(&text, max_text_bytes);
     text.truncate(boundary);
     text.push_str(&notice);

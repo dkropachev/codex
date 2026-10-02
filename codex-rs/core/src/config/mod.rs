@@ -136,6 +136,8 @@ pub use codex_thread_store::ExtraConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use codex_utils_path_uri::PathUri;
+use codex_workflows::runner::WORKFLOW_OUTPUT_MAX_BYTES;
+use codex_workflows::runner::WORKFLOW_OUTPUT_MIN_BYTES;
 use http::HeaderValue;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::FormElicitationCapability;
@@ -1059,6 +1061,9 @@ pub struct Config {
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).
     pub background_terminal_max_timeout: u64,
+
+    /// Maximum bytes retained from formatted workflow markdown output.
+    pub workflow_output_max_bytes: usize,
 
     /// Compatibility-only settings retained for legacy `ghost_snapshot`
     /// config loading.
@@ -3858,6 +3863,27 @@ impl Config {
             .background_terminal_max_timeout
             .unwrap_or(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS)
             .max(MIN_EMPTY_YIELD_TIME_MS);
+        let workflow_output_max_bytes = cfg
+            .workflows
+            .as_ref()
+            .and_then(|workflows| workflows.output_max_bytes)
+            .unwrap_or(WORKFLOW_OUTPUT_MAX_BYTES);
+        if workflow_output_max_bytes < WORKFLOW_OUTPUT_MIN_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "workflows.output_max_bytes must be at least {WORKFLOW_OUTPUT_MIN_BYTES}"
+                ),
+            ));
+        }
+        if workflow_output_max_bytes > WORKFLOW_OUTPUT_MAX_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "workflows.output_max_bytes must be at most {WORKFLOW_OUTPUT_MAX_BYTES}"
+                ),
+            ));
+        }
 
         let ghost_snapshot = {
             let mut config = GhostSnapshotConfig::default();
@@ -4346,6 +4372,7 @@ impl Config {
             tool_registry,
             code_mode,
             background_terminal_max_timeout,
+            workflow_output_max_bytes,
             ghost_snapshot,
             multi_agent_v2,
             token_budget,

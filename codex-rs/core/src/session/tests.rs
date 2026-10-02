@@ -10910,6 +10910,7 @@ async fn workflow_output_records_assistant_message_for_next_context() {
         Arc::clone(&session),
         Arc::clone(&turn_context),
         markdown.clone(),
+        codex_workflows::runner::WorkflowRunConfig::default(),
     )
     .await;
 

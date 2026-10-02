@@ -474,6 +474,9 @@ pub struct ConfigToml {
     /// Agent-related settings (thread limits, etc.).
     pub agents: Option<AgentsToml>,
 
+    /// Workflow execution settings.
+    pub workflows: Option<WorkflowsToml>,
+
     /// Goal-related settings.
     pub goals: Option<GoalsToml>,
 
@@ -1061,6 +1064,15 @@ where
 pub struct GoalsToml {
     /// Maximum token budget allowed for a goal and default budget for new goals.
     pub max_goal_token_budget: Option<NonZeroU64>,
+}
+
+/// Workflow execution settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct WorkflowsToml {
+    /// Maximum bytes retained from formatted workflow markdown output.
+    #[schemars(range(min = 64, max = 32768))]
+    pub output_max_bytes: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]

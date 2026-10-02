@@ -50,8 +50,9 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const WORKFLOW_MARKDOWN: &str = "# Workflow E2E\n\nmarker=workflow-e2e\n";
-const WORKFLOW_COMPLETE_FRAME: &str = r##"{"v":1,"id":0,"method":"complete","params":{"markdown":"# Workflow E2E\n\nmarker=workflow-e2e\n"}}"##;
+const CUSTOM_OUTPUT_MAX_BYTES: usize = 128;
+const WORKFLOW_MARKDOWN: &str = "# Workflow E2E\n\nmarker=workflow-e2e\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n\n[Workflow output truncated to 128 bytes.]";
+const WORKFLOW_COMPLETE_FRAME: &str = r##"{"v":1,"id":0,"method":"complete","params":{"markdown":"# Workflow E2E\n\nmarker=workflow-e2e\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n\n[Workflow output truncated to 128 bytes.]"}}"##;
 const WORKFLOW_CONTRACT_FRAME: &str = r#"{"v":1,"id":1,"method":"contract","params":{"inputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true},"outputSchema":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":true}}}"#;
 const WORKFLOW_USER_INPUT_MARKDOWN_PREFIX: &str = "# Workflow User Input E2E\n\nresponse=";
 const WORKFLOW_USER_INPUT_FRAME: &str = r#"{"v":1,"id":2,"method":"requestUserInput","params":{"questions":[{"id":"deploy_target","header":"Target","question":"Where should the workflow deploy?","isOther":false,"isSecret":false,"options":[{"label":"Staging","description":"Deploy to the staging environment."},{"label":"Production","description":"Deploy to the production environment."}]},{"id":"release_note","header":"Note","question":"What should the release note say?","isOther":false,"isSecret":false,"options":null}]}}"#;
@@ -253,6 +254,7 @@ async fn thread_workflow_command_records_assistant_output_and_next_turn_context(
         Ok(()),
         "`thread/workflowCommand` runs on the app-server local environment"
     );
+    assert_eq!(WORKFLOW_MARKDOWN.len(), CUSTOM_OUTPUT_MAX_BYTES);
 
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
@@ -278,6 +280,12 @@ async fn thread_workflow_command_records_assistant_output_and_next_turn_context(
         /*requires_openai_auth*/ None,
         "mock_provider",
         "Summarize the conversation.",
+    )?;
+    let config_path = codex_home.join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        config_path,
+        format!("{config}\n[workflows]\noutput_max_bytes = {CUSTOM_OUTPUT_MAX_BYTES}\n"),
     )?;
 
     let env = [("PATH", Some(path_value.as_str()))];
@@ -390,11 +398,12 @@ async fn thread_workflow_command_records_assistant_output_and_next_turn_context(
     assert_eq!(requests.len(), 1);
     let request_body = requests[0]
         .body_json::<serde_json::Value>()
-        .context("model request body should be JSON")?
-        .to_string();
-    assert!(request_body.contains("follow up after workflow"));
-    assert!(request_body.contains("# Workflow E2E"));
-    assert!(request_body.contains("marker=workflow-e2e"));
+        .context("model request body should be JSON")?;
+    assert!(json_contains_string(
+        &request_body,
+        "follow up after workflow"
+    ));
+    assert!(json_contains_string(&request_body, WORKFLOW_MARKDOWN));
 
     Ok(())
 }
@@ -975,6 +984,21 @@ fn agent_message_text(item: &ThreadItem) -> Option<&str> {
     }
 }
 
+fn json_contains_string(value: &serde_json::Value, expected: &str) -> bool {
+    match value {
+        serde_json::Value::String(value) => value == expected,
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| json_contains_string(value, expected)),
+        serde_json::Value::Object(values) => values
+            .values()
+            .any(|value| json_contains_string(value, expected)),
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            false
+        }
+    }
+}
+
 fn write_fake_bun(fake_bin: &Path) -> Result<()> {
     let bun_path = fake_bin.join("bun");
     std::fs::write(
@@ -1021,6 +1045,7 @@ printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{WORKFLOW_CONTRACT_FRAME}' >> "$CODEX_
 IFS= read -r _contract_ack
 case "$workflow_input" in
   *'"marker":"workflow-e2e"'*)
+    test "$(cat "${{5:?}}")" = '{{"outputMaxBytes":{CUSTOM_OUTPUT_MAX_BYTES}}}'
     printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{{"v":1,"id":2,"method":"validateOutput","params":{{"output":{{}}}}}}' >> "$CODEX_WORKFLOW_CONTROL_PATH"
     IFS= read -r _output_ack
     printf '\036CODEX_WORKFLOW_CONTROL %s\n' '{WORKFLOW_COMPLETE_FRAME}' >> "$CODEX_WORKFLOW_CONTROL_PATH"

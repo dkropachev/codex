@@ -1298,6 +1298,90 @@ async fn runtime_config_defaults_model_availability_nux() {
     );
 }
 
+#[tokio::test]
+async fn workflow_output_max_bytes_defaults_to_hard_ceiling() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    let direct_codex_home = tempdir()?;
+    let direct_config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        direct_codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        (
+            config.workflow_output_max_bytes,
+            direct_config.workflow_output_max_bytes,
+        ),
+        (WORKFLOW_OUTPUT_MAX_BYTES, WORKFLOW_OUTPUT_MAX_BYTES),
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_output_max_bytes_accepts_custom_and_boundary_values() -> anyhow::Result<()> {
+    for output_max_bytes in [WORKFLOW_OUTPUT_MIN_BYTES, 1_024, WORKFLOW_OUTPUT_MAX_BYTES] {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            format!("[workflows]\noutput_max_bytes = {output_max_bytes}\n"),
+        )?;
+
+        let config = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .build()
+            .await?;
+
+        assert_eq!(config.workflow_output_max_bytes, output_max_bytes);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn workflow_output_max_bytes_rejects_values_outside_allowed_range() -> anyhow::Result<()> {
+    for (output_max_bytes, expected_message) in [
+        (
+            0,
+            format!("workflows.output_max_bytes must be at least {WORKFLOW_OUTPUT_MIN_BYTES}"),
+        ),
+        (
+            WORKFLOW_OUTPUT_MIN_BYTES - 1,
+            format!("workflows.output_max_bytes must be at least {WORKFLOW_OUTPUT_MIN_BYTES}"),
+        ),
+        (
+            WORKFLOW_OUTPUT_MAX_BYTES + 1,
+            format!("workflows.output_max_bytes must be at most {WORKFLOW_OUTPUT_MAX_BYTES}"),
+        ),
+    ] {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            format!("[workflows]\noutput_max_bytes = {output_max_bytes}\n"),
+        )?;
+
+        let err = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .build()
+            .await
+            .expect_err("out-of-range workflow output limit should be rejected");
+
+        assert_eq!(
+            (err.kind(), err.to_string()),
+            (std::io::ErrorKind::InvalidInput, expected_message),
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn test_tui_vim_mode_default_true() {
     let toml = r#"

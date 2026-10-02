@@ -294,6 +294,25 @@ async fn running_workflow_command_uses_standard_task_status_snapshot() {
 }
 
 #[tokio::test]
+async fn workflow_custom_output_limit_truncation_notice_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    complete_assistant_message(
+        &mut chat,
+        "workflow-message",
+        "# Workflow report\n\nPartial output.\n\n[Workflow output truncated to 128 bytes.]",
+        Some(MessagePhase::FinalAnswer),
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    assert_chatwidget_snapshot!(
+        "workflow_custom_output_limit_truncation_notice",
+        lines_to_single_string(&cells[0]),
+    );
+}
+
+#[tokio::test]
 async fn workflow_command_with_args_dispatches_structured_input_json() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);

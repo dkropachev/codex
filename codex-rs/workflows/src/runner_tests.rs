@@ -40,8 +40,62 @@ fn prepared_runner_disables_ambient_bun_configuration() {
             "scan".into(),
             "-".into(),
             "-".into(),
+            "-".into(),
         ]
     );
+}
+
+#[test]
+fn prepared_run_serializes_the_validated_output_limit() {
+    let config = WorkflowRunConfig::new(/*output_max_bytes*/ 4_096).expect("valid run config");
+    let prepared =
+        PreparedRunner::new_run(Some("{}"), /*expected*/ None, config).expect("prepare runner");
+    let config_path = Path::new(&prepared.arguments[7]);
+
+    assert_eq!(
+        fs::read_to_string(config_path).expect("read run config"),
+        r#"{"outputMaxBytes":4096}"#
+    );
+}
+
+#[test]
+fn prepared_run_requires_named_configuration() {
+    let error = PreparedRunner::new(RunnerOperation::Run, Some("{}"), /*expected*/ None)
+        .err()
+        .expect("run preparation without config should fail");
+
+    assert_eq!(
+        error.to_string(),
+        "workflow run preparation requires a WorkflowRunConfig"
+    );
+}
+
+#[test]
+fn workflow_run_config_enforces_output_limit_range() {
+    assert_eq!(
+        WorkflowRunConfig::new(WORKFLOW_OUTPUT_MIN_BYTES)
+            .expect("minimum should be valid")
+            .output_max_bytes(),
+        WORKFLOW_OUTPUT_MIN_BYTES
+    );
+    assert_eq!(
+        WorkflowRunConfig::new(WORKFLOW_OUTPUT_MAX_BYTES).expect("maximum should be valid"),
+        WorkflowRunConfig::default()
+    );
+    for invalid in [
+        0,
+        WORKFLOW_OUTPUT_MIN_BYTES - 1,
+        WORKFLOW_OUTPUT_MAX_BYTES + 1,
+    ] {
+        assert_eq!(
+            WorkflowRunConfig::new(invalid)
+                .expect_err("out-of-range limit should be rejected")
+                .to_string(),
+            format!(
+                "workflow output limit must be between {WORKFLOW_OUTPUT_MIN_BYTES} and {WORKFLOW_OUTPUT_MAX_BYTES} bytes"
+            )
+        );
+    }
 }
 
 #[test]
@@ -134,6 +188,7 @@ fn cli_rejects_a_clean_runner_exit_before_completion() {
         root.path(),
         &manifest,
         &json!({ "message": "ignored" }),
+        WorkflowRunConfig::default(),
         &mut markdown,
         /*cancelled*/ None,
     )
@@ -374,6 +429,7 @@ fn cli_cancellation_terminates_the_isolated_process_tree() {
             root.path(),
             &manifest,
             &json!({ "message": "ignored" }),
+            WorkflowRunConfig::default(),
             &mut markdown,
             Some(&cancelled),
         )
@@ -409,6 +465,80 @@ fn cli_run_imports_the_module_once_and_omits_optional_interaction() {
 
 #[test]
 #[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
+fn cli_run_preserves_output_at_the_custom_limit() {
+    let (root, manifest) = write_fixture(&canonical_source(
+        "return { message: input.message };",
+        "return [];",
+    ));
+    let config = WorkflowRunConfig::new(/*output_max_bytes*/ 64).expect("valid run config");
+
+    let (status, markdown) = run_output_with_config(
+        root.path(),
+        &manifest,
+        &json!({ "message": "x".repeat(63) }),
+        config,
+    );
+
+    assert!(status.success());
+    assert_eq!(markdown, format!("{}\n", "x".repeat(63)).into_bytes());
+}
+
+#[test]
+#[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
+fn cli_run_truncates_utf8_with_a_dynamic_custom_limit_notice() {
+    let (root, manifest) = write_fixture(&canonical_source(
+        "return { message: input.message };",
+        "return [];",
+    ));
+    let config = WorkflowRunConfig::new(/*output_max_bytes*/ 64).expect("valid run config");
+
+    let (status, markdown) = run_output_with_config(
+        root.path(),
+        &manifest,
+        &json!({ "message": "é".repeat(100) }),
+        config,
+    );
+
+    assert!(status.success());
+    let expected = format!(
+        "{}\n\n[Workflow output truncated to 64 bytes.]",
+        "é".repeat(11)
+    );
+    assert_eq!(markdown.len(), 64);
+    assert_eq!(String::from_utf8(markdown).expect("valid UTF-8"), expected);
+}
+
+#[test]
+#[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
+fn runner_validates_run_config_before_importing_the_workflow() {
+    let (root, _) = write_fixture(
+        r#"import fs from "node:fs";
+fs.writeFileSync("module-loaded", "yes");
+export default {};
+"#,
+    );
+    let prepared = PreparedRunner::new_run(
+        Some("{}"),
+        /*expected*/ None,
+        WorkflowRunConfig::default(),
+    )
+    .expect("prepare runner");
+    fs::write(&prepared.arguments[7], r#"{"outputMaxBytes":63}"#).expect("replace run config");
+
+    let output = bun_command(Path::new("bun"), root.path(), &prepared)
+        .output()
+        .expect(BUN_REQUIRED);
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("Workflow output limit must be an integer between 64 and 32768 bytes.")
+    );
+    assert!(!root.path().join("module-loaded").exists());
+}
+
+#[test]
+#[ignore = "requires Bun; run explicitly in workflow-runtime validation"]
 fn cli_terminates_a_runner_that_stays_alive_after_completion() {
     let (root, manifest) = write_fixture(&format!(
         "setInterval(() => {{}}, 1000);\n{}",
@@ -422,6 +552,7 @@ fn cli_terminates_a_runner_that_stays_alive_after_completion() {
         root.path(),
         &manifest,
         &json!({ "message": "Ready." }),
+        WorkflowRunConfig::default(),
         &mut markdown,
         /*cancelled*/ None,
     )
@@ -789,12 +920,22 @@ fn scan_workflow_sources(workflow_dir: &Path) -> anyhow::Result<Vec<SourceInspec
 }
 
 fn run_output(root: &Path, manifest: &WorkflowManifest, input: &Value) -> (ExitStatus, Vec<u8>) {
+    run_output_with_config(root, manifest, input, WorkflowRunConfig::default())
+}
+
+fn run_output_with_config(
+    root: &Path,
+    manifest: &WorkflowManifest,
+    input: &Value,
+    config: WorkflowRunConfig,
+) -> (ExitStatus, Vec<u8>) {
     let mut markdown = Vec::new();
     let status = run_cli_workflow_with_bun(
         Path::new("bun"),
         root,
         manifest,
         input,
+        config,
         &mut markdown,
         /*cancelled*/ None,
     )
