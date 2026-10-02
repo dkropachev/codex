@@ -124,6 +124,21 @@ fn rejects_overlapping_management_and_candidate_paths() {
         );
     }
 
+    let candidate = root.join("inspection-candidate");
+    let bun = candidate.join("tool/bun");
+    fs::create_dir_all(bun.as_path().parent().expect("Bun parent"))
+        .expect("create candidate tools");
+    fs::write(bun.as_path(), "bun").expect("write candidate Bun");
+    assert!(managed_bun_binary_inspection_command_plan(&bun, &candidate, &environment).is_err());
+    assert!(
+        managed_bun_binary_inspection_command_plan(
+            &root.join("tools/bun"),
+            &environment.scratch_dir,
+            &environment,
+        )
+        .is_err()
+    );
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::symlink;
@@ -137,6 +152,20 @@ fn rejects_overlapping_management_and_candidate_paths() {
                 &candidate,
                 ManagedBunInstallLockfile::Text,
                 &sources(&[]),
+                &environment,
+            )
+            .is_err()
+        );
+        let inspection_alias = root.join("inspection-alias");
+        symlink(
+            environment.scratch_dir.as_path(),
+            inspection_alias.as_path(),
+        )
+        .expect("alias inspection candidate");
+        assert!(
+            managed_bun_binary_inspection_command_plan(
+                &root.join("tools/bun"),
+                &inspection_alias,
                 &environment,
             )
             .is_err()
@@ -159,8 +188,16 @@ fn plans_install_and_inspection_with_exact_argv_environment_and_permissions() {
         &environment,
     )
     .expect("install plan");
-    let inspection = managed_bun_binary_inspection_command_plan(&bun, &environment)
+    let inspection = managed_bun_binary_inspection_command_plan(&bun, &candidate, &environment)
         .expect("binary inspection plan");
+    let binary_install = managed_bun_install_command_plan(
+        &bun,
+        &candidate,
+        ManagedBunInstallLockfile::Binary,
+        &sources(&["vendor/local"]),
+        &environment,
+    )
+    .expect("binary install plan");
 
     let expected_args = vec![
         "--no-env-file".into(),
@@ -182,6 +219,9 @@ fn plans_install_and_inspection_with_exact_argv_environment_and_permissions() {
         absolute(&fs::canonicalize(bun.as_path()).expect("resolve Bun executable"))
     );
     assert_eq!(install.args, expected_args);
+    let mut expected_binary_args = expected_args.clone();
+    expected_binary_args.insert(/*index*/ 3, "--no-save".into());
+    assert_eq!(binary_install.args, expected_binary_args);
     assert_eq!(install.cwd, candidate);
     let mut expected_env = [
         ("HOME", &environment.home_dir),
@@ -229,10 +269,23 @@ fn plans_install_and_inspection_with_exact_argv_environment_and_permissions() {
     );
     assert_eq!(inspection.program, install.program);
     let mut expected_inspection_args = expected_args;
-    expected_inspection_args.insert(3, "--save-text-lockfile".into());
-    expected_inspection_args.insert(4, "--lockfile-only".into());
+    expected_inspection_args.insert(/*index*/ 3, "--save-text-lockfile".into());
+    expected_inspection_args.insert(/*index*/ 4, "--lockfile-only".into());
+    expected_inspection_args[10] = environment
+        .xdg_cache_dir
+        .as_path()
+        .as_os_str()
+        .to_os_string();
     assert_eq!(inspection.args, expected_inspection_args);
-    assert_eq!(inspection.env, install.env);
+    expected_env.insert(
+        "BUN_INSTALL_CACHE_DIR".into(),
+        environment
+            .xdg_cache_dir
+            .as_path()
+            .as_os_str()
+            .to_os_string(),
+    );
+    assert_eq!(inspection.env, expected_env);
     assert_eq!(inspection.cwd, environment.scratch_dir);
     assert_eq!(
         summarized_permissions(&inspection.permissions),
@@ -241,7 +294,7 @@ fn plans_install_and_inspection_with_exact_argv_environment_and_permissions() {
             vec![
                 ("root".into(), FileSystemAccessMode::Read),
                 path_access(&environment.scratch_dir, FileSystemAccessMode::Write),
-                path_access(&environment.cache_dir, FileSystemAccessMode::Write),
+                path_access(&environment.xdg_cache_dir, FileSystemAccessMode::Write),
                 path_access(&environment.temp_dir, FileSystemAccessMode::Write),
                 path_access(&environment.home_dir, FileSystemAccessMode::Write),
                 path_access(
