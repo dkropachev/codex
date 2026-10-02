@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::ErrorKind;
 use std::io::Write;
 
 use anyhow::Context;
@@ -14,7 +15,7 @@ use super::file::validate_directory_component;
 ///
 /// The caller must provide a previously materialized managed Bun environment whose scratch
 /// directory is dedicated to this operation, keep the candidate outside that environment, and
-/// prevent concurrent mutation of either tree until staging completes.
+/// keep both already-validated directory trees stable until staging completes.
 pub(super) fn stage_binary_lock_inputs(
     candidate: &AbsolutePathBuf,
     environment: &ManagedBunEnvironment,
@@ -39,18 +40,53 @@ pub(super) fn stage_binary_lock_inputs(
         bail!("managed Bun scratch directory was not empty");
     }
 
-    write_staged_input(&environment.scratch_dir.join("package.json"), &package_json)
-        .context("failed to stage package.json for managed binary lockfile conversion")?;
-    write_staged_input(&environment.scratch_dir.join("bun.lockb"), &binary_lock)
-        .context("failed to stage bun.lockb for managed binary lockfile conversion")
+    let package_path = environment.scratch_dir.join("package.json");
+    let lock_path = environment.scratch_dir.join("bun.lockb");
+    write_staged_inputs(&[
+        (package_path, package_json.as_slice()),
+        (lock_path, binary_lock.as_slice()),
+    ])
 }
 
-fn write_staged_input(path: &AbsolutePathBuf, contents: &[u8]) -> anyhow::Result<()> {
-    fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path.as_path())?
-        .write_all(contents)?;
+fn write_staged_inputs(inputs: &[(AbsolutePathBuf, &[u8])]) -> anyhow::Result<()> {
+    let mut created = Vec::new();
+    for (path, contents) in inputs {
+        let result = (|| {
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+
+                options.mode(0o600);
+            }
+            let mut file = options.open(path.as_path())?;
+            created.push(path.clone());
+            file.write_all(contents)
+        })()
+        .with_context(|| {
+            format!(
+                "failed to stage {} for managed binary lockfile conversion",
+                path.as_path().display()
+            )
+        });
+        if let Err(error) = result {
+            let mut cleanup_error = None;
+            for path in created.iter().rev() {
+                match fs::remove_file(path.as_path()) {
+                    Ok(()) => {}
+                    Err(remove_error) if remove_error.kind() == ErrorKind::NotFound => {}
+                    Err(remove_error) => cleanup_error = cleanup_error.or(Some(remove_error)),
+                }
+            }
+            if let Some(cleanup_error) = cleanup_error {
+                return Err(anyhow::anyhow!(
+                    "{error:#}; staged input cleanup also failed: {cleanup_error:#}"
+                ));
+            }
+            return Err(error);
+        }
+    }
     Ok(())
 }
 
