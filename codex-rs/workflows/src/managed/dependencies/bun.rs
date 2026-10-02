@@ -22,12 +22,18 @@ use codex_sandboxing::LocalSandboxPreparation;
 use codex_sandboxing::LocalSandboxPreparationRequest;
 use codex_sandboxing::LocalSandboxRuntime;
 use codex_sandboxing::LocalSandboxUnavailableReason;
+use codex_sandboxing::SandboxDirectSpawnRuntime;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::prepare_local_sandbox_command;
 use codex_sandboxing::select_local_sandbox;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::ValidatedDependencySources;
+
+mod paths;
+
+use paths::absolute_from_path;
+use paths::paths_overlap;
 
 const PUBLIC_REGISTRY: &str = "https://registry.npmjs.org/";
 const TRUSTED_BUNFIG: &str =
@@ -121,7 +127,7 @@ impl ManagedBunCommandPlan {
     /// Selects and prepares mandatory local sandboxing without weakening an unavailable result.
     pub(in crate::managed) fn prepare(
         self,
-        runtime: LocalSandboxRuntime<'_>,
+        runtime: &LocalSandboxRuntime<'_>,
     ) -> anyhow::Result<ManagedBunSandboxPreparation> {
         let workspace_roots = [self.cwd.clone()];
         let selection = select_local_sandbox(
@@ -141,7 +147,18 @@ impl ManagedBunCommandPlan {
             policy: LocalSandboxLaunchPolicy::Required,
             sandbox_policy_cwd: &self.cwd,
             workspace_roots: &workspace_roots,
-            runtime,
+            runtime: LocalSandboxRuntime {
+                direct_spawn: SandboxDirectSpawnRuntime {
+                    codex_home: runtime.direct_spawn.codex_home,
+                    windows_sandbox_wrapper_executable: runtime
+                        .direct_spawn
+                        .windows_sandbox_wrapper_executable,
+                },
+                linux_sandbox_executable: runtime.linux_sandbox_executable,
+                use_legacy_landlock: runtime.use_legacy_landlock,
+                windows_sandbox_level: runtime.windows_sandbox_level,
+                windows_sandbox_private_desktop: runtime.windows_sandbox_private_desktop,
+            },
         })?;
         Ok(match preparation {
             LocalSandboxPreparation::Prepared(prepared) => {
@@ -311,26 +328,6 @@ pub(in crate::managed) fn managed_bun_install_command_plan(
         NetworkSandboxPolicy::Enabled,
         &read_only_paths,
     ))
-}
-
-fn paths_overlap(left: &AbsolutePathBuf, right: &AbsolutePathBuf) -> anyhow::Result<bool> {
-    let left = fs::canonicalize(left.as_path()).with_context(|| {
-        format!(
-            "failed to resolve managed path {}",
-            left.as_path().display()
-        )
-    })?;
-    let right = fs::canonicalize(right.as_path()).with_context(|| {
-        format!(
-            "failed to resolve managed path {}",
-            right.as_path().display()
-        )
-    })?;
-    Ok(left.starts_with(&right) || right.starts_with(&left))
-}
-
-fn absolute_from_path(path: &std::path::Path) -> anyhow::Result<AbsolutePathBuf> {
-    AbsolutePathBuf::from_absolute_path_checked(path).context("managed path was not absolute")
 }
 
 /// Plans sandbox-only inspection of a binary lockfile in private scratch space.
