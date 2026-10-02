@@ -139,14 +139,14 @@ fn rejects_directory_inputs() {
 #[cfg(unix)]
 #[test]
 fn rejects_fifo_inputs_without_blocking() {
-    use rustix::fs::CWD;
-    use rustix::fs::Mode;
-    use rustix::fs::mkfifoat;
-
     let fixture = Fixture::new();
     let input = fixture.input("bun.lockb");
     fs::remove_file(input.as_path()).expect("remove input");
-    mkfifoat(CWD, input.as_path(), Mode::RUSR | Mode::WUSR).expect("create FIFO");
+    let status = std::process::Command::new("mkfifo")
+        .arg(input.as_path())
+        .status()
+        .expect("create FIFO");
+    assert!(status.success(), "mkfifo failed");
     let error = fixture.stage().expect_err("reject special input");
     assert!(
         error
