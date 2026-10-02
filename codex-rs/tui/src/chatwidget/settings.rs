@@ -257,6 +257,7 @@ impl ChatWidget {
         self.bottom_pane
             .set_token_activity_command_enabled(has_codex_backend_auth);
         self.refresh_status_surfaces();
+        self.request_automatic_handoff_check();
     }
 
     /// Set the syntax theme override in the widget's config copy.
@@ -597,6 +598,11 @@ impl ChatWidget {
         if crate::config_mode::is_config_mask(self.active_collaboration_mask.as_ref()) {
             return Some(crate::config_mode::CONFIG_MODE_NAME);
         }
+        if self.handoff_mode_active()
+            || crate::handoff::is_handoff_mask(self.active_collaboration_mask.as_ref())
+        {
+            return Some(crate::handoff::HANDOFF_MODE_NAME);
+        }
         let active_mode = self.active_mode_kind();
         active_mode
             .is_tui_visible()
@@ -609,6 +615,11 @@ impl ChatWidget {
         }
         if crate::config_mode::is_config_mask(self.active_collaboration_mask.as_ref()) {
             return Some(CollaborationModeIndicator::Config);
+        }
+        if self.handoff_mode_active()
+            || crate::handoff::is_handoff_mask(self.active_collaboration_mask.as_ref())
+        {
+            return Some(CollaborationModeIndicator::Handoff);
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
@@ -668,6 +679,7 @@ impl ChatWidget {
         }
         self.current_goal_status = Some(GoalStatusState::new(goal, Instant::now()));
         self.update_collaboration_mode_indicator();
+        self.request_automatic_handoff_check();
     }
 
     /// Cycle to the next collaboration mode preset.
@@ -698,6 +710,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_collaboration_mask_from_user_action(&mut self, mask: CollaborationModeMask) {
+        self.leave_handoff_for_user_mode_change(&mask);
         let previous_mode = self
             .pending_user_collaboration_mode
             .as_ref()
@@ -719,6 +732,7 @@ impl ChatWidget {
             expires_at: None,
         });
         self.submit_collaboration_mode_settings_update();
+        self.request_automatic_handoff_check();
     }
 
     pub(crate) fn on_collaboration_mode_settings_update_succeeded(
@@ -762,6 +776,7 @@ impl ChatWidget {
         let previous_mode = pending.previous_mode.clone();
         self.pending_user_collaboration_mode = None;
         self.set_effective_collaboration_mode(previous_mode);
+        self.fail_handoff_mode_update();
     }
 
     /// Update the active collaboration mask.
@@ -784,6 +799,9 @@ impl ChatWidget {
         self.update_collaboration_mode_indicator();
         self.refresh_model_dependent_surfaces();
         let next_mode = self.active_mode_kind();
+        let next_mode_label = self
+            .collaboration_mode_label()
+            .unwrap_or_else(|| next_mode.display_name());
         let next_model = self.current_model();
         let next_effort = self.effective_reasoning_effort();
         if previous_mode != next_mode
@@ -799,7 +817,7 @@ impl ChatWidget {
                 message.push_str(reasoning_label);
             }
             message.push_str(" for ");
-            message.push_str(next_mode.display_name());
+            message.push_str(next_mode_label);
             message.push_str(" mode.");
             self.add_info_message(message, /*hint*/ None);
         }

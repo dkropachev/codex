@@ -35,6 +35,7 @@ impl ChatWidget {
                 self.set_token_info(Some(token_usage_info_from_app_server(
                     notification.token_usage,
                 )));
+                self.observe_handoff_context_usage(from_replay);
             }
             ServerNotification::ThreadNameUpdated(notification) => {
                 match ThreadId::from_string(&notification.thread_id) {
@@ -222,8 +223,10 @@ impl ChatWidget {
                     self.on_shutdown_complete();
                 }
             }
-            ServerNotification::ServerRequestResolved(_)
-            | ServerNotification::AccountUpdated(_)
+            ServerNotification::ServerRequestResolved(_) => {
+                self.request_automatic_handoff_check();
+            }
+            ServerNotification::AccountUpdated(_)
             | ServerNotification::AccountRateLimitsUpdated(_)
             | ServerNotification::ThreadStarted(_)
             | ServerNotification::ThreadStatusChanged(_)
@@ -267,7 +270,9 @@ impl ChatWidget {
             | ServerNotification::AccountLoginCompleted(_)
             | ServerNotification::ProjectChanged(_)
             | ServerNotification::ThreadProjectUpdated(_) => {}
-            ServerNotification::ContextCompacted(_) => {}
+            ServerNotification::ContextCompacted(_) => {
+                self.note_context_compacted_for_handoff(from_replay)
+            }
         }
         self.thread_usage.replaying_turn_completion = was_replaying_turn_completion;
     }
@@ -285,6 +290,7 @@ impl ChatWidget {
         self.thread_usage.replaying_turn_completion = replay_kind.is_some();
         match notification.turn.status {
             TurnStatus::Completed => {
+                self.note_handoff_turn_completed(&notification.turn.id);
                 let last_agent_message =
                     notification
                         .turn
@@ -324,6 +330,12 @@ impl ChatWidget {
                 );
             }
             TurnStatus::Interrupted => {
+                if replay_kind.is_some() {
+                    self.cancel_replayed_handoff_turn_if_owned(
+                        &notification.turn.id,
+                        HandoffTelemetryReason::TurnInterrupted,
+                    );
+                }
                 self.last_non_retry_error = None;
                 let reason = if self
                     .turn_lifecycle
@@ -336,6 +348,12 @@ impl ChatWidget {
                 self.on_interrupted_turn(reason);
             }
             TurnStatus::Failed => {
+                if replay_kind.is_some() {
+                    self.cancel_replayed_handoff_turn_if_owned(
+                        &notification.turn.id,
+                        HandoffTelemetryReason::TurnFailed,
+                    );
+                }
                 if let Some(error) = notification.turn.error {
                     if self.last_non_retry_error.as_ref()
                         == Some(&(notification.turn.id.clone(), error.message.clone()))
@@ -345,6 +363,7 @@ impl ChatWidget {
                         self.handle_non_retry_error(error.message, error.codex_error_info);
                     }
                 } else {
+                    self.cancel_handoff_for_unsuccessful_turn(HandoffTelemetryReason::TurnFailed);
                     self.last_non_retry_error = None;
                     self.finalize_turn();
                     self.request_redraw();
@@ -403,6 +422,9 @@ impl ChatWidget {
         notification: ItemCompletedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        if matches!(&notification.item, ThreadItem::ContextCompaction { .. }) {
+            self.note_context_compacted_for_handoff(replay_kind.is_some());
+        }
         match notification.item {
             item @ ThreadItem::CommandExecution { .. } => self.on_command_execution_completed(item),
             item => self.handle_thread_item(

@@ -261,6 +261,12 @@ impl AgentNavigationState {
             .collect()
     }
 
+    pub(crate) fn has_running_thread_other_than(&self, thread_id: ThreadId) -> bool {
+        self.threads
+            .iter()
+            .any(|(candidate, entry)| *candidate != thread_id && entry.is_running)
+    }
+
     pub(crate) fn ordered_path_backed_subagent_threads(
         &self,
         primary_thread_id: Option<ThreadId>,

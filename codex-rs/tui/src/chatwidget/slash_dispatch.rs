@@ -306,6 +306,9 @@ impl ChatWidget {
                 self.request_redraw();
             }
             SlashCommand::New => {
+                if self.confirm_new_pending_handoff(/*name*/ None) {
+                    return;
+                }
                 self.app_event_tx.send(AppEvent::NewSession { name: None });
             }
             SlashCommand::Archive => {
@@ -338,11 +341,14 @@ impl ChatWidget {
                 self.request_redraw();
             }
             SlashCommand::Delete => {
+                let subtitle = if self.has_pending_handoff() {
+                    "Cannot be undone. Deletes this session, subagents, and pending handoff."
+                } else {
+                    "Cannot be undone. Subagent threads will also be deleted."
+                };
                 self.bottom_pane.show_selection_view(SelectionViewParams {
                     title: Some("Delete this session?".to_string()),
-                    subtitle: Some(
-                        "Cannot be undone. Subagent threads will also be deleted.".to_string(),
-                    ),
+                    subtitle: Some(subtitle.to_string()),
                     footer_hint: Some(standard_popup_hint_line()),
                     items: vec![
                         SelectionItem {
@@ -366,6 +372,9 @@ impl ChatWidget {
                 self.request_redraw();
             }
             SlashCommand::Clear => {
+                if self.confirm_clear_pending_handoff(/*name*/ None) {
+                    return;
+                }
                 self.app_event_tx.send(AppEvent::ClearUi { name: None });
             }
             SlashCommand::Resume => {
@@ -426,6 +435,20 @@ impl ChatWidget {
             }
             SlashCommand::Plan => {
                 self.apply_plan_slash_command();
+            }
+            SlashCommand::Handoff => {
+                if !self.is_session_configured() {
+                    self.queue_user_message_with_options(
+                        UserMessage::from("/handoff"),
+                        QueuedInputAction::ParseSlash,
+                        Vec::new(),
+                    );
+                    return;
+                }
+                self.begin_manual_handoff(
+                    crate::handoff::HandoffDisposition::Proceed,
+                    UserMessage::from(crate::handoff::manual_planning_prompt("")),
+                );
             }
             SlashCommand::Workflow => {
                 self.apply_workflow_slash_command();
@@ -753,6 +776,13 @@ impl ChatWidget {
             return;
         }
 
+        if cmd == SlashCommand::Handoff
+            && let Err(error) = crate::handoff::parse_handoff_args(&args)
+        {
+            self.add_error_message(error.to_string());
+            return;
+        }
+
         let Some((prepared_args, prepared_elements)) =
             self.prepare_live_inline_args(args, text_elements)
         else {
@@ -904,11 +934,17 @@ impl ChatWidget {
                 self.app_event_tx.set_thread_name(name);
             }
             SlashCommand::New if !trimmed.is_empty() => {
+                if self.confirm_new_pending_handoff(Some(trimmed.to_string())) {
+                    return;
+                }
                 self.app_event_tx.send(AppEvent::NewSession {
                     name: Some(trimmed.to_string()),
                 });
             }
             SlashCommand::Clear if !trimmed.is_empty() => {
+                if self.confirm_clear_pending_handoff(Some(trimmed.to_string())) {
+                    return;
+                }
                 self.app_event_tx.send(AppEvent::ClearUi {
                     name: Some(trimmed.to_string()),
                 });
@@ -959,6 +995,76 @@ impl ChatWidget {
                         Vec::new(),
                     );
                 }
+            }
+            SlashCommand::Handoff => {
+                let parsed = match crate::handoff::parse_handoff_args(&args) {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        self.add_error_message(error.to_string());
+                        return;
+                    }
+                };
+                let guidance_end = parsed.guidance_start + parsed.guidance.len();
+                let prompt = crate::handoff::manual_planning_prompt(&parsed.guidance);
+                let prompt_guidance_start = prompt.len().saturating_sub(parsed.guidance.len());
+                let original_text_elements = text_elements.clone();
+                let prompt_elements = text_elements
+                    .into_iter()
+                    .filter_map(|element| {
+                        let range = element.byte_range;
+                        (range.start >= parsed.guidance_start && range.end <= guidance_end).then(
+                            || {
+                                element.map_range(|range| {
+                                    (prompt_guidance_start + range.start - parsed.guidance_start
+                                        ..prompt_guidance_start + range.end - parsed.guidance_start)
+                                        .into()
+                                })
+                            },
+                        )
+                    })
+                    .collect();
+                let mut user_message = self.prepared_inline_user_message(
+                    args.clone(),
+                    prompt_elements,
+                    local_images,
+                    remote_image_urls,
+                    mention_bindings,
+                    source,
+                );
+                user_message.text = prompt;
+
+                if !self.is_session_configured()
+                    || (!self.current_model_supports_images()
+                        && (!user_message.local_images.is_empty()
+                            || !user_message.remote_image_urls.is_empty()))
+                {
+                    const HANDOFF_PREFIX: &str = "/handoff ";
+                    user_message.text = format!("{HANDOFF_PREFIX}{args}");
+                    user_message.text_elements = original_text_elements
+                        .into_iter()
+                        .map(|element| {
+                            element.map_range(|range| {
+                                (HANDOFF_PREFIX.len() + range.start
+                                    ..HANDOFF_PREFIX.len() + range.end)
+                                    .into()
+                            })
+                        })
+                        .collect();
+                    if self.is_session_configured() {
+                        self.submit_user_message_with_shell_escape_policy(
+                            user_message,
+                            ShellEscapePolicy::Disallow,
+                        );
+                    } else {
+                        self.queue_user_message_with_options(
+                            user_message,
+                            QueuedInputAction::ParseSlash,
+                            Vec::new(),
+                        );
+                    }
+                    return;
+                }
+                self.begin_manual_handoff(parsed.disposition, user_message);
             }
             SlashCommand::Config if !trimmed.is_empty() => {
                 if trimmed.eq_ignore_ascii_case("off") {
@@ -1354,6 +1460,7 @@ impl ChatWidget {
             | SlashCommand::Model
             | SlashCommand::Personality
             | SlashCommand::Plan
+            | SlashCommand::Handoff
             | SlashCommand::Workflow
             | SlashCommand::Config
             | SlashCommand::Goal

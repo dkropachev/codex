@@ -169,6 +169,7 @@ impl App {
             self.reconnect.failed = false;
             self.cancel_pending_key_chord();
             self.overlay = None;
+            self.chat_widget.set_app_overlay_active(/*active*/ false);
             self.commit_animation = None;
             self.clear_recap_request(crate::app_event::RecapTrigger::Manual);
             if let Some(task) = self.agents_overview.refresh_task.take() {
@@ -218,6 +219,7 @@ impl App {
             .selected_index_for_present_view(agents_overview::AGENTS_OVERVIEW_VIEW_ID)
             .and_then(|index| self.agents_overview.visible_thread_ids.get(index).copied());
         let displayed = self.current_displayed_thread_id();
+        self.chat_widget.cancel_automatic_handoff_for_navigation();
         let mut input = self.chat_widget.capture_thread_input_state();
         if let Some(input) = input.as_mut() {
             input.recovered_queue = true;
@@ -344,6 +346,7 @@ impl App {
             );
             self.replace_chat_widget(ChatWidget::new_with_app_event(init));
             self.chat_widget.restore_reconnected_input(input);
+            self.chat_widget.redisplay_pending_handoff();
         }
         // Discover tasks whose notifications were missed, without clearing retained rows.
         // A hidden overview performs this discovery when it is next opened.

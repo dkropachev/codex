@@ -4,6 +4,7 @@
 //! and final-message separator handling.
 
 use super::*;
+use crate::handoff::HandoffTelemetryEvent;
 
 const LEGACY_SAFETY_ACCESS_BLOCK_PREFIX: &str =
     "Invalid prompt: we've limited access to this content for safety reasons.";
@@ -194,7 +195,12 @@ impl ChatWidget {
         let had_pending_steers = !self.input_queue.pending_steers.is_empty();
         self.refresh_pending_input_preview();
 
-        if !from_replay && !self.has_queued_follow_up_messages() && !had_pending_steers {
+        let handoff_handled = !from_replay && self.advance_handoff_after_successful_turn();
+        if !from_replay
+            && !handoff_handled
+            && !self.has_queued_follow_up_messages()
+            && !had_pending_steers
+        {
             self.maybe_prompt_plan_implementation();
         }
         // Keep this flag for replayed completion events so a subsequent live TurnComplete can
@@ -219,6 +225,10 @@ impl ChatWidget {
         }
 
         self.maybe_show_pending_rate_limit_prompt();
+        if !from_replay {
+            self.qualify_automatic_handoff_after_live_completion();
+            self.request_automatic_handoff_check();
+        }
     }
 
     pub(super) fn maybe_prompt_plan_implementation(&mut self) {
@@ -356,6 +366,7 @@ impl ChatWidget {
     }
 
     pub(super) fn on_server_overloaded_error(&mut self, message: String) {
+        self.cancel_handoff_for_unsuccessful_turn(HandoffTelemetryReason::ServerOverloaded);
         self.input_queue.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
 
@@ -371,6 +382,7 @@ impl ChatWidget {
     }
 
     fn on_error(&mut self, message: String) {
+        self.cancel_handoff_for_unsuccessful_turn(HandoffTelemetryReason::TurnError);
         self.input_queue.submit_pending_steers_after_interrupt = false;
         self.flush_answer_stream_with_separator();
         self.finalize_turn();
@@ -389,11 +401,29 @@ impl ChatWidget {
         if !self.input_queue.user_turn_pending_start {
             return false;
         }
+        let restore_pending_handoff = self
+            .pending_handoff_state()
+            .is_some_and(|pending| pending.submitted_text().is_some());
+        let pending_handoff_completion = self
+            .pending_handoff_state()
+            .and_then(crate::handoff::PendingHandoffState::completion);
+        self.pending_handoff_submission_failed();
         self.on_error(message);
+        if restore_pending_handoff {
+            self.redisplay_pending_handoff();
+            if let Some((trigger, _)) = pending_handoff_completion {
+                HandoffTelemetryEvent::Failure {
+                    trigger,
+                    reason: HandoffTelemetryReason::ExecutionSubmission,
+                }
+                .record(&self.session_telemetry);
+            }
+        }
         true
     }
 
     pub(super) fn on_cyber_policy_error(&mut self) {
+        self.cancel_handoff_for_unsuccessful_turn(HandoffTelemetryReason::PolicyError);
         self.input_queue.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
         let plan_type = if self.has_chatgpt_account {
@@ -488,6 +518,7 @@ impl ChatWidget {
                         .is_some_and(is_safety_access_block_message)
             })
         {
+            self.cancel_handoff_for_unsuccessful_turn(HandoffTelemetryReason::SafetyError);
             self.input_queue.submit_pending_steers_after_interrupt = false;
             self.finalize_turn();
             self.add_to_history(history_cell::new_safety_access_block_event());

@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/plan_handoff__state.rs
+expression: displayed
+---
+• Pending handoff plan It will be sent with your next model-bound prompt; local and shell commands leave it pending.
+
+
+• Proposed Plan
+
+
+  - Preserve completed work

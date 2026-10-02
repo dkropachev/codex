@@ -173,7 +173,19 @@ impl ChatWidget {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn on_plan_item_completed(&mut self, text: String) {
+        let turn_id = self.turn_lifecycle.last_turn_id.clone();
+        self.on_plan_item_completed_for_turn(text, turn_id);
+    }
+
+    pub(super) fn on_plan_item_completed_for_turn(
+        &mut self,
+        text: String,
+        turn_id: Option<String>,
+    ) {
+        self.transcript.latest_authoritative_plan_markdown = Some(text.clone());
+        self.transcript.latest_authoritative_plan_turn_id = turn_id;
         let (plan_text, source) = if text.trim().is_empty() {
             (
                 self.transcript.plan_delta_buffer.trim().to_string(),
@@ -186,6 +198,8 @@ impl ChatWidget {
             self.transcript
                 .record_agent_markdown(plan_text.clone(), source);
             self.transcript.latest_proposed_plan_markdown = Some(plan_text.clone());
+        } else {
+            self.transcript.latest_proposed_plan_markdown = None;
         }
         // Plan commit ticks can hide the status row; remember whether we streamed plan output so
         // completion can restore it once stream queues are idle.

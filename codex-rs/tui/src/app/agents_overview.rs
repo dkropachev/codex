@@ -312,14 +312,6 @@ impl App {
                     previous_running_thread_ids.push(*thread_id);
                 }
             }
-            if let Some(active_thread_id) = self.current_displayed_thread_id()
-                && let Some(input_state) = self.chat_widget.capture_thread_input_state()
-            {
-                self.agents_overview
-                    .input_states
-                    .insert(active_thread_id, input_state);
-            }
-
             let target_thread = match app_server
                 .thread_read(root_thread_id, /*include_turns*/ false)
                 .await
@@ -439,6 +431,14 @@ impl App {
                     }
                 }
             }
+            self.chat_widget.cancel_automatic_handoff_for_navigation();
+            if let Some(active_thread_id) = self.current_displayed_thread_id()
+                && let Some(input_state) = self.chat_widget.capture_thread_input_state()
+            {
+                self.agents_overview
+                    .input_states
+                    .insert(active_thread_id, input_state);
+            }
             if previous_running_thread_ids.is_empty() {
                 self.shutdown_current_thread(app_server).await;
             }
@@ -462,6 +462,9 @@ impl App {
             );
             self.file_search
                 .update_search_dir(self.config.cwd.to_path_buf());
+            if let Some(input_state) = self.agents_overview.input_states.get_mut(&root_thread_id) {
+                input_state.reconcile_handoff_turns(&resumed.turns);
+            }
             if let Err(error) = self
                 .replace_chat_widget_with_app_server_thread(
                     tui,
@@ -530,8 +533,14 @@ impl App {
         self.replay_agents_overview_requests(app_server, root_thread_id)
             .await;
         if self.current_displayed_thread_id() == Some(root_thread_id)
-            && let Some(input_state) = self.agents_overview.input_states.remove(&root_thread_id)
+            && let Some(mut input_state) = self.agents_overview.input_states.remove(&root_thread_id)
         {
+            if let Some(channel) = self.thread_event_channels.get(&root_thread_id) {
+                let turns = channel.store.lock().await.turns.clone();
+                input_state.reconcile_handoff_turns(&turns);
+            }
+            input_state
+                .replace_pending_handoff_state(self.chat_widget.pending_handoff_state().cloned());
             let preserve_in_flight_turn = self
                 .active_turn_id_for_thread(root_thread_id)
                 .await
@@ -540,8 +549,11 @@ impl App {
                 Some(input_state),
                 ThreadInputStateRestoreMode {
                     preserve_in_flight_turn,
+                    redisplay_pending_handoff: false,
                 },
             );
+            self.chat_widget
+                .advance_restored_manual_handoff_after_snapshot();
             if !preserve_in_flight_turn {
                 self.chat_widget.maybe_send_next_queued_input();
             }

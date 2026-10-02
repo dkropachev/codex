@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/plan_handoff__state.rs
+expression: popup
+---
+  Discard the pending handoff?
+  Starting another fresh chat removes this in-memory handoff plan.
+
+› 1. Keep the pending handoff  Return to this fresh session.
+  2. Discard and clear         Start another fresh chat without the plan.
+
+  Press enter to confirm or esc to go back

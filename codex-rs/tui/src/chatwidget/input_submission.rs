@@ -2,6 +2,12 @@
 
 use super::*;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModelInputExpansion {
+    Normal,
+    HandoffTextOnly,
+}
+
 impl ChatWidget {
     pub(crate) fn set_task_mentions_enabled(&mut self, enabled: bool) {
         self.bottom_pane.set_task_mentions_enabled(enabled);
@@ -49,7 +55,7 @@ impl ChatWidget {
         }
     }
 
-    fn submit_shell_command_with_history(
+    pub(super) fn submit_shell_command_with_history(
         &mut self,
         command: &str,
         history_text: &str,
@@ -90,6 +96,7 @@ impl ChatWidget {
             user_message,
             history_record,
             ShellEscapePolicy::Allow,
+            ModelInputExpansion::Normal,
         )
         .0
     }
@@ -103,8 +110,19 @@ impl ChatWidget {
             user_message,
             UserMessageHistoryRecord::UserMessageText,
             shell_escape_policy,
+            ModelInputExpansion::Normal,
         )
         .1
+    }
+
+    pub(crate) fn submit_handoff_user_message(&mut self, user_message: UserMessage) -> bool {
+        self.submit_user_message_with_history_and_shell_escape_policy(
+            user_message,
+            UserMessageHistoryRecord::UserMessageText,
+            ShellEscapePolicy::Disallow,
+            ModelInputExpansion::HandoffTextOnly,
+        )
+        .0
     }
 
     fn submit_user_message_with_history_and_shell_escape_policy(
@@ -112,6 +130,7 @@ impl ChatWidget {
         user_message: UserMessage,
         history_record: UserMessageHistoryRecord,
         shell_escape_policy: ShellEscapePolicy,
+        input_expansion: ModelInputExpansion,
     ) -> (bool, Option<AppCommand>) {
         if self.misalignment_policy_violation {
             return (false, None);
@@ -134,6 +153,16 @@ impl ChatWidget {
             self.input_queue
                 .queued_user_message_history_records
                 .push_front(history_record);
+            self.refresh_pending_input_preview();
+            return (true, None);
+        }
+        if self.pending_handoff_plan().is_some() && self.is_user_turn_pending_or_running() {
+            self.input_queue
+                .queued_user_messages
+                .push_back(QueuedUserMessage::from(user_message));
+            self.input_queue
+                .queued_user_message_history_records
+                .push_back(history_record);
             self.refresh_pending_input_preview();
             return (true, None);
         }
@@ -190,6 +219,23 @@ impl ChatWidget {
             return (app_command.is_some(), app_command);
         }
 
+        let pending_handoff_input = self.pending_handoff_execution(&text);
+        let (model_text, model_text_elements) = if let Some((handoff_prompt, instruction_offset)) =
+            pending_handoff_input.as_ref()
+        {
+            let elements = text_elements
+                .iter()
+                .map(|element| {
+                    element.map_range(|range| {
+                        (instruction_offset + range.start..instruction_offset + range.end).into()
+                    })
+                })
+                .collect();
+            (handoff_prompt.clone(), elements)
+        } else {
+            (text.clone(), text_elements.clone())
+        };
+
         for image_url in &remote_image_urls {
             items.push(UserInput::Image {
                 url: image_url.clone(),
@@ -204,10 +250,10 @@ impl ChatWidget {
             });
         }
 
-        if !text.is_empty() {
+        if !model_text.is_empty() {
             items.push(UserInput::Text {
-                text: text.clone(),
-                text_elements: app_server_text_elements(&text_elements),
+                text: model_text,
+                text_elements: app_server_text_elements(&model_text_elements),
             });
         }
 
@@ -220,7 +266,9 @@ impl ChatWidget {
         let mut selected_skill_paths: HashSet<AbsolutePathBuf> = HashSet::new();
         let mut selected_plugin_ids: HashSet<String> = HashSet::new();
 
-        if let Some(skills) = self.bottom_pane.skills() {
+        if input_expansion == ModelInputExpansion::Normal
+            && let Some(skills) = self.bottom_pane.skills()
+        {
             skill_names_lower = skills
                 .iter()
                 .map(|skill| skill.name.to_ascii_lowercase())
@@ -256,7 +304,9 @@ impl ChatWidget {
             }
         }
 
-        if let Some(plugins) = self.plugins_for_mentions() {
+        if input_expansion == ModelInputExpansion::Normal
+            && let Some(plugins) = self.plugins_for_mentions()
+        {
             for binding in &mention_bindings {
                 let Some(plugin_config_name) = binding
                     .path
@@ -281,7 +331,9 @@ impl ChatWidget {
         }
 
         let mut selected_app_ids: HashSet<String> = HashSet::new();
-        if let Some(apps) = self.connectors_for_mentions() {
+        if input_expansion == ModelInputExpansion::Normal
+            && let Some(apps) = self.connectors_for_mentions()
+        {
             for binding in &mention_bindings {
                 let Some(app_id) = binding
                     .path
@@ -337,8 +389,16 @@ impl ChatWidget {
             return (false, None);
         }
 
-        self.maybe_apply_ide_context(&mut items);
-        crate::task_mentions::apply_task_references(&mut items, &mention_bindings, self.thread_id);
+        if input_expansion == ModelInputExpansion::Normal && pending_handoff_input.is_none() {
+            self.maybe_apply_ide_context(&mut items);
+        }
+        if input_expansion == ModelInputExpansion::Normal {
+            crate::task_mentions::apply_task_references(
+                &mut items,
+                &mention_bindings,
+                self.thread_id,
+            );
+        }
 
         let collaboration_mode = if self.collaboration_modes_enabled() {
             self.active_collaboration_mask
@@ -372,6 +432,7 @@ impl ChatWidget {
             self.config.cwd.to_path_buf()
         };
         let active_permission_profile = self.config.permissions.active_permission_profile();
+        let handoff_submission_items = self.handoff_tracks_submission().then(|| items.clone());
         let op = AppCommand::user_turn(
             items,
             turn_cwd,
@@ -412,6 +473,16 @@ impl ChatWidget {
 
         if !self.submit_op(op.clone()) {
             return (false, None);
+        }
+        if let Some(items) = handoff_submission_items {
+            self.note_handoff_submission(items);
+        }
+        if pending_handoff_input.is_some() {
+            let submitted_text = pending_handoff_input
+                .as_ref()
+                .map(|(text, _)| text.clone())
+                .unwrap_or_default();
+            self.mark_pending_handoff_submission_awaiting_commit(submitted_text);
         }
         self.dismiss_backend_banner_for_new_turn();
         if render_in_history {

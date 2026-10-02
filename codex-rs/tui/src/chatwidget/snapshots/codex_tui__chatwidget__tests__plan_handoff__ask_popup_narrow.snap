@@ -1,0 +1,24 @@
+---
+source: tui/src/chatwidget/tests/plan_handoff__state.rs
+expression: "normalize_snapshot_paths(render_bottom_popup(&chat, 38))"
+---
+  Handoff plan ready
+  Choose how to continue with the va
+
+› 1. Clear and proceed   Start a
+                         fresh
+                         thread and
+                         execute the
+                         plan now.
+  2. Clear and defer     Start fresh
+                         and wait
+                         for your
+                         next
+                         prompt.
+  3. Stay in Handoff mo… Keep
+                         refining
+                         the handoff
+                         in this
+                         thread.
+
+  Press enter to confirm or esc to go

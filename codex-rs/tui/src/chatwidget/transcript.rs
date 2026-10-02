@@ -39,6 +39,10 @@ pub(super) struct TranscriptState {
     pub(super) last_completed_agent_message: Option<(String, String)>,
     /// Raw markdown of the most recently completed proposed plan.
     pub(super) latest_proposed_plan_markdown: Option<String>,
+    /// Exact text from the latest authoritative completed Plan item, including an empty
+    /// replacement. Streaming display fallback must never overwrite this transfer source.
+    pub(super) latest_authoritative_plan_markdown: Option<String>,
+    pub(super) latest_authoritative_plan_turn_id: Option<String>,
     /// Whether this turn already produced a copyable response.
     pub(super) saw_copy_source_this_turn: bool,
     /// Whether the next streamed assistant content should be preceded by a final message separator.
@@ -101,6 +105,8 @@ impl TranscriptState {
         self.saw_plan_item_this_turn = false;
         self.had_work_activity = false;
         self.latest_proposed_plan_markdown = None;
+        self.latest_authoritative_plan_markdown = None;
+        self.latest_authoritative_plan_turn_id = None;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
     }

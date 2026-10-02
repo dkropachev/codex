@@ -634,6 +634,7 @@ impl App {
             self.chat_widget.add_info_message(message, /*hint*/ None);
         }
         self.refresh_pending_thread_approvals().await;
+        self.chat_widget.request_automatic_handoff_check();
 
         Ok(())
     }
@@ -813,6 +814,24 @@ impl App {
         initial_user_message: Option<crate::chatwidget::UserMessage>,
         new_thread_name: Option<String>,
     ) {
+        self.start_fresh_session_with_summary_hint_inner(
+            tui,
+            app_server,
+            session_start_source,
+            initial_user_message,
+            new_thread_name,
+        )
+        .await;
+    }
+
+    async fn start_fresh_session_with_summary_hint_inner(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        session_start_source: Option<ThreadStartSource>,
+        initial_user_message: Option<crate::chatwidget::UserMessage>,
+        new_thread_name: Option<String>,
+    ) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history. If an initial message is provided, `enqueue_primary_thread_session` suppresses it
         // until the new session is configured and any replayed turns have been rendered.
@@ -832,6 +851,7 @@ impl App {
             self.chat_widget.thread_name(),
             self.chat_widget.rollout_path().as_deref(),
         );
+        self.chat_widget.cancel_automatic_handoff_for_navigation();
         self.shutdown_current_thread(app_server).await;
         let tracked_thread_ids: Vec<ThreadId> =
             self.thread_event_channels.keys().copied().collect();
@@ -914,6 +934,27 @@ impl App {
         // Initial messages are for freshly attached primary threads only. Thread switches and
         // resume/fork flows pass `None` so they cannot replay old history and then auto-submit a new
         // user turn by accident.
+        if let Some(thread_id) = self.chat_widget.thread_id() {
+            if let Some(pending) = self.chat_widget.pending_handoff_state().cloned() {
+                self.pending_handoffs.insert(thread_id, pending);
+            } else {
+                self.pending_handoffs.remove(&thread_id);
+            }
+        }
+        if let Some(thread_id) = self.chat_widget.thread_id() {
+            let passive = self.chat_widget.passive_handoff_state();
+            if passive == crate::handoff::PassiveHandoffState::default() {
+                self.handoff_passive_states.remove(&thread_id);
+            } else {
+                self.handoff_passive_states.insert(thread_id, passive);
+            }
+        }
+        let attached_thread_id = started.session.thread_id;
+        let pending_handoff = self.pending_handoffs.get(&attached_thread_id).cloned();
+        let passive_handoff = self
+            .handoff_passive_states
+            .get(&attached_thread_id)
+            .copied();
         self.reset_thread_event_state();
         let init = self.chatwidget_init_for_forked_or_resumed_thread(
             tui,
@@ -925,15 +966,37 @@ impl App {
             .set_task_mentions_enabled(started.task_tools_available);
         self.chat_widget
             .note_rendered_width(tui.terminal.last_known_screen_size.width);
+        if let Some(pending) = pending_handoff {
+            self.chat_widget.restore_pending_handoff_for_replay(pending);
+        }
+        if let Some(passive) = passive_handoff {
+            self.chat_widget.restore_passive_handoff_state(passive);
+        }
         if started.blocks_direct_input {
             self.mark_primary_thread_parent_owned(started.session.thread_id);
         }
-        self.enqueue_primary_thread_session_with_presentation(
-            started.session,
-            started.turns,
-            presentation,
-        )
-        .await?;
+        // The destination channel is active before buffered primary events are replayed, so the
+        // only fallible request-localization path used for inactive threads is unreachable here.
+        // Keep an individual malformed buffered event from turning a committed widget swap into a
+        // partial attachment failure.
+        if let Err(error) = self
+            .enqueue_primary_thread_session_with_presentation(
+                started.session,
+                started.turns,
+                presentation,
+            )
+            .await
+        {
+            tracing::warn!(%error, "failed to replay a buffered event while attaching thread");
+            self.chat_widget.add_error_message(format!(
+                "The thread was attached, but one buffered event could not be restored: {error}"
+            ));
+        }
+        if self.chat_widget.pending_handoff_plan().is_some() {
+            self.chat_widget.redisplay_pending_handoff();
+        } else {
+            self.pending_handoffs.remove(&attached_thread_id);
+        }
         Ok(())
     }
 
@@ -1114,6 +1177,7 @@ impl App {
         {
             Ok(resumed) => {
                 let resumed_thread_id = resumed.session.thread_id;
+                self.chat_widget.cancel_automatic_handoff_for_navigation();
                 self.shutdown_current_thread(app_server).await;
                 self.config = resume_config;
                 tui.set_notification_settings(

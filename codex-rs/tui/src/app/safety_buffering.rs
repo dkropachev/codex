@@ -49,6 +49,7 @@ impl App {
         }
 
         let retry_config = self.chat_widget.config_ref().clone();
+        self.chat_widget.cancel_automatic_handoff_for_navigation();
         let input_state = self.chat_widget.capture_thread_input_state();
 
         let AppCommand::UserTurn {
@@ -211,6 +212,7 @@ impl App {
             input_state,
             ThreadInputStateRestoreMode {
                 preserve_in_flight_turn: false,
+                redisplay_pending_handoff: true,
             },
         );
         self.chat_widget
@@ -236,6 +238,7 @@ impl App {
             input_state,
             ThreadInputStateRestoreMode {
                 preserve_in_flight_turn: false,
+                redisplay_pending_handoff: true,
             },
         );
         self.chat_widget.cancel_safety_buffered_retry_submission();

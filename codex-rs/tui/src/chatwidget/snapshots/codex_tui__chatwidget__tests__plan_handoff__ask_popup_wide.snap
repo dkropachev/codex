@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/plan_handoff__state.rs
+expression: "normalize_snapshot_paths(render_bottom_popup(&chat, 80))"
+---
+  Handoff plan ready
+  Choose how to continue with the validated plan.
+
+› 1. Clear and proceed     Start a fresh thread and execute the plan now.
+  2. Clear and defer       Start fresh and wait for your next prompt.
+  3. Stay in Handoff mode  Keep refining the handoff in this thread.
+
+  Press enter to confirm or esc to go back

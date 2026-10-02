@@ -759,6 +759,12 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub auto_recap: bool,
 
+    /// Percentage of the active context window used before the TUI automatically hands work off
+    /// to a fresh session. Omit this setting to disable automatic handoff.
+    #[serde(default)]
+    #[schemars(range(min = 71, max = 85))]
+    pub auto_handoff_threshold_percent: Option<u8>,
+
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.

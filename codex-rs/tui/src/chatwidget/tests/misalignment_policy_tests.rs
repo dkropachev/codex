@@ -92,13 +92,19 @@ async fn misalignment_policy_failure_stops_the_thread_and_renders_once() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    assert_matches!(rx.try_recv(), Ok(AppEvent::NewSession { name: None }));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ConfirmNewSessionWithPendingHandoff { name: None })
+    );
     assert!(rx.try_recv().is_err());
 
     chat.show_misalignment_policy_precaution();
     assert_eq!(render_bottom_popup(&chat, /*width*/ 80), popup);
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    assert_matches!(rx.try_recv(), Ok(AppEvent::NewSession { name: None }));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ConfirmNewSessionWithPendingHandoff { name: None })
+    );
 
     chat.show_misalignment_policy_precaution();
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));

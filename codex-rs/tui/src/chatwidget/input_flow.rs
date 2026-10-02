@@ -29,6 +29,13 @@ impl ChatWidget {
                 {
                     return;
                 }
+                if self.has_pending_handoff()
+                    && let Some(command) = user_message.text.strip_prefix('!')
+                {
+                    let history_text = user_message.text.clone();
+                    self.submit_shell_command_with_history(command, &history_text);
+                    return;
+                }
                 let should_submit_now = self.is_session_configured()
                     && !self.is_plan_streaming_in_tui()
                     && !self.input_queue.suppress_queue_autosend
@@ -85,6 +92,7 @@ impl ChatWidget {
         if had_modal_or_popup && self.bottom_pane.no_modal_or_popup_active() {
             self.maybe_send_next_queued_input();
         }
+        self.request_automatic_handoff_check();
     }
 
     pub(super) fn defer_input_until_settings_applied(&mut self) {
@@ -98,6 +106,7 @@ impl ChatWidget {
             self.app_event_tx.send(AppEvent::SettingsSelectionClosed);
         } else {
             self.maybe_send_next_queued_input();
+            self.request_automatic_handoff_check();
         }
     }
 

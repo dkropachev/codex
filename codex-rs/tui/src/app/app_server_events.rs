@@ -178,6 +178,7 @@ impl App {
                         self.startup_pending_protected_request =
                             self.chat_widget.has_pending_protected_request();
                     }
+                    self.chat_widget.request_automatic_handoff_check();
                 }
             }
             ServerNotification::McpServerStatusUpdated(_) => {

@@ -211,6 +211,7 @@ impl ChatWidget {
             self.restore_reasoning_status_header();
         }
         self.maybe_send_next_queued_input();
+        self.request_automatic_handoff_check();
         self.request_redraw();
     }
 

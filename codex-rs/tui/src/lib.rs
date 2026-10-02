@@ -138,6 +138,7 @@ mod get_git_diff;
 mod git_action_directives;
 mod goal_display;
 mod goal_files;
+mod handoff;
 mod history_cell;
 mod hooks_rpc;
 mod ide_context;

@@ -253,6 +253,12 @@ mod misalignment_policy;
 #[path = "tests/permission_shortcuts_tests.rs"]
 mod permission_shortcuts_tests;
 mod permissions;
+#[path = "tests/plan_handoff__commands.rs"]
+mod plan_handoff_commands;
+#[path = "tests/plan_handoff__races.rs"]
+mod plan_handoff_races;
+#[path = "tests/plan_handoff__state.rs"]
+mod plan_handoff_state;
 mod plan_mode;
 #[path = "tests/plugin_catalog_tests.rs"]
 mod plugin_catalog;
