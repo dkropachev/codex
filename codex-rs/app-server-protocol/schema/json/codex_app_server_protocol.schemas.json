@@ -20318,6 +20318,17 @@
       "ThreadCompactStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadCompactStartSource"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Identifies what initiated the compaction. Omission defaults to manual."
+          },
           "threadId": {
             "type": "string"
           }
@@ -20330,8 +20341,23 @@
       },
       "ThreadCompactStartResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "turnId"
+        ],
         "title": "ThreadCompactStartResponse",
         "type": "object"
+      },
+      "ThreadCompactStartSource": {
+        "enum": [
+          "manual",
+          "automaticContextManagement"
+        ],
+        "type": "string"
       },
       "ThreadDeleteParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -24559,6 +24585,10 @@
               "string",
               "null"
             ]
+          },
+          "startIfIdle": {
+            "description": "Start a new turn only if the thread is idle. When false or omitted, preserve the default start-or-steer behavior.",
+            "type": "boolean"
           },
           "summary": {
             "anyOf": [

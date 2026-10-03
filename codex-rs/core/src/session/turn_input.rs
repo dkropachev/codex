@@ -9,14 +9,13 @@
 //! options only apply on Started.
 
 use super::TurnInput;
+use super::idle_turn;
 use super::session::Session;
 use super::session::SessionConfiguration;
 use super::session::SessionSettingsUpdate;
 use super::thread_settings;
 use super::turn_context::NewTurnContextOptions;
 use super::turn_context::TurnContext;
-use crate::state::ActiveTurn;
-use crate::state::TurnState;
 use crate::tasks::RegularTask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::error::CodexErr;
@@ -354,29 +353,15 @@ async fn start_if_idle(
         });
     }
 
-    let turn_state = {
-        let mut active_turn = session.active_turn.lock().await;
-        if active_turn.is_some() {
-            return Ok(TurnInputSubmission::NotSubmitted {
-                reason: NotSubmittedReason::NotIdle,
-            });
-        }
-        let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
-        Arc::clone(&active_turn.turn_state)
+    let turn_state = match idle_turn::reserve(session).await {
+        Ok(turn_state) => turn_state,
+        Err(reason) => return Ok(TurnInputSubmission::NotSubmitted { reason }),
     };
-
-    if session.input_queue.has_trigger_turn_mailbox_items().await {
-        session.clear_reserved_idle_turn(&turn_state).await;
-        session.maybe_start_turn_for_pending_work().await;
-        return Ok(TurnInputSubmission::NotSubmitted {
-            reason: NotSubmittedReason::PendingTriggerTurn,
-        });
-    }
 
     let settings = match PreparedTurnInputSettings::prepare(session, thread_settings, start).await {
         Ok(settings) => settings,
         Err(error) => {
-            session.clear_reserved_idle_turn(&turn_state).await;
+            idle_turn::clear(session, &turn_state).await;
             return Err(error);
         }
     };
@@ -386,13 +371,13 @@ async fn start_if_idle(
     {
         Ok(Some(turn_context)) => turn_context,
         Ok(None) => {
-            session.clear_reserved_idle_turn(&turn_state).await;
+            idle_turn::clear(session, &turn_state).await;
             return Ok(TurnInputSubmission::NotSubmitted {
                 reason: NotSubmittedReason::PlanMode,
             });
         }
         Err(error) => {
-            session.clear_reserved_idle_turn(&turn_state).await;
+            idle_turn::clear(session, &turn_state).await;
             return Err(error);
         }
     };
@@ -528,16 +513,6 @@ impl Session {
                 })
                 .await;
             }
-        }
-    }
-
-    async fn clear_reserved_idle_turn(&self, turn_state: &Arc<tokio::sync::Mutex<TurnState>>) {
-        let mut active_turn_guard = self.active_turn.lock().await;
-        if let Some(active_turn) = active_turn_guard.as_ref()
-            && active_turn.task.is_none()
-            && Arc::ptr_eq(&active_turn.turn_state, turn_state)
-        {
-            *active_turn_guard = None;
         }
     }
 

@@ -155,6 +155,10 @@ pub struct TurnToolOutput {
 #[ts(export_to = "v2/")]
 pub struct TurnStartParams {
     pub thread_id: String,
+    /// Start a new turn only if the thread is idle. When false or omitted,
+    /// preserve the default start-or-steer behavior.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub start_if_idle: bool,
     #[ts(optional = nullable)]
     pub client_user_message_id: Option<String>,
     pub input: Vec<UserInput>,

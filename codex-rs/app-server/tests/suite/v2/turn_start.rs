@@ -50,6 +50,8 @@ use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadShellCommandParams;
@@ -417,7 +419,115 @@ async fn turn_start_with_empty_input_runs_model_request() -> Result<()> {
 }
 
 #[tokio::test]
-async fn turn_start_steers_active_turn_and_returns_active_turn_id() -> Result<()> {
+async fn turn_start_if_idle_starts_idle_turn_and_rejects_busy_thread() -> Result<()> {
+    let (release_response, response_gate) = oneshot::channel();
+    let (server, _completions) = start_streaming_sse_server(vec![vec![
+        StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![responses::ev_response_created("resp-1")]),
+        },
+        StreamingSseChunk {
+            gate: Some(response_gate),
+            body: responses::sse(vec![responses::ev_completed("resp-1")]),
+        },
+    ]])
+    .await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(server.uri()).write(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+
+    let ThreadStartResponse { thread, .. } = mcp
+        .start_thread(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let TurnStartResponse { turn: active_turn } = mcp
+        .request(|request_id| ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: thread.id.clone(),
+                start_if_idle: true,
+                input: vec![V2UserInput::Text {
+                    text: "start while idle".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            },
+        })
+        .await?;
+    let started: TurnStartedNotification =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_notification("turn/started")).await??;
+    assert_eq!(started.thread_id, thread.id);
+    assert_eq!(started.turn.id, active_turn.id);
+
+    let busy_request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            start_if_idle: true,
+            input: vec![V2UserInput::Text {
+                text: "must not steer".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(busy_request_id)),
+    )
+    .await??;
+    assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert_eq!(
+        error.error.message,
+        "thread already has an active or pending turn"
+    );
+
+    release_response
+        .send(())
+        .expect("active response gate should remain open");
+    let completed: TurnCompletedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_notification("turn/completed"),
+    )
+    .await??;
+    assert_eq!(completed.thread_id, thread.id);
+    assert_eq!(completed.turn.id, active_turn.id);
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
+
+    assert_eq!(server.requests().await.len(), 1);
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread.id,
+            include_turns: true,
+        })
+        .await?;
+    let ThreadReadResponse { thread } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(read_id)).await??;
+    let user_texts = thread
+        .turns
+        .iter()
+        .flat_map(|turn| &turn.items)
+        .filter_map(|item| match item {
+            ThreadItem::UserMessage { content, .. } => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|input| match input {
+            V2UserInput::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(user_texts, vec!["start while idle"]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_defaults_to_start_or_steer_while_active() -> Result<()> {
     let (release_response, response_gate) = oneshot::channel();
     let (server, _completions) = start_streaming_sse_server(vec![
         vec![
@@ -478,6 +588,7 @@ async fn turn_start_steers_active_turn_and_returns_active_turn_id() -> Result<()
             request_id,
             params: TurnStartParams {
                 thread_id: thread.id.clone(),
+                // Default false is omitted on the wire and preserves start-or-steer.
                 client_user_message_id: None,
                 input: vec![V2UserInput::Text {
                     text: "steer".to_string(),
@@ -3185,6 +3296,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
             params: TurnStartParams {
                 environments: None,
                 thread_id: thread.id.clone(),
+                start_if_idle: false,
                 client_user_message_id: None,
                 input: vec![V2UserInput::Text {
                     text: "first turn".to_string(),
@@ -3237,6 +3349,7 @@ async fn turn_start_explicit_local_environment_updates_legacy_cwd_between_turns(
                     runtime_workspace_roots: None,
                 }]),
                 thread_id: thread.id.clone(),
+                start_if_idle: false,
                 client_user_message_id: None,
                 input: vec![V2UserInput::Text {
                     text: "second turn".to_string(),

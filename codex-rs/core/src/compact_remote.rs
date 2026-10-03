@@ -80,6 +80,8 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
 pub(crate) async fn run_remote_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    trigger: CompactionTrigger,
+    reason: CompactionReason,
 ) -> CodexResult<()> {
     // Standalone compaction is its own request boundary, so it captures a fresh step.
     let step_context = sess
@@ -95,8 +97,8 @@ pub(crate) async fn run_remote_compact_task(
     sess.send_event(&turn_context, start_event).await;
 
     let compaction_metadata = CompactionTurnMetadata::new(
-        CompactionTrigger::Manual,
-        CompactionReason::UserRequested,
+        trigger,
+        reason,
         CompactionImplementation::ResponsesCompact,
         CompactionPhase::StandaloneTurn,
     );

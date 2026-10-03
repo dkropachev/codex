@@ -1186,6 +1186,7 @@ impl AppServerSession {
             .request_typed(ClientRequest::TurnStart {
                 request_id,
                 params: TurnStartParams {
+                    start_if_idle: false,
                     thread_id: thread_id.to_string(),
                     turn_trigger: None,
                     client_user_message_id: None,
@@ -1407,6 +1408,7 @@ impl AppServerSession {
                 request_id,
                 params: ThreadCompactStartParams {
                     thread_id: thread_id.to_string(),
+                    source: None,
                 },
             })
             .await

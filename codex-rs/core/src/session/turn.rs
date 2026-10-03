@@ -1255,6 +1255,11 @@ async fn run_auto_compact(
     if turn_context.config.features.enabled(Feature::TokenBudget) {
         // Compaction is the reset request, so force a new context window
         // instead of consuming a pending `new_context` tool request.
+        emit_compact_metric(
+            &sess.services.session_telemetry,
+            "token_budget",
+            /*manual*/ false,
+        );
         crate::compact_token_budget::run_inline_auto_compact_task(
             Arc::clone(sess),
             step_context,
