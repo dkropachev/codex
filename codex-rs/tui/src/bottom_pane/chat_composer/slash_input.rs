@@ -247,6 +247,16 @@ pub(super) fn queued_input_action(
 }
 
 impl ChatComposer {
+    pub(super) fn slash_input(&self) -> SlashInput<'_> {
+        SlashInput::new(
+            self.slash_commands_enabled(),
+            self.draft.is_bash_mode,
+            self.builtin_command_flags(),
+            &self.service_tier_commands,
+            &self.workflow_commands,
+        )
+    }
+
     pub(super) fn builtin_command_flags(&self) -> BuiltinCommandFlags {
         BuiltinCommandFlags {
             collaboration_modes_enabled: self.collaboration_modes_enabled,

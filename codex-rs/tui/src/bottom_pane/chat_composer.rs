@@ -329,7 +329,6 @@ use self::history_search::HistorySearchSession;
 use self::popup_state::ActivePopup;
 use self::popup_state::DismissedToken;
 use self::popup_state::PopupState;
-use self::slash_input::SlashInput;
 use self::slash_input::SlashValidation;
 use self::slash_input::SubmissionValidation;
 use self::vim_history::VimHistory;
@@ -619,16 +618,6 @@ pub(crate) struct ComposerDraftSnapshot {
 const FOOTER_SPACING_HEIGHT: u16 = 0;
 
 impl ChatComposer {
-    fn slash_input(&self) -> SlashInput<'_> {
-        SlashInput::new(
-            self.slash_commands_enabled(),
-            self.draft.is_bash_mode,
-            self.builtin_command_flags(),
-            &self.service_tier_commands,
-            &self.workflow_commands,
-        )
-    }
-
     pub fn new(
         has_input_focus: bool,
         app_event_tx: AppEventSender,
