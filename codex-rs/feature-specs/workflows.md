@@ -280,16 +280,6 @@ behavior.
 
 Not covered
 
-### mcp-server (Codex-as-MCP-server behavior)
-
-#### Description
-
-Workflows are not exposed as Codex-as-MCP-server tools.
-
-#### Status
-
-Not covered
-
 ### rmcp-client (MCP client transport and resource behavior)
 
 #### Description

@@ -1,22 +1,20 @@
 //! Diagnoses whether Codex update paths target the running installation.
 //!
 //! Update diagnostics combine cached version metadata, managed-standalone
-//! eligibility, and a bounded latest-version probe against the fork.
+//! eligibility, and a bounded latest-version HTTP probe against the fork. It
+//! never executes package managers or other helpers selected by PATH; npm update
+//! targets are not verified.
 
 use std::path::Path;
 #[cfg(target_os = "macos")]
 use std::path::PathBuf;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::time::Duration;
 
 use codex_core::config::Config;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 use codex_http_client::ClientRouteClass;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 use codex_http_client::RouteAwareClientPool;
 use codex_install_context::InstallContext;
 use codex_install_context::StandalonePlatform;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 use http::Method;
 use serde::Deserialize;
 #[cfg(target_os = "macos")]
@@ -29,9 +27,11 @@ use super::DoctorIssue;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use super::desktop::platform::InstalledApp;
 use super::doctor_install_context;
+use super::doctor_managed_by_npm;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use super::network;
-use super::run_command;
+
+const MAX_VERSION_RESPONSE_BYTES: usize = 1024 * 1024;
 
 const VERSION_FILE_NAME: &str = "version.json";
 const GITHUB_LATEST_RELEASE_URL: &str =
@@ -51,7 +51,7 @@ const DESKTOP_UPDATE_URL: &str =
 /// Network failures while fetching latest-version metadata degrade the row to a
 /// warning instead of failing doctor outright; update freshness is useful
 /// support context but should not mask more direct install/config failures.
-pub(super) fn updates_check(config: &Config) -> DoctorCheck {
+pub(super) async fn updates_check(config: &Config) -> DoctorCheck {
     let current_exe = std::env::current_exe().ok();
     let install_context = doctor_install_context(current_exe.as_deref());
     let mut details = vec![
@@ -73,7 +73,16 @@ pub(super) fn updates_check(config: &Config) -> DoctorCheck {
         Some(StandalonePlatform::Windows) | None => "manual fork bootstrap is required for updates",
     };
 
-    match fetch_latest_version() {
+    if doctor_managed_by_npm(current_exe.as_deref()) {
+        details
+            .push("npm update target: not inspected (PATH helpers are not executed)".to_string());
+    }
+    let client = RouteAwareClientPool::new_without_request_logging(
+        config.http_client_factory(),
+        ClientRouteClass::Other,
+    );
+
+    match fetch_latest_version(&client).await {
         Ok(latest_version) => {
             details.push(format!("latest version: {latest_version}"));
             if is_newer(&latest_version, env!("CARGO_PKG_VERSION")) == Some(true) {
@@ -397,25 +406,47 @@ fn update_action_label(context: &InstallContext) -> &'static str {
     }
 }
 
-fn fetch_latest_version() -> Result<String, String> {
+async fn fetch_latest_version(client: &RouteAwareClientPool) -> Result<String, String> {
     #[derive(Deserialize)]
     struct ReleaseInfo {
         tag_name: String,
     }
 
-    let info = http_get_json::<ReleaseInfo>(GITHUB_LATEST_RELEASE_URL)?;
+    let info = http_get_json::<ReleaseInfo>(client, GITHUB_LATEST_RELEASE_URL).await?;
     info.tag_name
         .strip_prefix("rust-v")
         .map(str::to_string)
         .ok_or_else(|| format!("failed to parse latest tag {}", info.tag_name))
 }
 
-fn http_get_json<T>(url: &str) -> Result<T, String>
+async fn http_get_json<T>(client: &RouteAwareClientPool, url: &str) -> Result<T, String>
 where
     T: for<'de> Deserialize<'de>,
 {
-    let body = run_command("curl", ["-fsSL", "--max-time", "5", url])?;
-    serde_json::from_str::<T>(&body).map_err(|err| err.to_string())
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
+        let mut response = client
+            .request(Method::GET, url)
+            .header(
+                http::header::USER_AGENT,
+                concat!("codex-doctor/", env!("CARGO_PKG_VERSION")),
+            )
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("HTTP {}", response.status()));
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|err| err.to_string())? {
+            if chunk.len() > MAX_VERSION_RESPONSE_BYTES.saturating_sub(body.len()) {
+                return Err("version response exceeds size limit".to_string());
+            }
+            body.extend_from_slice(&chunk);
+        }
+        serde_json::from_slice(&body).map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|_| "version request timed out".to_string())?
 }
 
 fn is_newer(latest: &str, current: &str) -> Option<bool> {
@@ -448,6 +479,74 @@ mod tests {
     use codex_install_context::CodexPackageLayout;
     use codex_install_context::InstallMethod;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn version_http_probe_decodes_json_and_rejects_invalid_responses() {
+        use codex_http_client::HttpClientFactory;
+        use codex_http_client::OutboundProxyPolicy;
+        use wiremock::Mock;
+        use wiremock::MockServer;
+        use wiremock::ResponseTemplate;
+        use wiremock::matchers::method;
+        use wiremock::matchers::path;
+
+        let server = MockServer::start().await;
+        let client = RouteAwareClientPool::new_without_request_logging(
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            ClientRouteClass::Other,
+        );
+        for (endpoint, response) in [
+            (
+                "valid",
+                ResponseTemplate::new(/*s*/ 200)
+                    .set_body_json(serde_json::json!({"version": "1.2.3"})),
+            ),
+            (
+                "invalid",
+                ResponseTemplate::new(/*s*/ 200).set_body_string("not JSON"),
+            ),
+            ("unavailable", ResponseTemplate::new(/*s*/ 503)),
+            ("proxy_auth_required", ResponseTemplate::new(/*s*/ 407)),
+            (
+                "redirect",
+                ResponseTemplate::new(/*s*/ 302)
+                    .insert_header("Location", format!("{}/valid", server.uri())),
+            ),
+            (
+                "timeout",
+                ResponseTemplate::new(/*s*/ 200).set_delay(Duration::from_secs(/*secs*/ 6)),
+            ),
+            (
+                "oversized",
+                ResponseTemplate::new(/*s*/ 200)
+                    .set_body_bytes(vec![b' '; MAX_VERSION_RESPONSE_BYTES + 1]),
+            ),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/{endpoint}")))
+                .respond_with(response)
+                .mount(&server)
+                .await;
+            let result = http_get_json::<serde_json::Value>(
+                &client,
+                &format!("{}/{endpoint}", server.uri()),
+            )
+            .await;
+            if matches!(endpoint, "valid" | "redirect") {
+                assert_eq!(result, Ok(serde_json::json!({"version": "1.2.3"})));
+            } else if endpoint == "timeout" {
+                assert_eq!(result, Err("version request timed out".to_string()));
+            } else if endpoint == "proxy_auth_required" {
+                assert_eq!(
+                    result,
+                    Err("HTTP 407 Proxy Authentication Required".to_string())
+                );
+            } else {
+                assert!(result.is_err(), "{endpoint} must not be accepted");
+            }
+        }
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

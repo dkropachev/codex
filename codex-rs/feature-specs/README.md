@@ -156,25 +156,6 @@ account storage, cached auth semantics, or auth error handling.
 
 - `codex-rs/login/tests/suite`
 
-### mcp-server (Codex-as-MCP-server behavior)
-
-#### Name
-
-MCP Server
-
-#### Short Description
-
-Codex-as-MCP-server behavior
-
-#### Description
-
-Place test cases here when external MCP clients invoke Codex as an MCP server, depend on Codex MCP
-tool schemas, or consume MCP result and error shapes.
-
-#### Path Ownership Rules
-
-- `codex-rs/mcp-server/tests/suite`
-
 ### rmcp-client (MCP client transport and resource behavior)
 
 #### Name

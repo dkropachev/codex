@@ -1511,6 +1511,10 @@ impl Renderable for McpServerElicitationOverlay {
 }
 
 impl BottomPaneView for McpServerElicitationOverlay {
+    fn next_frame_delay(&self) -> Option<std::time::Duration> {
+        self.composer.footer_flash_delay()
+    }
+
     fn keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
         if self.current_field_is_select() {
             crate::keymap::KeymapContextSet::new(crate::keymap::KeymapContext::List)

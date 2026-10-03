@@ -228,6 +228,7 @@ fn usage_limit_error(primary: RateLimitWindow) -> UsageLimitReachedError {
         rate_limits: Some(Box::new(RateLimitSnapshot {
             limit_id: Some("codex".to_string()),
             limit_name: None,
+            normal_model_slug: None,
             primary: Some(primary),
             secondary: None,
             credits: None,

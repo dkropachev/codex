@@ -6,30 +6,62 @@
 use super::*;
 
 impl ChatWidget {
+    /// Flush prior activity and preserve its separator before live or replayed assistant text.
+    pub(super) fn prepare_assistant_message(&mut self) {
+        // Before starting an agent stream, flush any active exec cell group.
+        self.flush_unified_exec_wait_streak();
+        self.flush_active_cell();
+        // If the previous turn inserted non-stream history (exec output, patch status, MCP
+        // calls), render a separator before starting the next streamed assistant message.
+        if self.transcript.needs_final_message_separator && self.transcript.had_work_activity {
+            self.add_to_history(history_cell::FinalMessageSeparator::new(
+                /*elapsed_seconds*/ None, /*runtime_metrics*/ None,
+            ));
+            self.transcript.needs_final_message_separator = false;
+        } else if self.transcript.needs_final_message_separator {
+            // Reset the flag even if we don't show separator (no work was done)
+            self.transcript.needs_final_message_separator = false;
+        }
+    }
+
     /// Replay a subset of initial events into the UI to seed the transcript when
     /// resuming an existing session. This approximates the live event flow and
     /// is intentionally conservative: only safe-to-replay items are rendered to
     /// avoid triggering side effects. Event ids are passed as `None` to
     /// distinguish replayed events from live ones.
     pub(crate) fn replay_thread_turns(&mut self, turns: Vec<Turn>, replay_kind: ReplayKind) {
+        if matches!(replay_kind, ReplayKind::ThreadSnapshot) && !turns.is_empty() {
+            self.warning_display_state.startup_complete = true;
+        }
+        let latest_turn_id = turns.last().map(|turn| turn.id.clone());
         for turn in turns {
             let Turn {
                 id: turn_id,
                 items_view: _,
                 items,
                 status,
-                error,
+                mut error,
                 started_at,
                 completed_at,
                 duration_ms,
             } = turn;
             if matches!(status, TurnStatus::InProgress) {
+                self.warning_display_state.startup_complete = true;
                 self.turn_lifecycle.last_turn_id = Some(turn_id.clone());
                 self.last_non_retry_error = None;
                 self.on_task_started();
             }
             for item in items {
                 self.replay_thread_item(item, turn_id.clone(), replay_kind);
+            }
+            // A resolved historical precaution must not clear the restored draft or input queue.
+            if Some(&turn_id) != latest_turn_id.as_ref()
+                && error.as_ref().is_some_and(|error| {
+                    error.codex_error_info
+                        == Some(AppServerCodexErrorInfo::MisalignmentPolicyViolation)
+                })
+            {
+                error = None;
             }
             if matches!(
                 status,
@@ -73,8 +105,10 @@ impl ChatWidget {
         let from_replay = render_source.is_replay();
         let replay_kind = render_source.replay_kind();
         match item {
-            ThreadItem::UserMessage { content, .. } => {
-                self.on_committed_user_message(&content, from_replay);
+            ThreadItem::UserMessage {
+                content, client_id, ..
+            } => {
+                self.on_committed_user_message(&content, client_id.as_deref(), from_replay);
             }
             ThreadItem::AgentMessage {
                 id,
@@ -177,8 +211,8 @@ impl ChatWidget {
                     item.saved_path,
                 );
             }
-            ThreadItem::ContextCompaction { .. } => {
-                self.add_info_message("Context compacted".to_string(), /*hint*/ None);
+            ThreadItem::ContextCompaction { id } => {
+                self.on_context_compaction_completed(&id, from_replay);
             }
             ThreadItem::FunctionCallOutput {
                 name,

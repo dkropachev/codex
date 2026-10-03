@@ -191,16 +191,6 @@ logout, token refresh, or cached auth semantics.
 
 Not covered
 
-### mcp-server (Codex-as-MCP-server behavior)
-
-#### Description
-
-Plugins can install MCP servers, but Codex-as-MCP-server tool behavior is owned by the MCP feature.
-
-#### Status
-
-Not covered
-
 ### rmcp-client (MCP client transport and resource behavior)
 
 #### Description

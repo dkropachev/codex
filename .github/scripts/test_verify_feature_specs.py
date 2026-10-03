@@ -488,7 +488,7 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 "`## E2E Coverage`",
                 "codex-rs/feature-specs/account-pool.md:27 must not include "
                 "`#### E2E Coverage`; use `## Test Places`",
-                "codex-rs/feature-specs/account-pool.md:159 must not include "
+                "codex-rs/feature-specs/account-pool.md:149 must not include "
                 "`## E2E Coverage`; use `## Test Places`",
                 "codex-rs/feature-specs/account-pool.md subfeature `Routing` "
                 "contains unexpected `#### E2E Coverage`",
@@ -938,7 +938,6 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 | account-pool | tui-e2e | missing-backlog | - | live-account-list | 0 | 0 | 1 |
                 | account-pool | tui-component | not-covered | - | - | 0 | 0 | 0 |
                 | account-pool | login-auth | not-covered | - | - | 0 | 0 | 0 |
-                | account-pool | mcp-server | not-covered | - | - | 0 | 0 | 0 |
                 | account-pool | rmcp-client | not-covered | - | - | 0 | 0 | 0 |
                 | account-pool | codex-api | not-covered | - | - | 0 | 0 | 0 |
                 | account-pool | exec-cli | not-covered | - | - | 0 | 0 | 0 |
@@ -1001,7 +1000,6 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 | account-pool | tui-e2e | not-covered | - | - | 0 | 0 | 0 |
                 | account-pool | tui-component | not-covered | - | - | 0 | 0 | 0 |
                 | account-pool | login-auth | not-covered | - | - | 0 | 0 | 0 |
-                | account-pool | mcp-server | not-covered | - | - | 0 | 0 | 0 |
                 | account-pool | rmcp-client | not-covered | - | - | 0 | 0 | 0 |
                 | account-pool | codex-api | not-covered | - | - | 0 | 0 | 0 |
                 | account-pool | exec-cli | not-covered | - | - | 0 | 0 | 0 |
@@ -1311,11 +1309,6 @@ class VerifyFeatureSpecsTest(unittest.TestCase):
                 "login-auth",
                 "auth and login behavior",
                 "This fixture feature has no auth or login behavior.",
-            ),
-            (
-                "mcp-server",
-                "Codex-as-MCP-server behavior",
-                "This fixture feature has no Codex-as-MCP-server behavior.",
             ),
             (
                 "rmcp-client",

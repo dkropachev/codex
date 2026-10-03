@@ -119,6 +119,8 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
             (58, "threads section empty preview indexes".to_string()),
             (59, "thread artifacts".to_string()),
             (60, "projects recency".to_string()),
+            (61, "threads originator".to_string()),
+            (62, "threads daybreak enabled".to_string()),
         ]
     );
 

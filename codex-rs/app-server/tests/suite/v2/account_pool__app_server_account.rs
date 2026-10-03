@@ -371,6 +371,7 @@ accounts = ["work-pro", "personal-pro"]
             rate_limits: RateLimitSnapshot {
                 limit_id: Some("codex".to_string()),
                 limit_name: None,
+                normal_model_slug: None,
                 primary: Some(RateLimitWindow {
                     used_percent: 42,
                     window_duration_mins: Some(60),
@@ -389,6 +390,7 @@ accounts = ["work-pro", "personal-pro"]
                     RateLimitSnapshot {
                         limit_id: Some("codex".to_string()),
                         limit_name: None,
+                        normal_model_slug: None,
                         primary: Some(RateLimitWindow {
                             used_percent: 42,
                             window_duration_mins: Some(60),
@@ -407,6 +409,7 @@ accounts = ["work-pro", "personal-pro"]
             ),
             rate_limit_reset_credits: None,
             account_id: None,
+            ordinary_usage_allowed: None,
             rate_limit_upsell: None,
         }
     );

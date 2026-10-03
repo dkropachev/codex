@@ -393,7 +393,7 @@ pub(super) async fn run_workflow_for_tui(
                 let Some(response) = response else {
                     return Ok(None);
                 };
-                match validate_user_input_response(&response_contract, response) {
+                match validate_user_input_response(&response_contract, response.response) {
                     Ok(response) => {
                         write_user_input_response(&mut child_stdin, request.id, &response).await?;
                     }

@@ -3,9 +3,8 @@
 ## Summary
 
 MCP lets Codex connect to external Model Context Protocol servers, expose their tools and resources,
-handle server elicitation, and run Codex itself as an MCP server. It is user-facing because MCP
-servers affect available tools, approval prompts, model-visible tool definitions, and client status
-surfaces.
+and handle server elicitation. It is user-facing because MCP servers affect available tools,
+approval prompts, model-visible tool definitions, and client status surfaces.
 
 ## Behavior
 
@@ -16,10 +15,6 @@ through the same approval and sandbox-aware tool machinery as built-in tools.
 MCP server status is visible through app-server and TUI surfaces. Server failures should be reported
 without dropping unrelated servers. MCP elicitation lets a server request structured user input, and
 clients must preserve the request schema and user response semantics.
-
-The Codex MCP server exposes Codex operations to external MCP clients. It must preserve approval
-behavior for exec and patch requests and return tool results in the MCP protocol shape expected by
-clients.
 
 ## Entry Points
 
@@ -32,7 +27,6 @@ clients.
 - [codex-rs/app-server-protocol/src/protocol/v2/mcp.rs](../app-server-protocol/src/protocol/v2/mcp.rs)
 - [codex-rs/app-server/src/request_processors/mcp_processor.rs](../app-server/src/request_processors/mcp_processor.rs)
 - [codex-rs/cli/src/mcp_cmd.rs](../cli/src/mcp_cmd.rs)
-- [codex-rs/mcp-server/src/lib.rs](../mcp-server/src/lib.rs)
 
 ## Subfeatures
 
@@ -82,29 +76,12 @@ clients.
 - User responses are associated with the elicitation request they answer.
 - Authentication elicitation does not expose sensitive values in status displays.
 
-### Codex MCP Server
-
-#### Entry Points
-
-- [codex-rs/mcp-server/src/lib.rs](../mcp-server/src/lib.rs)
-- [codex-rs/mcp-server/src/message_processor.rs](../mcp-server/src/message_processor.rs)
-- [codex-rs/mcp-server/src/codex_tool_runner.rs](../mcp-server/src/codex_tool_runner.rs)
-- [codex-rs/mcp-server/src/exec_approval.rs](../mcp-server/src/exec_approval.rs)
-- [codex-rs/mcp-server/src/patch_approval.rs](../mcp-server/src/patch_approval.rs)
-
-#### Invariants
-
-- External MCP clients receive stable tool schemas for Codex operations.
-- Exec and patch operations preserve approval behavior.
-- Tool results are serialized in MCP-compatible response shapes.
-
 ## Invariants
 
 - MCP server failures are isolated by server.
 - MCP tools/resources enter model context only through bounded exposure paths.
 - MCP tool calls preserve server and tool identity throughout execution.
 - Elicitation requests and responses are correlated explicitly.
-- Codex MCP server operations preserve normal Codex approval behavior.
 
 ## Test Places
 
@@ -172,7 +149,7 @@ state, and elicitation form rendering and response state.
 - MCP startup warning rendering and interaction state are covered part 1: codex-rs/tui/src/chatwidget/tests/mcp_startup.rs:app_server_mcp_startup_after_lag_can_settle_without_starting_updates,app_server_mcp_startup_after_lag_includes_runtime_servers_with_expected_set,app_server_mcp_startup_after_lag_preserves_partial_terminal_only_round,app_server_mcp_startup_failure_renders_warning_history,app_server_mcp_startup_lag_settles_startup_and_ignores_late_updates,app_server_mcp_startup_next_round_after_lag_can_settle_without_starting_updates,app_server_mcp_startup_next_round_discards_stale_terminal_updates,app_server_mcp_startup_next_round_keeps_terminal_statuses_after_starting
 - MCP startup warning rendering and interaction state are covered part 2: codex-rs/tui/src/chatwidget/tests/mcp_startup.rs:app_server_mcp_startup_next_round_with_empty_expected_servers_reactivates,mcp_startup_complete_does_not_clear_running_task,mcp_startup_complete_preserves_review_status,mcp_startup_dedupes_same_round_duplicate_failure_warning,mcp_startup_failure_restores_running_status_header,mcp_startup_header_booting_snapshot,mcp_startup_ignores_status_for_other_thread,turn_start_preserves_active_mcp_startup_header,turn_start_replaces_idle_completed_mcp_startup_header
 - MCP elicitation form parsing and approval metadata are covered: codex-rs/tui/src/bottom_pane/mcp__server_elicitation_tests.rs:empty_object_schema_uses_approval_actions,empty_tool_approval_schema_uses_approval_actions,parses_boolean_form_request,plugin_tool_suggestion_meta_without_install_url_is_parsed_into_request_payload,tool_approval_display_params_prefer_explicit_display_order,tool_suggestion_meta_is_parsed_into_request_payload,unsupported_numeric_form_falls_back
-- MCP elicitation response and queue state are covered: codex-rs/tui/src/bottom_pane/mcp__server_elicitation_tests.rs:ctrl_c_cancels_elicitation,empty_tool_approval_schema_always_allow_sets_persist_meta,empty_tool_approval_schema_session_choice_sets_persist_meta,horizontal_list_keys_move_between_select_fields,queues_requests_fifo,resolved_request_dismisses_overlay_without_emitting_events,submit_sends_accept_with_typed_content,text_fields_inherit_composer_chord_context_and_submit_binding
+- MCP elicitation response and queue state are covered: codex-rs/tui/src/bottom_pane/mcp__server_elicitation_tests.rs:ctrl_c_cancels_elicitation,empty_tool_approval_schema_always_allow_sets_persist_meta,empty_tool_approval_schema_session_choice_sets_persist_meta,horizontal_list_keys_move_between_select_fields,queues_requests_fifo,resolved_request_dismisses_overlay_without_emitting_events,submit_sends_accept_with_typed_content,switching_fields_clears_length_validation_flash,text_fields_inherit_composer_chord_context_and_submit_binding
 - MCP elicitation form rendering is covered: codex-rs/tui/src/bottom_pane/mcp__server_elicitation_tests.rs:approval_form_tool_approval_snapshot,approval_form_tool_approval_with_param_summary_snapshot,approval_form_tool_approval_with_persist_options_snapshot,boolean_form_snapshot,message_only_form_snapshot,message_only_form_with_persist_options_snapshot
 
 ### login-auth (auth and login behavior)
@@ -185,18 +162,6 @@ credential selection, or cached auth behavior.
 #### Status
 
 Not covered
-
-### mcp-server (Codex-as-MCP-server behavior)
-
-#### Description
-
-Codex-as-MCP-server coverage should exercise external MCP client tool schemas, exec and patch
-approval behavior, and MCP-compatible tool result serialization.
-
-#### Test cases
-
-- Codex-as-MCP-server approval elicitation behavior is covered: codex-rs/mcp-server/tests/suite/mcp__codex_tool.rs:test_patch_approval_triggers_elicitation,test_exec_command_approval_triggers_elicitation
-- Codex-as-MCP-server tool and warning correlation behavior is covered: codex-rs/mcp-server/tests/suite/mcp__codex_tool.rs:test_codex_tool_forwards_skills_extension_warnings,test_codex_tool_passes_base_instructions
 
 ### rmcp-client (MCP client transport and resource behavior)
 
@@ -212,7 +177,7 @@ by the MCP feature.
 - RMCP resource behavior is covered: codex-rs/rmcp-client/tests/mcp__resources.rs:rmcp_client_can_list_and_read_resources,rmcp_client_preserves_each_resource_error
 - RMCP streamable HTTP OAuth startup behavior is covered: codex-rs/rmcp-client/tests/streamable_http_oauth_startup.rs:oauth_startup_child,persisted_credentials_auth_status_child,refreshes_expired_persisted_token_before_initialize,reports_auth_status_for_persisted_credentials
 - RMCP streamable HTTP remote behavior, including nonblocking executor status probes, is covered: codex-rs/rmcp-client/tests/mcp__streamable_http_remote.rs:streamable_http_discovery_timeout_unblocks_remote_executor,streamable_http_handshake_timeout_unblocks_remote_executor,streamable_http_remote_client_round_trips_through_exec_server
-- RMCP streamable HTTP recovery behavior is covered: codex-rs/rmcp-client/tests/mcp__streamable_http_recovery.rs:streamable_http_401_does_not_trigger_recovery,streamable_http_403_finds_bearer_challenge_in_later_header_value,streamable_http_403_scope_challenge_returns_insufficient_scope,streamable_http_404_recovery_only_retries_once,streamable_http_404_session_expiry_recovers_and_retries_once,streamable_http_initialize_retries_json_rpc_transient_status,streamable_http_initialize_retries_remote_no_response_error,streamable_http_initialize_retries_transient_http_status,streamable_http_non_session_failure_does_not_trigger_recovery,streamable_http_retries_initialized_notification_status,streamable_http_session_recovery_retries_initialize_failure,streamable_http_tools_list_retries_json_rpc_transient_status,streamable_http_tools_list_retries_transient_http_status
+- RMCP streamable HTTP recovery behavior is covered: codex-rs/rmcp-client/tests/mcp__streamable_http_recovery.rs:streamable_http_401_challenge_is_a_tool_error_without_replay,streamable_http_401_does_not_trigger_recovery,streamable_http_403_finds_bearer_challenge_in_later_header_value,streamable_http_403_scope_challenge_returns_insufficient_scope,streamable_http_404_recovery_only_retries_once,streamable_http_404_session_expiry_recovers_and_retries_once,streamable_http_initialize_retries_json_rpc_transient_status,streamable_http_initialize_retries_remote_no_response_error,streamable_http_initialize_retries_transient_http_status,streamable_http_non_session_failure_does_not_trigger_recovery,streamable_http_retries_initialized_notification_status,streamable_http_session_recovery_retries_initialize_failure,streamable_http_tools_list_retries_json_rpc_transient_status,streamable_http_tools_list_retries_transient_http_status
 
 ### codex-api (Codex API client and protocol behavior)
 
@@ -259,4 +224,4 @@ Not covered
 
 Generate tests for server startup success/failure, status refresh, tool exposure bounds, tool-call
 identity preservation, resource listing and reading, elicitation request/response correlation,
-sensitive-value masking, CLI server management, and Codex MCP server approval behavior.
+sensitive-value masking, and CLI server management.
