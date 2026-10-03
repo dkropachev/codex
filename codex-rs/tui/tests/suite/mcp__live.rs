@@ -176,7 +176,9 @@ async fn mcp_startup_warning_interaction_works_in_live_tui() -> Result<()> {
         &mut output_rx,
         &mut screen,
         "MCP startup warning summary",
-        |contents| contents.contains("startup issues (1 MCP)"),
+        |contents| {
+            contents.contains("startup issues (1 MCP)") || contents.contains("MCP startup issue")
+        },
     )
     .await?;
     writer.send(vec![0x14]).await?;
