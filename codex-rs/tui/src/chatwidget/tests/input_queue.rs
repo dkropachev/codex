@@ -103,13 +103,16 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
 async fn restore_thread_input_state_restores_pending_steers_without_downgrading_them() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let mut pending_steers = VecDeque::new();
-    pending_steers.push_back(UserMessage::from("pending steer"));
     let expected_compare_key = PendingSteerCompareKey {
         message: "hidden IDE context\npending steer".to_string(),
         image_count: 0,
     };
-    let mut pending_steer_compare_keys = VecDeque::new();
-    pending_steer_compare_keys.push_back(expected_compare_key.clone());
+    pending_steers.push_back(PendingSteer {
+        client_id: "test-submission".to_string(),
+        user_message: UserMessage::from("pending steer"),
+        history_record: UserMessageHistoryRecord::UserMessageText,
+        compare_key: expected_compare_key.clone(),
+    });
     let mut rejected_steers_queue = VecDeque::new();
     rejected_steers_queue.push_back(UserMessage::from("already rejected"));
     let mut queued_user_messages = VecDeque::new();
@@ -117,11 +120,10 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
 
     chat.restore_thread_input_state(
         Some(ThreadInputState {
+            questions: None,
             composer: None,
             safety_buffering_prompt: None,
             pending_steers,
-            pending_steer_history_records: VecDeque::new(),
-            pending_steer_compare_keys,
             rejected_steers_queue,
             rejected_steer_history_records: VecDeque::new(),
             queued_user_messages,

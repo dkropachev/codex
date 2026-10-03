@@ -4,7 +4,14 @@ use pretty_assertions::assert_eq;
 
 #[test]
 fn next_mask_hides_workflow_when_feature_is_disabled() {
-    let model_catalog = ModelCatalog::new(Vec::new());
+    let model_catalog = ModelCatalog::new(Vec::new()).with_collaboration_modes(
+        codex_models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets(
+            CollaborationModesConfig {
+                workflows_enabled: true,
+                ..Default::default()
+            },
+        ),
+    );
 
     let first = next_mask_with_config(
         &model_catalog,
@@ -27,7 +34,14 @@ fn next_mask_hides_workflow_when_feature_is_disabled() {
 
 #[test]
 fn next_mask_includes_workflow_when_feature_is_enabled() {
-    let model_catalog = ModelCatalog::new(Vec::new());
+    let model_catalog = ModelCatalog::new(Vec::new()).with_collaboration_modes(
+        codex_models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets(
+            CollaborationModesConfig {
+                workflows_enabled: true,
+                ..Default::default()
+            },
+        ),
+    );
     let config = CollaborationModesConfig {
         workflows_enabled: true,
         ..Default::default()

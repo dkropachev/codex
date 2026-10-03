@@ -191,16 +191,6 @@ Skills do not change login, logout, token refresh, credential selection, or cach
 
 Not covered
 
-### mcp-server (Codex-as-MCP-server behavior)
-
-#### Description
-
-Skills are not exposed as Codex-as-MCP-server tools.
-
-#### Status
-
-Not covered
-
 ### rmcp-client (MCP client transport and resource behavior)
 
 #### Description

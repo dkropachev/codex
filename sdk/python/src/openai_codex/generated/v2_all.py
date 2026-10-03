@@ -2600,9 +2600,11 @@ class NetworkUnixSocketPermission(Enum):
     deny = "deny"
 
 
-class NonSteerableTurnKind(Enum):
-    review = "review"
-    compact = "compact"
+class NonSteerableTurnKind(RootModel[Literal["compact"]]):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: Literal["compact"]
 
 
 class PatchApplyStatus(Enum):
@@ -3616,67 +3618,6 @@ class ResponsesApiWebSearchAction(
     )
 
 
-class ReviewDelivery(Enum):
-    inline = "inline"
-    detached = "detached"
-
-
-class UncommittedChangesReviewTarget(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    type: Annotated[
-        Literal["uncommittedChanges"], Field(title="UncommittedChangesReviewTargetType")
-    ]
-
-
-class BaseBranchReviewTarget(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    branch: str
-    type: Annotated[Literal["baseBranch"], Field(title="BaseBranchReviewTargetType")]
-
-
-class CommitReviewTarget(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    sha: str
-    title: Annotated[
-        str | None,
-        Field(description="Optional human-readable label (e.g., commit subject) for UIs."),
-    ] = None
-    type: Annotated[Literal["commit"], Field(title="CommitReviewTargetType")]
-
-
-class CustomReviewTarget(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    instructions: str
-    type: Annotated[Literal["custom"], Field(title="CustomReviewTargetType")]
-
-
-class ReviewTarget(
-    RootModel[
-        UncommittedChangesReviewTarget
-        | BaseBranchReviewTarget
-        | CommitReviewTarget
-        | CustomReviewTarget
-    ]
-):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    root: (
-        UncommittedChangesReviewTarget
-        | BaseBranchReviewTarget
-        | CommitReviewTarget
-        | CustomReviewTarget
-    )
-
-
 class SandboxMode(Enum):
     read_only = "read-only"
     workspace_write = "workspace-write"
@@ -4377,7 +4318,6 @@ class SubAgentActivityKind(Enum):
 
 
 class SubAgentSourceValue(Enum):
-    review = "review"
     compact = "compact"
     memory_consolidation = "memory_consolidation"
 
@@ -4724,24 +4664,6 @@ class ImageGenerationThreadItem(BaseModel):
     status: str
     transparent_background: Annotated[bool | None, Field(alias="transparentBackground")] = None
     type: Annotated[Literal["imageGeneration"], Field(title="ImageGenerationThreadItemType")]
-
-
-class EnteredReviewModeThreadItem(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: str
-    review: str
-    type: Annotated[Literal["enteredReviewMode"], Field(title="EnteredReviewModeThreadItemType")]
-
-
-class ExitedReviewModeThreadItem(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: str
-    review: str
-    type: Annotated[Literal["exitedReviewMode"], Field(title="ExitedReviewModeThreadItemType")]
 
 
 class ContextCompactionThreadItem(BaseModel):
@@ -5206,7 +5128,6 @@ class ThreadSourceKind(Enum):
     exec = "exec"
     app_server = "appServer"
     sub_agent = "subAgent"
-    sub_agent_review = "subAgentReview"
     sub_agent_compact = "subAgentCompact"
     sub_agent_thread_spawn = "subAgentThreadSpawn"
     sub_agent_other = "subAgentOther"
@@ -7531,20 +7452,6 @@ class WebSearchCallResponseItem(BaseModel):
     type: Annotated[Literal["web_search_call"], Field(title="WebSearchCallResponseItemType")]
 
 
-class ReviewStartParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    delivery: Annotated[
-        ReviewDelivery | None,
-        Field(
-            description="Where to run the review: inline (default) on the current thread or detached on a new thread (returned in `reviewThreadId`)."
-        ),
-    ] = None
-    target: ReviewTarget
-    thread_id: Annotated[str, Field(alias="threadId")]
-
-
 class HourlyScheduledTaskSchedule(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -8385,8 +8292,6 @@ class ThreadItem(
         | ImageViewThreadItem
         | SleepThreadItem
         | ImageGenerationThreadItem
-        | EnteredReviewModeThreadItem
-        | ExitedReviewModeThreadItem
         | ContextCompactionThreadItem
     ]
 ):
@@ -8409,8 +8314,6 @@ class ThreadItem(
         | ImageViewThreadItem
         | SleepThreadItem
         | ImageGenerationThreadItem
-        | EnteredReviewModeThreadItem
-        | ExitedReviewModeThreadItem
         | ContextCompactionThreadItem
     )
 
@@ -8869,15 +8772,6 @@ class TurnSteerRequest(BaseModel):
     params: TurnSteerParams
 
 
-class ReviewStartRequest(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: RequestId
-    method: Annotated[Literal["review/start"], Field(title="Review/startRequestMethod")]
-    params: ReviewStartParams
-
-
 class McpServerStatusListRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -8956,7 +8850,6 @@ class Config(BaseModel):
     model_reasoning_effort: ReasoningEffort | None = None
     model_reasoning_summary: ReasoningSummary | None = None
     model_verbosity: Verbosity | None = None
-    review_model: str | None = None
     sandbox_mode: SandboxMode | None = None
     sandbox_workspace_write: SandboxWorkspaceWrite | None = None
     service_tier: str | None = None
@@ -9950,20 +9843,6 @@ class RequestPermissionProfile(BaseModel):
     network: AdditionalNetworkPermissions | None = None
 
 
-class ReviewStartResponse(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    review_thread_id: Annotated[
-        str,
-        Field(
-            alias="reviewThreadId",
-            description="Identifies the thread where the review runs.\n\nFor inline reviews, this is the original thread id. For detached reviews, this is the id of the new review thread.",
-        ),
-    ]
-    turn: Turn
-
-
 class TurnStartedServerNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -10372,7 +10251,6 @@ class ClientRequest(
         | TurnStartRequest
         | TurnSteerRequest
         | TurnInterruptRequest
-        | ReviewStartRequest
         | ModelListRequest
         | ModelProviderCapabilitiesReadRequest
         | ExperimentalFeatureListRequest
@@ -10473,7 +10351,6 @@ class ClientRequest(
         | TurnStartRequest
         | TurnSteerRequest
         | TurnInterruptRequest
-        | ReviewStartRequest
         | ModelListRequest
         | ModelProviderCapabilitiesReadRequest
         | ExperimentalFeatureListRequest

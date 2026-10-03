@@ -121,7 +121,6 @@ pub(super) use codex_config::types::ApprovalsReviewer;
 pub(super) use codex_config::types::Notifications;
 pub(super) use codex_config::types::WindowsSandboxModeToml;
 pub(super) use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
-pub(super) use codex_features::FEATURES;
 pub(super) use codex_features::Feature;
 pub(super) use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 pub(super) use codex_models_manager::test_support::get_model_offline_for_tests;
@@ -237,6 +236,10 @@ mod approval_requests;
 mod backend_banners_tests;
 #[path = "tests/bedrock_catalog_tests.rs"]
 mod bedrock_catalog_tests;
+#[path = "tests/collaboration_catalog_tests.rs"]
+mod collaboration_catalog_tests;
+#[path = "tests/compaction_tests.rs"]
+mod compaction_tests;
 mod composer_submission;
 #[path = "tests/config_errors_tests.rs"]
 mod config_errors;
@@ -248,6 +251,8 @@ pub(crate) mod helpers;
 mod history_replay;
 mod input_queue;
 mod interrupts;
+#[path = "tests/luna_reserve_usage_tests.rs"]
+mod luna_reserve_usage_tests;
 #[path = "tests/mcp_startup.rs"]
 mod mcp_startup;
 #[path = "tests/misalignment_policy_tests.rs"]
@@ -263,6 +268,8 @@ mod plugins_popups;
 mod popups_and_settings;
 #[path = "tests/rate_limit_recovery_tests.rs"]
 mod rate_limit_recovery_tests;
+#[path = "tests/replay_render_tests.rs"]
+mod replay_render_tests;
 mod side;
 mod slash_commands;
 mod status_and_layout;
@@ -272,8 +279,13 @@ mod terminal_title;
 mod usage;
 #[path = "tests/workflows__slash_commands.rs"]
 mod workflows_slash_commands;
+#[path = "tests/worktree_picker_tests.rs"]
+mod worktree_picker;
 
 pub(crate) use helpers::make_chatwidget_manual_with_sender;
 pub(crate) use helpers::set_chatgpt_auth;
 pub(crate) use helpers::set_fast_mode_test_catalog;
 pub(super) use helpers::*;
+
+#[path = "tests/questions_tests.rs"]
+mod questions_tests;

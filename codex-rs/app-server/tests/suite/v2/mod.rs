@@ -15,6 +15,9 @@ mod collaboration_mode_list;
 #[cfg(unix)]
 mod command_exec;
 mod compaction;
+mod config_requirements_application;
+#[path = "config_requirements_browser_use_tests.rs"]
+mod config_requirements_browser_use;
 mod config_requirements_in_app_browser;
 mod config_rpc;
 mod connection_handling_websocket;
@@ -46,6 +49,7 @@ mod hooks_list;
 mod host_skills;
 mod imagegen_extension;
 mod initialize;
+mod luna_reserve;
 mod marketplace_add;
 mod marketplace_remove;
 mod marketplace_upgrade;
@@ -97,6 +101,7 @@ mod skills_list;
 mod sleep;
 mod thread_archive;
 mod thread_delete;
+mod thread_environments;
 mod thread_fork;
 mod thread_inject_items;
 mod thread_list;
@@ -129,3 +134,5 @@ mod windows_sandbox_setup;
 #[cfg(unix)]
 #[path = "workflows__thread_command.rs"]
 mod workflows_thread_command;
+
+mod user_verification;

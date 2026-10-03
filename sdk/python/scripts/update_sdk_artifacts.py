@@ -527,6 +527,91 @@ def _make_chatgpt_account_email_nullable(schema: dict[str, Any]) -> None:
     raise RuntimeError("Schema bundle is missing the ChatGPT account variant")
 
 
+def _remove_discriminated_variants(
+    definition: dict[str, Any],
+    discriminator: str,
+    retired_values: set[str],
+) -> None:
+    variants = definition.get("oneOf")
+    if not isinstance(variants, list):
+        return
+    definition["oneOf"] = [
+        variant
+        for variant in variants
+        if not (
+            isinstance(variant, dict)
+            and isinstance(variant.get("properties"), dict)
+            and _literal_from_property(variant["properties"], discriminator) in retired_values
+        )
+    ]
+
+
+def _remove_enum_value(definition: dict[str, Any], retired_value: str) -> None:
+    enum_values = definition.get("enum")
+    if isinstance(enum_values, list):
+        definition["enum"] = [value for value in enum_values if value != retired_value]
+
+
+def _remove_retired_review_api(schema: dict[str, Any]) -> None:
+    """Keep generated SDK types aligned with the fork's removed `/review` API."""
+    definitions = schema.get("definitions")
+    if not isinstance(definitions, dict):
+        raise RuntimeError("Schema bundle is missing definitions")
+
+    client_request = definitions.get("ClientRequest")
+    if isinstance(client_request, dict):
+        _remove_discriminated_variants(
+            client_request,
+            "method",
+            {"review/resolveScope", "review/start"},
+        )
+
+    config = definitions.get("Config")
+    if isinstance(config, dict):
+        properties = config.get("properties")
+        if isinstance(properties, dict):
+            properties.pop("review_model", None)
+        required = config.get("required")
+        if isinstance(required, list):
+            config["required"] = [name for name in required if name != "review_model"]
+
+    thread_item = definitions.get("ThreadItem")
+    if isinstance(thread_item, dict):
+        _remove_discriminated_variants(
+            thread_item,
+            "type",
+            {"enteredReviewMode", "exitedReviewMode"},
+        )
+
+    non_steerable_turn_kind = definitions.get("NonSteerableTurnKind")
+    if isinstance(non_steerable_turn_kind, dict):
+        _remove_enum_value(non_steerable_turn_kind, "review")
+
+    subagent_source = definitions.get("SubAgentSource")
+    if isinstance(subagent_source, dict):
+        variants = subagent_source.get("oneOf")
+        if isinstance(variants, list):
+            for variant in variants:
+                if isinstance(variant, dict):
+                    _remove_enum_value(variant, "review")
+
+    thread_source_kind = definitions.get("ThreadSourceKind")
+    if isinstance(thread_source_kind, dict):
+        _remove_enum_value(thread_source_kind, "subAgentReview")
+
+    for name in (
+        "ReviewDelivery",
+        "ReviewResolveScopeParams",
+        "ReviewResolveScopeResponse",
+        "ReviewScopeBranch",
+        "ReviewScopePullRequest",
+        "ReviewStartParams",
+        "ReviewStartResponse",
+        "ReviewTarget",
+    ):
+        definitions.pop(name, None)
+
+
 def generate_schema_from_pinned_runtime(schema_dir: Path) -> Path:
     """Generate app-server schemas by invoking the installed pinned runtime binary."""
     codex_path = pinned_runtime_codex_path()
@@ -550,6 +635,7 @@ def _normalized_schema_bundle_text(schema_dir: Path) -> str:
     """Normalize the schema bundle before feeding it to the Python type generator."""
     schema = json.loads(schema_bundle_path(schema_dir).read_text())
     _make_chatgpt_account_email_nullable(schema)
+    _remove_retired_review_api(schema)
     definitions = schema.get("definitions", {})
     if isinstance(definitions, dict):
         for definition in definitions.values():

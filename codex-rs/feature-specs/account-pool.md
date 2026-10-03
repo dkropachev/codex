@@ -511,17 +511,6 @@ load balancing for account-pool members.
 - Assignments are separate by affinity key and usage bucket: codex-rs/login/tests/suite/account_pool__selection.rs:assignments_are_separate_by_affinity_key_and_usage_bucket
 - Compaction treats existing affinity as a cold cache boundary: codex-rs/login/tests/suite/account_pool__selection.rs:compaction_context_treats_existing_affinity_as_cold_boundary
 
-### mcp-server (Codex-as-MCP-server behavior)
-
-#### Description
-
-Account-pool selection is not exposed through Codex-as-MCP-server tool schemas or MCP tool
-execution.
-
-#### Status
-
-Not covered
-
 ### rmcp-client (MCP client transport and resource behavior)
 
 #### Description

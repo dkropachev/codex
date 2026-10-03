@@ -493,6 +493,90 @@ def test_generated_chatgpt_account_email_is_required_nullable() -> None:
         ChatgptAccount.model_validate({"planType": "pro", "type": "chatgpt"})
 
 
+def test_schema_normalization_removes_retired_review_api() -> None:
+    script = _load_update_script_module()
+    schema = {
+        "definitions": {
+            "ClientRequest": {
+                "oneOf": [
+                    {
+                        "properties": {
+                            "method": {"enum": ["review/start"]},
+                            "params": {"$ref": "#/definitions/ReviewStartParams"},
+                        }
+                    },
+                    {
+                        "properties": {
+                            "method": {"enum": ["review/resolveScope"]},
+                            "params": {"$ref": "#/definitions/ReviewResolveScopeParams"},
+                        }
+                    },
+                    {"properties": {"method": {"enum": ["thread/start"]}}},
+                ]
+            },
+            "Config": {
+                "properties": {
+                    "model": {"type": ["string", "null"]},
+                    "review_model": {"type": ["string", "null"]},
+                },
+                "required": ["model", "review_model"],
+            },
+            "NonSteerableTurnKind": {"enum": ["review", "compact"]},
+            "ReviewDelivery": {},
+            "ReviewResolveScopeParams": {},
+            "ReviewResolveScopeResponse": {},
+            "ReviewScopeBranch": {},
+            "ReviewScopePullRequest": {},
+            "ReviewStartParams": {},
+            "ReviewStartResponse": {},
+            "ReviewTarget": {},
+            "SubAgentSource": {
+                "oneOf": [
+                    {"enum": ["review", "compact", "memory_consolidation"]},
+                    {"properties": {"other": {"type": "string"}}},
+                ]
+            },
+            "ThreadItem": {
+                "oneOf": [
+                    {"properties": {"type": {"enum": ["enteredReviewMode"]}}},
+                    {"properties": {"type": {"enum": ["exitedReviewMode"]}}},
+                    {"properties": {"type": {"enum": ["agentMessage"]}}},
+                ]
+            },
+            "ThreadSourceKind": {"enum": ["cli", "subAgent", "subAgentReview", "subAgentCompact"]},
+        }
+    }
+
+    script._remove_retired_review_api(schema)
+
+    assert schema == {
+        "definitions": {
+            "ClientRequest": {
+                "oneOf": [
+                    {"properties": {"method": {"enum": ["thread/start"]}}},
+                ]
+            },
+            "Config": {
+                "properties": {"model": {"type": ["string", "null"]}},
+                "required": ["model"],
+            },
+            "NonSteerableTurnKind": {"enum": ["compact"]},
+            "SubAgentSource": {
+                "oneOf": [
+                    {"enum": ["compact", "memory_consolidation"]},
+                    {"properties": {"other": {"type": "string"}}},
+                ]
+            },
+            "ThreadItem": {
+                "oneOf": [
+                    {"properties": {"type": {"enum": ["agentMessage"]}}},
+                ]
+            },
+            "ThreadSourceKind": {"enum": ["cli", "subAgent", "subAgentCompact"]},
+        }
+    }
+
+
 def test_runtime_package_template_has_no_checked_in_binaries() -> None:
     runtime_root = ROOT.parent / "python-runtime" / "src" / "codex_cli_bin"
     assert sorted(

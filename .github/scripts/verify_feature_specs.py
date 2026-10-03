@@ -141,16 +141,6 @@ TEST_PLACES = {
         ),
         paths=("codex-rs/login/tests/suite",),
     ),
-    "mcp-server": TestPlace(
-        name="MCP Server",
-        short_description="Codex-as-MCP-server behavior",
-        long_description=(
-            "Place test cases here when external MCP clients invoke Codex as an MCP "
-            "server, depend on Codex MCP tool schemas, or consume MCP result and error "
-            "shapes."
-        ),
-        paths=("codex-rs/mcp-server/tests/suite",),
-    ),
     "rmcp-client": TestPlace(
         name="RMCP Client",
         short_description="MCP client transport and resource behavior",

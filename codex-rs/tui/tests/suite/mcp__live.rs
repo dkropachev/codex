@@ -164,6 +164,7 @@ async fn mcp_startup_warning_interaction_works_in_live_tui() -> Result<()> {
     write_auth(codex_home.path())?;
 
     let spawned = spawn_tui(&codex, codex_home.path(), log_dir.path(), workspace.path()).await?;
+    let writer = spawned.session.writer_sender();
     let mut output_rx = combine_output_receivers(spawned.stdout_rx, spawned.stderr_rx);
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
 
@@ -174,7 +175,17 @@ async fn mcp_startup_warning_interaction_works_in_live_tui() -> Result<()> {
     wait_for_screen(
         &mut output_rx,
         &mut screen,
-        "MCP startup warning",
+        "MCP startup warning summary",
+        |contents| {
+            contents.contains("startup issues (1 MCP)") || contents.contains("MCP startup issue")
+        },
+    )
+    .await?;
+    writer.send(vec![0x14]).await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "MCP startup warning details",
         |contents| contents.contains("MCP startup incomplete") && contents.contains("broken"),
     )
     .await?;

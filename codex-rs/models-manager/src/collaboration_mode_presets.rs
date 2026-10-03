@@ -108,11 +108,14 @@ fn format_mode_names(modes: &[ModeKind]) -> String {
 }
 
 fn request_user_input_availability_message(default_mode_request_user_input: bool) -> String {
-    if default_mode_request_user_input {
-        "The `request_user_input` tool is available in Default mode.".to_string()
+    let availability = if default_mode_request_user_input {
+        "The `request_user_input` tool is available in Default mode."
     } else {
-        "The `request_user_input` tool is unavailable in Default mode. If you call it while in Default mode, it will return an error.".to_string()
-    }
+        "The `request_user_input` tool is unavailable in Default mode. If you call it while in Default mode, it will return an error."
+    };
+    format!(
+        "Use the `request_user_input` tool only when it is listed in the available tools for this turn.\n\n{availability}"
+    )
 }
 
 fn asking_questions_guidance_message(default_mode_request_user_input: bool) -> String {

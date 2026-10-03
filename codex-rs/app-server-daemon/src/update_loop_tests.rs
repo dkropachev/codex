@@ -47,10 +47,12 @@ async fn installer_fetch_uses_exact_url_and_preserves_bytes() {
             .expect("installer fetch should succeed"),
         script
     );
-    assert_eq!(
-        http.requested_urls(),
-        vec!["https://github.com/dkropachev/codex/releases/latest/download/install.sh".to_string()]
-    );
+    let expected_url = if cfg!(windows) {
+        "https://chatgpt.com/codex/install.ps1"
+    } else {
+        "https://github.com/dkropachev/codex/releases/latest/download/install.sh"
+    };
+    assert_eq!(http.requested_urls(), vec![expected_url.to_string()]);
 }
 
 #[tokio::test]
@@ -94,4 +96,25 @@ impl InstallerHttp for FakeInstallerHttp {
             .push(url.to_string());
         Ok(self.response.clone())
     }
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn powershell_installer_is_noninteractive_and_reports_script_failure() {
+    let valid = FakeInstallerHttp::new(InstallerResponse::Success(
+        br#"
+function Test-Installer {
+    if ($env:CODEX_NON_INTERACTIVE -ne '1') { throw 'interactive installer' }
+}
+Test-Installer
+"#
+        .to_vec(),
+    ));
+    super::install_latest_standalone(&valid)
+        .await
+        .expect("installer succeeds");
+    let failing = FakeInstallerHttp::new(InstallerResponse::Success(
+        b"throw 'installer failed'".to_vec(),
+    ));
+    assert!(super::install_latest_standalone(&failing).await.is_err());
 }

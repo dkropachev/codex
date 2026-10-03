@@ -39,6 +39,7 @@ pub use auth::AccountPoolUsageRefreshPoolReport;
 pub use auth::AccountPoolUsageRefreshProblem;
 pub use auth::AccountPoolUsageRefreshReport;
 pub use auth::AgentIdentityAuthPolicy;
+pub use auth::AuthChangeState;
 pub use auth::AuthConfig;
 pub use auth::AuthDotJson;
 pub use auth::AuthHeaders;

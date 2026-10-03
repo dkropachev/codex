@@ -192,6 +192,7 @@ IFS= read -r _completion_ack
         |contents| contents.contains("Visible workflow result.") && !contents.contains("Working ("),
     )
     .await?;
+    tokio::time::sleep(Duration::from_millis(/*millis*/ 250)).await;
 
     std::fs::remove_file(&workflow_release)?;
     std::fs::write(&workflow_failure, "fail\n")?;
@@ -220,6 +221,7 @@ IFS= read -r _completion_ack
         |contents| contents.contains("workflow failed for test") && !contents.contains("Working ("),
     )
     .await?;
+    tokio::time::sleep(Duration::from_millis(/*millis*/ 250)).await;
 
     std::fs::remove_file(&workflow_release)?;
     std::fs::remove_file(&workflow_failure)?;
