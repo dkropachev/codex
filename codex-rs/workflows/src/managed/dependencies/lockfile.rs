@@ -16,7 +16,7 @@ use super::valid_package_name;
 use super::validate_override_map;
 use super::validate_specifier;
 
-const MAX_BUN_LOCK_BYTES: u64 = 8 * 1024 * 1024;
+pub(super) const MAX_BUN_LOCK_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[allow(dead_code, reason = "used by managed dependency installation")]

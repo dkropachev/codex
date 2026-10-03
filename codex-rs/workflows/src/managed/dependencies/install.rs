@@ -24,6 +24,7 @@ use super::bun::ManagedBunSandboxPreparation;
 use super::bun::PreparedManagedBunCommand;
 use super::lockfile::ManagedBunLockfile;
 
+mod binary_lock;
 mod file;
 
 use file::validate_directory_component;
