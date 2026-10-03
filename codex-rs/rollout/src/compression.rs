@@ -71,11 +71,17 @@ pub(crate) fn compressed_rollout_path(path: &Path) -> PathBuf {
 }
 
 /// Materializes a compressed rollout back to plain `.jsonl` for async append paths.
-pub(crate) async fn materialize_rollout_for_append(path: &Path) -> io::Result<PathBuf> {
+pub(crate) async fn materialize_rollout_for_append(
+    path: &Path,
+    writer_lock: Option<std::sync::Arc<crate::WriterLockGuard>>,
+) -> io::Result<PathBuf> {
     let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || materialize_rollout_for_append_blocking(path.as_path()))
-        .await
-        .map_err(io::Error::other)?
+    tokio::task::spawn_blocking(move || {
+        let _writer_lock = writer_lock;
+        materialize_rollout_for_append_blocking(path.as_path())
+    })
+    .await
+    .map_err(io::Error::other)?
 }
 
 /// Materializes a compressed rollout back to plain `.jsonl` for blocking append paths.
@@ -242,6 +248,7 @@ mod worker {
     use std::io::Write;
     use std::path::Path;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::Duration;
     use std::time::Instant;
     use std::time::SystemTime;
@@ -382,6 +389,7 @@ mod worker {
 
         metrics::run("started");
         let started_at = Instant::now();
+        let writer_locks = Arc::new(crate::WriterLockCoordinator::new(&codex_home));
         let result = async {
             cleanup_stale_temps(codex_home.as_path()).await?;
             let Some(reference_index) = RolloutReferenceIndex::scan_until(
@@ -407,6 +415,7 @@ mod worker {
                     &reference_index,
                     mode,
                     &mut stats,
+                    &writer_locks,
                 )
                 .await?;
             }
@@ -451,6 +460,7 @@ mod worker {
         reference_index: &RolloutReferenceIndex,
         mode: RolloutCompressionMode,
         stats: &mut CompressionStats,
+        writer_locks: &Arc<crate::WriterLockCoordinator>,
     ) -> io::Result<()> {
         if !tokio::fs::try_exists(root).await.unwrap_or(false) {
             return Ok(());
@@ -530,14 +540,17 @@ mod worker {
                     metrics::file("skipped_fork_pointer");
                     continue;
                 }
+                let thread_id = meta.meta.id;
                 stats.scanned = stats.scanned.saturating_add(1);
                 metrics::file("scanned");
                 while jobs.len() >= MAX_CONCURRENT_COMPRESSION_JOBS {
                     collect_next_compression_job(&mut jobs, stats).await;
                 }
+                let writer_locks = Arc::clone(writer_locks);
                 jobs.spawn_blocking(move || {
                     let started_at = Instant::now();
-                    let result = compress_rollout_if_cold_blocking(path.as_path());
+                    let result =
+                        compress_rollout_if_cold_blocking(path.as_path(), &writer_locks, thread_id);
                     let duration = started_at.elapsed();
                     (path, duration, result)
                 });
@@ -553,6 +566,7 @@ mod worker {
     enum CompressionOutcome {
         Compressed,
         SkippedNotCold,
+        SkippedBusy,
         SkippedChanged,
         SkippedAlreadyCompressed,
     }
@@ -562,6 +576,7 @@ mod worker {
             match self {
                 CompressionOutcome::Compressed => "compressed",
                 CompressionOutcome::SkippedNotCold => "skipped_not_cold",
+                CompressionOutcome::SkippedBusy => "skipped_busy",
                 CompressionOutcome::SkippedChanged => "skipped_changed",
                 CompressionOutcome::SkippedAlreadyCompressed => "skipped_already_compressed",
             }
@@ -617,6 +632,7 @@ mod worker {
                         stats.compressed = stats.compressed.saturating_add(1);
                     }
                     CompressionOutcome::SkippedNotCold
+                    | CompressionOutcome::SkippedBusy
                     | CompressionOutcome::SkippedChanged
                     | CompressionOutcome::SkippedAlreadyCompressed => {
                         stats.skipped = stats.skipped.saturating_add(1);
@@ -648,7 +664,11 @@ mod worker {
         }
     }
 
-    fn compress_rollout_if_cold_blocking(path: &Path) -> io::Result<CompressionMeasurement> {
+    fn compress_rollout_if_cold_blocking(
+        path: &Path,
+        writer_locks: &Arc<crate::WriterLockCoordinator>,
+        thread_id: codex_protocol::ThreadId,
+    ) -> io::Result<CompressionMeasurement> {
         let before = match cold_file_state(path)? {
             ColdFileState::Cold(state) => state,
             ColdFileState::NotCold(state) => {
@@ -691,6 +711,23 @@ mod worker {
         set_file_metadata(temp_file.as_file(), before.modified, &before.permissions)?;
         temp_file.as_file().sync_all()?;
         let compressed_bytes = temp_file.as_file().metadata()?.len();
+
+        // Encoding and verification do not block writers. Coordination prevents writer
+        // acquisition while we recheck, publish, and remove the original file.
+        let Some(_publication_guard) = writer_locks.try_acquire_for_publication(thread_id)? else {
+            return Ok(CompressionMeasurement::new(
+                CompressionOutcome::SkippedBusy,
+                source_bytes,
+                /*compressed_bytes*/ None,
+            ));
+        };
+        if !same_file_state(path, &before)? {
+            return Ok(CompressionMeasurement::new(
+                CompressionOutcome::SkippedChanged,
+                source_bytes,
+                /*compressed_bytes*/ None,
+            ));
+        }
 
         match temp_file.persist_noclobber(compressed_path.as_path()) {
             Ok(_) => {}

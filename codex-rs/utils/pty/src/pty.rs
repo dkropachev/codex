@@ -89,6 +89,17 @@ impl ChildTerminator for PtyChildTerminator {
 
         self.killer.kill()
     }
+
+    fn kill_tree(&mut self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        if let Some(process_group_id) = self.process_group_id {
+            let tree_result = crate::process_group::kill_process_tree_by_pid(process_group_id);
+            let child_result = self.killer.kill();
+            return tree_result.or(child_result);
+        }
+
+        self.killer.kill()
+    }
 }
 
 #[cfg(unix)]
@@ -108,6 +119,10 @@ impl ChildTerminator for RawPidTerminator {
 
     fn kill(&mut self) -> std::io::Result<()> {
         crate::process_group::kill_process_group(self.process_group_id)
+    }
+
+    fn kill_tree(&mut self) -> std::io::Result<()> {
+        crate::process_group::kill_process_tree_by_pid(self.process_group_id)
     }
 }
 

@@ -86,6 +86,18 @@ impl ChildTerminator for PipeChildTerminator {
             Ok(())
         }
     }
+
+    fn kill_tree(&mut self) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            crate::process_group::kill_process_tree_by_pid(self.process_group_id)
+        }
+
+        #[cfg(not(unix))]
+        {
+            self.kill()
+        }
+    }
 }
 
 #[cfg(windows)]

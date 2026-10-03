@@ -79,12 +79,8 @@ impl WriteStdinHandler {
         };
 
         let args: WriteStdinArgs = parse_arguments(&arguments)?;
-        let context = UnifiedExecContext::new(
-            session.clone(),
-            step_context.clone(),
-            cancellation_token,
-            call_id,
-        );
+        let context =
+            UnifiedExecContext::new(session.clone(), step_context, cancellation_token, call_id);
         let response = session
             .services
             .unified_exec_manager
@@ -95,7 +91,12 @@ impl WriteStdinHandler {
                     input: &args.chars,
                     yield_time_ms: args.yield_time_ms,
                     max_output_tokens: args.max_output_tokens,
-                    truncation_policy: step_context.settings.model_info.truncation_policy.into(),
+                    truncation_policy: context
+                        .step_context
+                        .settings
+                        .model_info
+                        .truncation_policy
+                        .into(),
                     interaction_event: Some(WriteStdinInteractionEvent {
                         session: &session,
                         turn: &turn,
