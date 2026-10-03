@@ -220,6 +220,7 @@ pub(crate) mod context_window;
 mod environment;
 pub(crate) mod extension_metrics;
 mod handlers;
+mod idle_turn;
 mod inject;
 mod input_queue;
 mod mcp;
@@ -233,6 +234,7 @@ mod rollout_budget;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
+mod standalone_compact;
 mod step_activation;
 pub(crate) mod step_context;
 pub(crate) mod step_settings;
@@ -364,6 +366,8 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnModerationMetadataEvent;
 use codex_protocol::protocol::WarningEvent;
+use codex_protocol::turn_input::CompactionSource;
+use codex_protocol::turn_input::StartIfIdleSubmission;
 use codex_protocol::turn_input::TurnInputMode;
 use codex_protocol::turn_input::TurnInputRequest;
 use codex_protocol::turn_input::TurnInputSubmission;
@@ -916,6 +920,29 @@ impl SessionIo {
             op: Op::RecoverTurn {
                 thread_settings,
                 start_options,
+                reply: reply_tx,
+            },
+            trace,
+            parent_turn_id: None,
+            root_turn_id: None,
+        })
+        .await?;
+        reply_rx.await.unwrap_or(Err(CodexErr::InternalAgentDied))
+    }
+
+    /// Submits an ordered idle-only compaction call and waits for Core's
+    /// admission decision.
+    pub(crate) async fn submit_compact_if_idle(
+        &self,
+        source: CompactionSource,
+        trace: Option<W3cTraceContext>,
+    ) -> CodexResult<StartIfIdleSubmission> {
+        let id = new_submission_id();
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.submit_with_id(Submission {
+            id,
+            op: Op::CompactIfIdle {
+                source,
                 reply: reply_tx,
             },
             trace,

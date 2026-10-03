@@ -49,6 +49,7 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_protocol::turn_input::CompactionRequest;
 use codex_protocol::turn_input::RecoverTurnRequest;
 use codex_protocol::turn_input::StartIfIdleSubmission;
 use codex_protocol::turn_input::SteerSubmission;
@@ -348,6 +349,24 @@ impl CodexThread {
                 unreachable!("start-if-idle submission cannot steer")
             }
         }
+    }
+
+    /// Starts a standalone compaction turn only when the thread is idle.
+    ///
+    /// Core atomically reserves the active-turn slot before constructing the
+    /// compaction turn, so a competing submission cannot interrupt work that
+    /// wins the race.
+    pub async fn compact_if_idle(
+        &self,
+        request: CompactionRequest,
+    ) -> CodexResult<StartIfIdleSubmission> {
+        let CompactionRequest { source, trace } = request;
+        self.session
+            .services
+            .agent_control
+            .ensure_execution_capacity_for_turn_start(self)
+            .await?;
+        self.io.submit_compact_if_idle(source, trace).await
     }
 
     /// Resumes an interrupted regular turn only when the thread is idle.

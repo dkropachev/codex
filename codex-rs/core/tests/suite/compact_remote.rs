@@ -11,6 +11,9 @@ use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_config::test_support::CloudConfigBundleFixture;
+use codex_core::CompactionRequest;
+use codex_core::CompactionSource;
+use codex_core::StartIfIdleSubmission;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use codex_core::X_CODEX_ROUTING_HINT_HEADER;
@@ -3363,6 +3366,104 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
     assert!(legacy_event);
     assert_eq!(compact_mock.requests().len(), 1);
 
+    Ok(())
+}
+
+#[test_case(false; "remote")]
+#[test_case(true; "remote_v2")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn standalone_automatic_compaction_preserves_remote_provenance(
+    remote_v2: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_auto_env_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(move |config| {
+                config
+                    .features
+                    .set_enabled(Feature::RemoteCompactionV2, remote_v2)
+                    .expect("remote compaction v2 should be configurable");
+            }),
+    )
+    .await?;
+    let response_mock = if remote_v2 {
+        responses::mount_sse_sequence(
+            harness.server(),
+            vec![
+                sse(vec![responses::ev_completed("seed-history")]),
+                sse(vec![
+                    json!({
+                        "type": "response.output_item.done",
+                        "item": {
+                            "type": "compaction",
+                            "encrypted_content": "AUTOMATIC_V2_COMPACTION_SUMMARY",
+                        },
+                    }),
+                    responses::ev_completed("automatic-v2-compact"),
+                ]),
+            ],
+        )
+        .await
+    } else {
+        mount_sse_once(
+            harness.server(),
+            sse(vec![responses::ev_completed("seed-history")]),
+        )
+        .await;
+        responses::mount_compact_user_history_with_summary_once(
+            harness.server(),
+            "AUTOMATIC_REMOTE_COMPACTION_SUMMARY",
+        )
+        .await
+    };
+    harness
+        .test()
+        .submit_turn("seed compaction history")
+        .await?;
+
+    let submission = harness
+        .test()
+        .codex
+        .compact_if_idle(CompactionRequest {
+            source: CompactionSource::Automatic,
+            trace: None,
+        })
+        .await?;
+    let StartIfIdleSubmission::Started { turn_id } = submission else {
+        panic!("idle automatic compaction should start: {submission:?}");
+    };
+    let completed_turn_id = wait_for_event_match(&harness.test().codex, |event| match event {
+        EventMsg::TurnComplete(event) => Some(event.turn_id.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(completed_turn_id, turn_id);
+
+    let request = response_mock
+        .last_request()
+        .expect("compact request should be captured");
+    let metadata: Value = serde_json::from_str(
+        &request
+            .header("x-codex-turn-metadata")
+            .expect("compact request should include turn metadata"),
+    )?;
+    assert_eq!(
+        metadata["compaction"],
+        json!({
+            "trigger": "auto",
+            "reason": "context_limit",
+            "implementation": if remote_v2 {
+                "responses_compaction_v2"
+            } else {
+                "responses_compact"
+            },
+            "phase": "standalone_turn",
+            "strategy": "memento",
+        })
+    );
+    assert_eq!(metadata["turn_id"], turn_id);
     Ok(())
 }
 

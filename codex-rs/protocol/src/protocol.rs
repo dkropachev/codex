@@ -58,7 +58,9 @@ use crate::plan_tool::UpdatePlanArgs;
 use crate::request_permissions::RequestPermissionsEvent;
 use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
+use crate::turn_input::CompactionSource;
 use crate::turn_input::CyberAccessProgram;
+use crate::turn_input::StartIfIdleSubmission;
 use crate::turn_input::SuspendTurnOutcome;
 use crate::turn_input::TurnInputMode;
 use crate::turn_input::TurnInputRequest;
@@ -652,6 +654,12 @@ pub enum Op {
         reply: oneshot::Sender<TurnSettingsUpdateOutcome>,
     },
 
+    /// Start standalone compaction only if the thread is idle.
+    CompactIfIdle {
+        source: CompactionSource,
+        reply: oneshot::Sender<CodexResult<StartIfIdleSubmission>>,
+    },
+
     /// Inter-agent communication that should be recorded as agent-message history
     /// while still using the normal thread submission lifecycle.
     InterAgentCommunication {
@@ -959,6 +967,7 @@ impl Op {
             Self::RefreshMcpServers => "refresh_mcp_servers",
             Self::ReloadUserConfig => "reload_user_config",
             Self::Compact => "compact",
+            Self::CompactIfIdle { .. } => "compact_if_idle",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
             Self::ThreadRollback { .. } => "thread_rollback",
             Self::ApproveGuardianDeniedAction { .. } => "approve_guardian_denied_action",

@@ -11,13 +11,13 @@ use tracing::debug_span;
 use tracing::info_span;
 
 use crate::session::session::Session;
+use crate::session::standalone_compact;
 use crate::session::thread_settings;
 use crate::session::turn_input;
 
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianApprovedAction;
 use crate::context::NodeReplReviewEvidence;
-use crate::tasks::CompactTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
 use crate::tasks::WorkflowCommandTask;
@@ -269,14 +269,6 @@ pub fn refresh_mcp_servers(sess: &Session) {
 
 pub async fn reload_user_config(sess: &Arc<Session>) {
     sess.reload_user_config_layer().await;
-}
-
-pub async fn compact(sess: &Arc<Session>, sub_id: String) {
-    let turn_context = sess
-        .new_turn_with_default_settings(sub_id, Default::default())
-        .await;
-
-    sess.spawn_task(turn_context, Vec::new(), CompactTask).await;
 }
 
 pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {
@@ -660,7 +652,13 @@ pub(super) async fn submission_loop(sess: Arc<Session>, rx_sub: Receiver<Submiss
                     false
                 }
                 Op::Compact => {
-                    compact(&sess, sub.id.clone()).await;
+                    standalone_compact::run(&sess, sub.id.clone()).await;
+                    false
+                }
+                Op::CompactIfIdle { source, reply } => {
+                    let result =
+                        standalone_compact::run_if_idle(&sess, sub.id.clone(), source).await;
+                    let _ = reply.send(Ok(result));
                     false
                 }
                 Op::ThreadRollback { num_turns } => {

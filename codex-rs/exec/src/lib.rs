@@ -958,6 +958,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 ClientRequest::TurnStart {
                     request_id: request_ids.next(),
                     params: TurnStartParams {
+                        start_if_idle: false,
                         thread_id: primary_thread_id_for_span.clone(),
                         turn_trigger: None,
                         client_user_message_id: None,

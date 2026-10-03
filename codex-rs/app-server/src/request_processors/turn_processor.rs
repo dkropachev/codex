@@ -427,6 +427,7 @@ impl TurnRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> Result<TurnStartResponse, JSONRPCErrorError> {
+        let start_if_idle = params.start_if_idle;
         let (thread_id, thread) =
             self.load_thread(&params.thread_id)
                 .await
@@ -544,36 +545,24 @@ impl TurnRequestProcessor {
             )
             .await?;
 
-        let submission = thread
-            .start_or_steer_turn(
-                TurnInputRequest::new(input)
-                    .with_thread_settings(thread_settings)
-                    .on_start(TurnStartOptions {
-                        turn_trigger: params.turn_trigger,
-                        final_output_json_schema: params.output_schema,
-                        service_tier: params.service_tier_for_turn,
-                        cyber_access_program: params.cyber_access_program.map(Into::into),
-                        ..Default::default()
-                    })
-                    .with_additional_context(additional_context)
-                    .with_responses_metadata(params.responsesapi_client_metadata)
-                    .with_trace(self.request_trace_context(&request_id).await),
-            )
-            .await
-            .map_err(|err| {
-                let error = internal_error(format!("failed to submit turn input: {err}"));
-                self.track_error_response(&request_id, &error, /*error_type*/ None);
-                error
-            })?;
-        let (turn_id, started) = match submission {
-            TurnInputSubmission::Started { turn_id } => (turn_id, true),
-            TurnInputSubmission::Steered { turn_id } => (turn_id, false),
-            TurnInputSubmission::NotSubmitted { reason } => {
-                let error = internal_error(format!("failed to submit turn input: {reason:?}"));
-                self.track_error_response(&request_id, &error, /*error_type*/ None);
-                return Err(error);
-            }
-        };
+        let turn_input_request = TurnInputRequest::new(input)
+            .with_thread_settings(thread_settings)
+            .on_start(TurnStartOptions {
+                turn_trigger: params.turn_trigger,
+                final_output_json_schema: params.output_schema,
+                service_tier: params.service_tier_for_turn,
+                cyber_access_program: params.cyber_access_program.map(Into::into),
+                ..Default::default()
+            })
+            .with_additional_context(additional_context)
+            .with_responses_metadata(params.responsesapi_client_metadata)
+            .with_trace(self.request_trace_context(&request_id).await);
+        let context_management::AcceptedTurnInput { turn_id, started } =
+            context_management::submit_turn(thread.as_ref(), turn_input_request, start_if_idle)
+                .await
+                .inspect_err(|error| {
+                    self.track_error_response(&request_id, error, /*error_type*/ None);
+                })?;
 
         if turn_has_input && started {
             let config_snapshot = thread.config_snapshot().await;

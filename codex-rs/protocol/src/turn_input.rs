@@ -202,6 +202,23 @@ pub enum StartIfIdleSubmission {
     NotSubmitted { reason: NotSubmittedReason },
 }
 
+/// Identifies what requested a standalone compaction turn.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CompactionSource {
+    /// Compaction was explicitly requested by the user or client.
+    #[default]
+    Manual,
+    /// Compaction was requested by automatic context management.
+    Automatic,
+}
+
+/// Inputs for an idle-only standalone compaction submission.
+#[derive(Clone, Debug)]
+pub struct CompactionRequest {
+    pub source: CompactionSource,
+    pub trace: Option<W3cTraceContext>,
+}
+
 /// What Core did with input submitted only for steering.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SteerSubmission {
@@ -215,10 +232,10 @@ pub enum SteerSubmission {
 /// Why Core did not accept submitted turn input for turn processing.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NotSubmittedReason {
-    /// `start_turn_if_idle` found an active turn.
+    /// An idle-only turn or compaction start found an active turn.
     NotIdle,
 
-    /// `start_turn_if_idle` yielded to higher-priority trigger-turn mailbox input.
+    /// An idle-only start yielded to higher-priority trigger-turn mailbox input.
     PendingTriggerTurn,
 
     /// `start_turn_if_idle` received automatic non-user input for a turn that
