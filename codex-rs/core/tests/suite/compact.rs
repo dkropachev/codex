@@ -1,5 +1,9 @@
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_core::CompactionRequest;
+use codex_core::CompactionSource;
+use codex_core::NotSubmittedReason;
+use codex_core::StartIfIdleSubmission;
 use codex_core::TurnInputRequest;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
@@ -63,6 +67,8 @@ use core_test_support::responses::sse;
 use core_test_support::responses::sse_failed;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -70,6 +76,10 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
+use tokio::sync::Barrier;
+use tokio::sync::oneshot;
+use tokio::time::Duration;
+use tokio::time::timeout;
 use wiremock::MockServer;
 // --- Test helpers -----------------------------------------------------------
 
@@ -1300,6 +1310,84 @@ async fn manual_compact_emits_context_compaction_items() {
     let completed_item = completed_item.expect("context compaction item completed");
     assert_eq!(started_item.id, completed_item.id);
     assert!(legacy_event);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_only_compaction_is_atomic_and_reports_its_exact_turn_id() -> Result<()> {
+    let (release, gate) = oneshot::channel();
+    let (server, _) = start_streaming_sse_server(vec![vec![StreamingSseChunk {
+        gate: Some(gate),
+        body: sse(vec![
+            ev_assistant_message("summary", SUMMARY_TEXT),
+            ev_completed("compact-response"),
+        ]),
+    }]])
+    .await;
+    let test = test_codex()
+        .with_config(|config| config.model_provider.name = "Local compaction test".to_string())
+        .build_with_streaming_server(&server)
+        .await?;
+    let barrier = Arc::new(Barrier::new(3));
+    let submit = |codex: Arc<codex_core::CodexThread>, barrier: Arc<Barrier>| {
+        tokio::spawn(async move {
+            barrier.wait().await;
+            codex
+                .compact_if_idle(CompactionRequest {
+                    source: CompactionSource::Automatic,
+                    trace: None,
+                })
+                .await
+        })
+    };
+    let first = submit(Arc::clone(&test.codex), Arc::clone(&barrier));
+    let second = submit(Arc::clone(&test.codex), Arc::clone(&barrier));
+    barrier.wait().await;
+    let submissions = timeout(Duration::from_secs(5), async {
+        let (first, second) = tokio::join!(first, second);
+        Ok::<_, anyhow::Error>((first??, second??))
+    })
+    .await??;
+    let turn_id = match submissions {
+        (
+            StartIfIdleSubmission::Started { turn_id },
+            StartIfIdleSubmission::NotSubmitted {
+                reason: NotSubmittedReason::NotIdle,
+            },
+        )
+        | (
+            StartIfIdleSubmission::NotSubmitted {
+                reason: NotSubmittedReason::NotIdle,
+            },
+            StartIfIdleSubmission::Started { turn_id },
+        ) => turn_id,
+        other => panic!("expected one started and one rejected compaction: {other:?}"),
+    };
+    let started = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(started, turn_id);
+    release
+        .send(())
+        .expect("compaction request should be waiting");
+    let completed = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnAborted(event) => panic!("compaction was replaced: {event:?}"),
+        EventMsg::TurnComplete(event) => Some(event.turn_id.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(completed, turn_id);
+    let request: Value = serde_json::from_slice(&server.requests().await[0])?;
+    let metadata: Value = serde_json::from_str(
+        request["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .expect("compaction metadata"),
+    )?;
+    assert_eq!(metadata["compaction"]["trigger"], "auto");
+    assert_eq!(metadata["compaction"]["reason"], "context_limit");
+    server.shutdown().await;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

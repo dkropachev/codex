@@ -1,6 +1,9 @@
 use anyhow::Result;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core::CompactionRequest;
+use codex_core::CompactionSource;
+use codex_core::StartIfIdleSubmission;
 use codex_core::TurnInputRequest;
 use codex_core::config::Config;
 use codex_core::config::TokenBudgetConfig;
@@ -135,8 +138,12 @@ fn python_hook_command(script_path: &Path) -> String {
     format!("python3 \"{}\"", script_path.display())
 }
 
-fn write_token_budget_compact_hooks(home: &Path) {
-    let script_path = home.join("token_budget_compact_hook.py");
+fn write_token_budget_compact_hooks(home: &Path, source: CompactionSource) {
+    let matcher = match source {
+        CompactionSource::Manual => "manual",
+        CompactionSource::Automatic => "auto",
+    };
+    let script_path = home.join(format!("token_budget_{matcher}_compact_hook.py"));
     std::fs::write(
         &script_path,
         "import json\nimport sys\njson.load(sys.stdin)\n",
@@ -145,14 +152,14 @@ fn write_token_budget_compact_hooks(home: &Path) {
     let hooks = json!({
         "hooks": {
             "PreCompact": [{
-                "matcher": "manual",
+                "matcher": matcher,
                 "hooks": [{
                     "type": "command",
                     "command": python_hook_command(&script_path),
                 }]
             }],
             "PostCompact": [{
-                "matcher": "manual",
+                "matcher": matcher,
                 "hooks": [{
                     "type": "command",
                     "command": python_hook_command(&script_path),
@@ -1286,7 +1293,9 @@ async fn token_budget_compaction_runs_compact_hooks() -> Result<()> {
 
     let server = start_mock_server().await;
     let test = test_codex()
-        .with_pre_build_hook(write_token_budget_compact_hooks)
+        .with_pre_build_hook(|home| {
+            write_token_budget_compact_hooks(home, CompactionSource::Manual);
+        })
         .with_config(|config| {
             config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
             config
@@ -1326,6 +1335,131 @@ async fn token_budget_compaction_runs_compact_hooks() -> Result<()> {
     })
     .await;
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_budget_automatic_standalone_compaction_runs_auto_hooks() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_pre_build_hook(|home| {
+            write_token_budget_compact_hooks(home, CompactionSource::Automatic);
+        })
+        .with_config(|config| {
+            config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow token budget");
+            trust_discovered_hooks(config);
+        })
+        .build(&server)
+        .await?;
+
+    test.codex
+        .compact_if_idle(CompactionRequest {
+            source: CompactionSource::Automatic,
+            trace: None,
+        })
+        .await?;
+    for event_name in [HookEventName::PreCompact, HookEventName::PostCompact] {
+        let completed = wait_for_event_match(&test.codex, |event| match event {
+            EventMsg::HookCompleted(completed) if completed.run.event_name == event_name => {
+                Some(completed.clone())
+            }
+            _ => None,
+        })
+        .await;
+        assert_eq!(completed.run.status, HookRunStatus::Completed);
+    }
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn token_budget_automatic_standalone_compaction_supports_remote_executor() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
+            config
+                .features
+                .enable(Feature::TokenBudget)
+                .expect("test config should allow token budget");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    let submission = test
+        .codex
+        .compact_if_idle(CompactionRequest {
+            source: CompactionSource::Automatic,
+            trace: None,
+        })
+        .await?;
+    let StartIfIdleSubmission::Started { turn_id } = submission else {
+        panic!("idle automatic compaction should start: {submission:?}");
+    };
+
+    let (started_turn_id, started_item, completed_item, terminal) =
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let mut started_turn_id = None;
+            let mut started_item = None;
+            let mut completed_item = None;
+            loop {
+                let event = test.codex.next_event().await?;
+                let event_id = event.id.clone();
+                match event.msg {
+                    EventMsg::TurnStarted(event) if event.turn_id == turn_id => {
+                        started_turn_id = Some(event.turn_id);
+                    }
+                    EventMsg::ItemStarted(ItemStartedEvent {
+                        turn_id: event_turn_id,
+                        item: TurnItem::ContextCompaction(item),
+                        ..
+                    }) if event_turn_id == turn_id => {
+                        started_item = Some((event_turn_id, item.id));
+                    }
+                    EventMsg::ItemCompleted(ItemCompletedEvent {
+                        turn_id: event_turn_id,
+                        item: TurnItem::ContextCompaction(item),
+                        ..
+                    }) if event_turn_id == turn_id => {
+                        completed_item = Some((event_turn_id, item.id));
+                    }
+                    EventMsg::TurnComplete(event) if event.turn_id == turn_id => {
+                        return Ok::<_, anyhow::Error>((
+                            started_turn_id,
+                            started_item,
+                            completed_item,
+                            (event.turn_id, event.error),
+                        ));
+                    }
+                    EventMsg::TurnAborted(event)
+                        if event.turn_id.as_deref() == Some(turn_id.as_str()) =>
+                    {
+                        anyhow::bail!("automatic compaction turn was aborted: {event:?}");
+                    }
+                    EventMsg::Error(error) if event_id == turn_id => {
+                        anyhow::bail!("automatic compaction turn failed: {error:?}");
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await??;
+
+    assert_eq!(started_turn_id, Some(turn_id.clone()));
+    assert_eq!(started_item, completed_item);
+    assert!(started_item.is_some(), "context compaction item should run");
+    assert_eq!(terminal, (turn_id, None));
     Ok(())
 }
 

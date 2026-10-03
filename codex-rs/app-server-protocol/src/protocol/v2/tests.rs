@@ -4977,6 +4977,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
     let without_override = TurnStartParams {
         disabled_plugin_ids: None,
         thread_id: "thread_123".to_string(),
+        start_if_idle: false,
         client_user_message_id: None,
         input: vec![],
         turn_trigger: None,

@@ -9,6 +9,12 @@ use crate::session::session::Session;
 use crate::session::tests::make_session_and_context_with_rx;
 use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
+use codex_http_client::HttpClientFactory;
+use codex_login::AuthManager;
+use codex_models_manager::manager::ModelsManager;
+use codex_models_manager::manager::ModelsManagerFuture;
+use codex_models_manager::manager::RefreshStrategy;
+use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
 use codex_otel::SessionTelemetry;
@@ -17,8 +23,13 @@ use codex_otel::TURN_NETWORK_PROXY_METRIC;
 use codex_otel::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::TURN_TOOL_CALL_METRIC;
 use codex_otel::TURN_UNIFIED_EXEC_RUNNING_PROCESSES_METRIC;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::CodexErr;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsage;
 use opentelemetry::KeyValue;
@@ -30,6 +41,8 @@ use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use tokio::sync::Notify;
+use tokio::sync::TryLockError;
 use tokio_util::sync::CancellationToken;
 
 struct PendingTask;
@@ -51,6 +64,58 @@ impl SessionTask for PendingTask {
         _cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
         std::future::pending().await
+    }
+}
+
+#[derive(Debug)]
+struct StalledRefreshModelsManager {
+    inner: SharedModelsManager,
+    refresh_started: Notify,
+    release_refresh: Notify,
+}
+
+impl ModelsManager for StalledRefreshModelsManager {
+    fn raw_model_catalog(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
+    ) -> ModelsManagerFuture<'_, ModelsResponse> {
+        self.inner
+            .raw_model_catalog(refresh_strategy, http_client_factory)
+    }
+
+    fn refresh_after_auth_change(
+        &self,
+        _http_client_factory: HttpClientFactory,
+    ) -> ModelsManagerFuture<'_, ()> {
+        Box::pin(async move {
+            self.refresh_started.notify_one();
+            self.release_refresh.notified().await;
+        })
+    }
+
+    fn get_remote_models(&self) -> ModelsManagerFuture<'_, Vec<ModelInfo>> {
+        self.inner.get_remote_models()
+    }
+
+    fn try_get_remote_models(&self) -> Result<Vec<ModelInfo>, TryLockError> {
+        self.inner.try_get_remote_models()
+    }
+
+    fn auth_manager(&self) -> Option<&AuthManager> {
+        self.inner.auth_manager()
+    }
+
+    fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
+        self.inner.list_collaboration_modes()
+    }
+
+    fn refresh_if_new_etag(
+        &self,
+        etag: String,
+        http_client_factory: HttpClientFactory,
+    ) -> ModelsManagerFuture<'_, ()> {
+        self.inner.refresh_if_new_etag(etag, http_client_factory)
     }
 }
 
@@ -109,6 +174,67 @@ fn metric_point(resource_metrics: &ResourceMetrics, name: &str) -> (BTreeMap<Str
         },
         _ => panic!("unexpected counter data type"),
     }
+}
+
+#[tokio::test]
+async fn interrupt_during_pending_work_refresh_preserves_trigger_mail_once() {
+    let (mut session, _turn_context, _events) = make_session_and_context_with_rx().await;
+    let models_manager = Arc::new(StalledRefreshModelsManager {
+        inner: Arc::clone(&session.services.models_manager),
+        refresh_started: Notify::new(),
+        release_refresh: Notify::new(),
+    });
+    Arc::get_mut(&mut session)
+        .expect("session should be uniquely owned")
+        .services
+        .models_manager = models_manager.clone();
+
+    let communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::root(),
+        Vec::new(),
+        "pending trigger".to_string(),
+        /*trigger_turn*/ true,
+    );
+    session
+        .input_queue
+        .enqueue_mailbox_communication(communication.clone(), Default::default())
+        .await;
+
+    let pending_work_start = tokio::spawn({
+        let session = Arc::clone(&session);
+        async move {
+            session
+                .maybe_start_turn_for_pending_work_with_sub_id("pending-work".to_string())
+                .await;
+        }
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        models_manager.refresh_started.notified(),
+    )
+    .await
+    .expect("pending-work start should reach model refresh");
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), session.interrupt_task())
+        .await
+        .expect("interrupt should acquire the released turn-start lock");
+    models_manager.release_refresh.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(5), pending_work_start)
+        .await
+        .expect("stale pending-work start should exit after refresh")
+        .expect("pending-work start task should not panic");
+
+    assert!(session.active_turn.lock().await.is_none());
+    let (first_delivery, _) = session.input_queue.drain_mailbox_input_items().await;
+    let (second_delivery, _) = session.input_queue.drain_mailbox_input_items().await;
+    assert_eq!(
+        (first_delivery, second_delivery),
+        (
+            vec![TurnInput::InterAgentCommunication(communication)],
+            Vec::new(),
+        )
+    );
 }
 
 #[derive(Clone, Copy)]

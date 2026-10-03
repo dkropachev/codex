@@ -197,7 +197,9 @@ class CodexConfig:
     """Configuration for launching and identifying the local Codex runtime.
 
     Most callers can use ``Codex()`` without configuration. Set ``codex_bin``
-    only when intentionally using a specific local Codex executable.
+    only when intentionally using a specific local Codex executable. Custom
+    launchers can set ``schema_command_override`` when their runtime schema is
+    available through a separate Codex CLI command.
     """
 
     codex_bin: str | None = None
@@ -209,6 +211,7 @@ class CodexConfig:
     client_title: str = "Codex Python SDK"
     client_version: str = SDK_VERSION
     experimental_api: bool = True
+    schema_command_override: tuple[str, ...] | None = None
 
 
 class CodexClient:
@@ -260,9 +263,12 @@ class CodexClient:
             env.update(self.config.env)
         _prepend_path_dirs(env, path_dirs)
 
-        if self.config.launch_args_override is None:
+        schema_command = self.config.schema_command_override
+        if schema_command is None and self.config.launch_args_override is None:
+            schema_command = tuple(args[:-2])
+        if schema_command is not None:
             self._checkout_capabilities = CheckoutCapabilities(
-                command=tuple(args[:-2]), cwd=self.config.cwd, env=env.copy()
+                command=schema_command, cwd=self.config.cwd, env=env.copy()
             )
 
         self._proc = subprocess.Popen(
@@ -336,29 +342,51 @@ class CodexClient:
             "thread/resume": ("excludeTurns",),
             "thread/fork": ("excludeTurns",),
         }
+        schema_fields = {
+            "turn/start": ("startIfIdle",),
+        }
         supplied_fields = [
             field
             for field in runtime_fields.get(method, ())
             if (params or {}).get(field) is not None
         ]
-        if supplied_fields:
+        required_schema_fields = {
+            field
+            for field in schema_fields.get(method, ())
+            if (params or {}).get(field) is not None
+        }
+        if supplied_fields or required_schema_fields:
             try:
-                if self._runtime_version == "0.0.0":
+                if required_schema_fields:
+                    if self._checkout_capabilities is None:
+                        raise ValueError("Cannot verify this contract with a custom launch command")
+                    supported = self._checkout_capabilities.fields.get(method, frozenset())
+                    if missing := required_schema_fields - supported:
+                        raise ValueError(
+                            f"The checkout does not support {', '.join(sorted(missing))}"
+                        )
+                if supplied_fields and self._runtime_version == "0.0.0":
                     if self._checkout_capabilities is None:
                         raise ValueError(
                             "Cannot verify an unversioned CLI with a custom launch command"
                         )
-                    supported = self._checkout_capabilities.fields[method]
+                    supported = self._checkout_capabilities.fields.get(method, frozenset())
                     if missing := set(supplied_fields) - supported:
                         raise ValueError(
                             f"The checkout does not support {', '.join(sorted(missing))}"
                         )
-                else:
+                elif supplied_fields:
                     require_runtime_version(self._runtime_version)
             except ValueError as exc:
+                requirement = [*supplied_fields, *sorted(required_schema_fields)]
+                configuration_hint = (
+                    "Configure CodexConfig.schema_command_override for a custom launcher, "
+                    "or CodexConfig.codex_bin with a supported CLI."
+                    if required_schema_fields and self._checkout_capabilities is None
+                    else "Configure CodexConfig.codex_bin with a supported CLI."
+                )
                 raise CodexError(
-                    f"{method} with {', '.join(supplied_fields)}: {exc}. "
-                    "Configure CodexConfig.codex_bin with a supported CLI."
+                    f"{method} with {', '.join(requirement)}: {exc}. {configuration_hint}"
                 ) from exc
         result = self._request_raw(method, params)
         if not isinstance(result, dict):

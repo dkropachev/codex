@@ -5091,18 +5091,16 @@ class ThreadClosedNotification(BaseModel):
     thread_id: Annotated[str, Field(alias="threadId")]
 
 
-class ThreadCompactStartParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    thread_id: Annotated[str, Field(alias="threadId")]
-
-
 class ThreadCompactStartResponse(BaseModel):
-    pass
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    turn_id: Annotated[str | None, Field(alias="turnId")] = None
+
+
+class ThreadCompactStartSource(Enum):
+    manual = "manual"
+    automatic_context_management = "automaticContextManagement"
 
 
 class ThreadDeleteParams(BaseModel):
@@ -6780,17 +6778,6 @@ class ThreadUnarchiveRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["thread/unarchive"], Field(title="Thread/unarchiveRequestMethod")]
     params: ThreadUnarchiveParams
-
-
-class ThreadCompactStartRequest(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: RequestId
-    method: Annotated[
-        Literal["thread/compact/start"], Field(title="Thread/compact/startRequestMethod")
-    ]
-    params: ThreadCompactStartParams
 
 
 class ThreadShellCommandRequest(BaseModel):
@@ -9359,6 +9346,17 @@ class SubAgentSource(
     root: SubAgentSourceValue | ThreadSpawnSubAgentSource | OtherSubAgentSource
 
 
+class ThreadCompactStartParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    source: Annotated[
+        ThreadCompactStartSource | None,
+        Field(description="Identifies what initiated the compaction. Omission defaults to manual."),
+    ] = None
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
 class ThreadForkParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -10149,6 +10147,17 @@ class ThreadGoalSetRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["thread/goal/set"], Field(title="Thread/goal/setRequestMethod")]
     params: ThreadGoalSetParams
+
+
+class ThreadCompactStartRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["thread/compact/start"], Field(title="Thread/compact/startRequestMethod")
+    ]
+    params: ThreadCompactStartParams
 
 
 class ThreadListRequest(BaseModel):
@@ -12037,6 +12046,13 @@ class TurnStartParams(BaseModel):
         Field(
             alias="serviceTierForTurn",
             description="Override the service tier only when this request starts a new turn. Use \"default\" for standard speed. Omitted or null inherits the thread's tier. Does not change the thread's tier or a turn being steered.",
+        ),
+    ] = None
+    start_if_idle: Annotated[
+        bool | None,
+        Field(
+            alias="startIfIdle",
+            description="Start a new turn only if the thread is idle. When false or omitted, preserve the default start-or-steer behavior.",
         ),
     ] = None
     summary: Annotated[

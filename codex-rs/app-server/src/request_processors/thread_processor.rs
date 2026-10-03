@@ -2350,7 +2350,7 @@ impl ThreadRequestProcessor {
         request_id: &ConnectionRequestId,
         params: ThreadCompactStartParams,
     ) -> Result<ThreadCompactStartResponse, JSONRPCErrorError> {
-        let ThreadCompactStartParams { thread_id } = params;
+        let ThreadCompactStartParams { thread_id, source } = params;
 
         let (_, thread) = self.load_thread(&thread_id).await?;
         ensure_direct_input_allowed(thread.as_ref()).await?;
@@ -2358,10 +2358,16 @@ impl ThreadRequestProcessor {
             .check_thread_model_provider(thread.config().await.as_ref())
             .await
             .map_err(|error| config_load_error(&error))?;
-        self.submit_core_op(request_id, thread.as_ref(), Op::Compact)
-            .await
-            .map_err(|err| internal_error(format!("failed to start compaction: {err}")))?;
-        Ok(ThreadCompactStartResponse {})
+        let turn_id = context_management::start_compaction(
+            thread.as_ref(),
+            source,
+            self.request_trace_context(request_id).await,
+        )
+        .await?;
+        self.outgoing
+            .record_request_turn_id(request_id, &turn_id)
+            .await;
+        Ok(ThreadCompactStartResponse { turn_id })
     }
 
     async fn thread_background_terminals_clean_inner(

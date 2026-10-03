@@ -522,6 +522,11 @@ def _normalized_schema_bundle_text(schema_dir: Path) -> str:
     _preserve_guardian_approval_path_wrappers(schema)
     definitions = schema.get("definitions", {})
     if isinstance(definitions, dict):
+        # The SDK's older pinned runtime returns an empty compact response. Keep
+        # the server schema strict while accepting that legacy SDK payload.
+        response = definitions.get("ThreadCompactStartResponse")
+        if isinstance(response, dict) and isinstance(response.get("required"), list):
+            response["required"] = [field for field in response["required"] if field != "turnId"]
         for definition in definitions.values():
             if isinstance(definition, dict):
                 _flatten_string_enum_one_of(definition)

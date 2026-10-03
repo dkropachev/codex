@@ -16,23 +16,24 @@ use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use tokio_util::sync::CancellationToken;
 
-/// Runs token-budget manual compaction as a normal compaction lifecycle.
+/// Runs standalone token-budget compaction as a normal compaction lifecycle.
 ///
 /// Token-budget compaction skips model/server summarization and installs a fresh context window
 /// instead. It is still modeled as compaction so compact hooks and `ContextCompaction` turn items
 /// observe the same lifecycle as local or remote compaction.
-pub(crate) async fn run_manual_compact_task(
+pub(crate) async fn run_standalone_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
+    trigger: CompactionTrigger,
 ) -> CodexResult<()> {
     sess.emit_turn_started(&turn_context).await;
 
-    // Manual compaction runs outside run_turn, so it captures its own current step.
+    // Standalone compaction runs outside run_turn, so it captures its own current step.
     let step_context = sess
         .capture_step_context(Arc::clone(&turn_context), &CancellationToken::new())
         .await?;
     let world_state = Arc::new(sess.build_world_state_for_step(&step_context).await?);
-    run_compact_task_inner(&sess, &step_context, world_state, CompactionTrigger::Manual).await
+    run_compact_task_inner(&sess, &step_context, world_state, trigger).await
 }
 
 /// Runs token-budget inline auto-compaction as a normal compaction lifecycle.

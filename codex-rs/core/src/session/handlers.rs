@@ -11,12 +11,12 @@ use tracing::debug_span;
 use tracing::info_span;
 
 use crate::session::session::Session;
+use crate::session::standalone_compact;
 use crate::session::thread_settings;
 use crate::session::turn_input;
 
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianApprovedAction;
-use crate::tasks::CompactTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
 use crate::tasks::WorkflowCommandTask;
@@ -95,6 +95,7 @@ pub async fn run_user_shell_command(
     command: String,
     timeout_ms: Option<u64>,
 ) {
+    let _turn_start_guard = sess.acquire_turn_start_lock().await;
     if let Some((turn_context, cancellation_token)) =
         sess.active_turn_context_and_cancellation_token().await
     {
@@ -110,6 +111,18 @@ pub async fn run_user_shell_command(
             )
             .await;
         });
+        return;
+    }
+    if sess.active_turn.lock().await.is_some() {
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::Error(ErrorEvent {
+                misalignment: None,
+                message: "Cannot run a shell command while a turn is starting.".to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            }),
+        })
+        .await;
         return;
     }
 
@@ -130,6 +143,7 @@ pub async fn run_workflow_command(
     workflow_dir: std::path::PathBuf,
     input: Value,
 ) {
+    let _turn_start_guard = sess.acquire_turn_start_lock().await;
     let has_active_turn = { sess.active_turn.lock().await.is_some() };
     if has_active_turn {
         sess.send_event_raw(Event {
@@ -268,16 +282,6 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
     sess.reload_user_config_layer().await;
 }
 
-pub async fn compact(sess: &Arc<Session>, sub_id: String) {
-    // Stop the old turn before the compact task picks up the next turn's environments.
-    sess.abort_all_tasks(TurnAbortReason::Replaced).await;
-    let turn_context = sess
-        .new_turn_with_default_settings(sub_id, Default::default())
-        .await;
-
-    sess.spawn_task(turn_context, Vec::new(), CompactTask).await;
-}
-
 pub(super) async fn persist_thread_memory_mode_update(
     sess: &Arc<Session>,
     mode: ThreadMemoryMode,
@@ -316,7 +320,10 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
         startup_prewarm.abort().await;
     }
     let _ = sess.conversation.shutdown().await;
-    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    {
+        let _turn_start_guard = sess.acquire_turn_start_lock().await;
+        sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    }
     let shell_snapshot_prewarm = sess.state.lock().await.shell_snapshot_prewarm.take();
     if let Some(shell_snapshot_prewarm) = shell_snapshot_prewarm {
         shell_snapshot_prewarm.abort();
@@ -546,7 +553,13 @@ pub(super) async fn submission_loop(sess: Arc<Session>, rx_sub: Receiver<Submiss
                     false
                 }
                 Op::Compact => {
-                    compact(&sess, sub.id.clone()).await;
+                    standalone_compact::run(&sess, sub.id.clone()).await;
+                    false
+                }
+                Op::CompactIfIdle { source, reply } => {
+                    let outcome =
+                        standalone_compact::run_if_idle(&sess, sub.id.clone(), source).await;
+                    let _ = reply.send(Ok(outcome));
                     false
                 }
                 Op::SetThreadMemoryMode { mode } => {

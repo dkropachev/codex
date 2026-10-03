@@ -80,6 +80,7 @@ def test_app_server_runs_code_mode_through_python_sdk(
         package_path_dir = package.app_server_path_dir
         config = CodexConfig(
             launch_args_override=(str(executable), *sandbox_config),
+            schema_command_override=(str(package.cli), *sandbox_config, "app-server"),
             cwd=str(package.directory),
             env=package.environment,
         )

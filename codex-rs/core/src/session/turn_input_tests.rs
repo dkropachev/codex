@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::Constrained;
+use crate::session::SessionSettingsUpdate;
 use crate::session::step_settings::StepSettingsUpdate;
 use crate::session::tests::make_session_and_context;
 use crate::session::tests::make_session_and_context_with_rx;
@@ -8,32 +9,36 @@ use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskResult;
 use codex_protocol::AgentPath;
-use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::turn_input::AppServerClientInfo;
 use codex_protocol::turn_input::TurnInput as SubmittedTurnInput;
 use codex_protocol::user_input::UserInput;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::test_codex::local_selections;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
 use tokio::time::sleep;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Copy)]
 struct NeverEndingTask {
     kind: TaskKind,
     listen_to_cancellation_token: bool,
+}
+
+#[derive(Clone, Copy)]
+enum CompetingStart {
+    Shell,
+    Workflow,
 }
 
 impl SessionTask for NeverEndingTask {
@@ -247,6 +252,58 @@ async fn start_only_rejects_active_turn_without_injecting() {
 }
 
 #[tokio::test]
+async fn rejected_user_idle_start_does_not_apply_app_server_client_info() {
+    let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
+    session
+        .spawn_task(
+            Arc::clone(&turn_context),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+    let submission = handle(
+        &session,
+        TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "must not mutate active turn".to_string(),
+            text_elements: Vec::new(),
+        }])
+        .with_app_server_client_info(AppServerClientInfo {
+            name: Some("rejected-client".to_string()),
+            version: Some("9.9.9".to_string()),
+            mcp_elicitations_auto_deny: true,
+        }),
+        TurnInputMode::StartUserIfIdle,
+        "rejected-client-info".to_string(),
+    )
+    .await
+    .expect("busy idle-only start should return typed rejection");
+    assert_eq!(
+        submission,
+        TurnInputSubmission::NotSubmitted {
+            reason: NotSubmittedReason::NotIdle,
+        }
+    );
+    let client_state = {
+        let state = session.state.lock().await;
+        (
+            state.session_configuration.app_server_client_name.clone(),
+            state
+                .session_configuration
+                .app_server_client_version
+                .clone(),
+            session.services.mcp_runtime.elicitations_auto_deny(),
+        )
+    };
+    assert_eq!(client_state, (None, None, false));
+
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+}
+
+#[tokio::test]
 async fn recovery_rejects_active_turn_without_injecting_or_applying_settings() {
     let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
     let original_approval_policy = session
@@ -383,353 +440,6 @@ async fn start_only_rejects_current_plan_before_validating_settings() {
 }
 
 #[tokio::test]
-async fn prepared_user_updates_merge_with_settings_at_turn_start() {
-    for (requested, intervening) in [
-        (
-            ThreadSettingsOverrides {
-                effort: Some(Some(ReasoningEffort::High)),
-                ..Default::default()
-            },
-            ThreadSettingsOverrides {
-                model: Some("gpt-5.2".to_string()),
-                ..Default::default()
-            },
-        ),
-        (
-            ThreadSettingsOverrides {
-                model: Some("gpt-5.2".to_string()),
-                ..Default::default()
-            },
-            ThreadSettingsOverrides {
-                effort: Some(Some(ReasoningEffort::High)),
-                ..Default::default()
-            },
-        ),
-    ] {
-        let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
-        let initial = CollaborationMode {
-            mode: ModeKind::Default,
-            settings: Settings {
-                model: "gpt-5.4".to_string(),
-                reasoning_effort: Some(ReasoningEffort::Low),
-                developer_instructions: None,
-            },
-        };
-        session
-            .update_settings(thread_settings::prepare_update(ThreadSettingsOverrides {
-                collaboration_mode: Some(initial.clone()),
-                ..Default::default()
-            }))
-            .await
-            .expect("set initial model and effort");
-        let prepared =
-            PreparedTurnInputSettings::prepare(&session, requested, TurnStartOptions::default())
-                .await
-                .expect("prepare partial protocol update");
-        session
-            .update_settings(thread_settings::prepare_update(intervening))
-            .await
-            .expect("commit intervening settings");
-
-        let turn_context = prepared
-            .apply_started(
-                &session,
-                "sparse-user-start".to_string(),
-                TurnStartKind::User,
-            )
-            .await
-            .expect("apply prepared settings")
-            .expect("user start is permitted");
-        let expected = initial.with_updates(
-            Some("gpt-5.2".to_string()),
-            Some(Some(ReasoningEffort::High)),
-            /*developer_instructions*/ None,
-        );
-        assert_eq!(session.collaboration_mode().await, expected);
-        assert_eq!(turn_context.collaboration_mode(), expected);
-        assert_eq!(
-            turn_context.initial_settings.selected_collaboration_mode(),
-            &expected
-        );
-        assert!(Arc::ptr_eq(
-            &turn_context.initial_settings.model_info,
-            turn_context.model_info(),
-        ));
-    }
-}
-
-#[tokio::test]
-async fn automatic_admission_uses_current_candidate_after_plan_preview() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
-    let default_mode = session.collaboration_mode().await;
-    let mut plan_mode = default_mode.clone();
-    plan_mode.mode = ModeKind::Plan;
-    session
-        .update_settings(thread_settings::prepare_update(ThreadSettingsOverrides {
-            collaboration_mode: Some(plan_mode),
-            ..Default::default()
-        }))
-        .await
-        .expect("enter Plan after the initial admission check");
-    let prepared = PreparedTurnInputSettings::prepare(
-        &session,
-        ThreadSettingsOverrides {
-            effort: Some(Some(ReasoningEffort::High)),
-            ..Default::default()
-        },
-        TurnStartOptions::default(),
-    )
-    .await
-    .expect("validate the patch while the preview is Plan");
-    session
-        .update_settings(thread_settings::prepare_update(ThreadSettingsOverrides {
-            collaboration_mode: Some(default_mode.clone()),
-            ..Default::default()
-        }))
-        .await
-        .expect("leave Plan before atomic admission");
-
-    let turn_context = prepared
-        .apply_started(
-            &session,
-            "automatic-after-plan-preview".to_string(),
-            TurnStartKind::Automatic,
-        )
-        .await
-        .expect("automatic admission should succeed")
-        .expect("current and proposed modes are both Default");
-    let expected = default_mode.with_updates(
-        /*model*/ None,
-        Some(Some(ReasoningEffort::High)),
-        /*developer_instructions*/ None,
-    );
-    assert_eq!(session.collaboration_mode().await, expected);
-    assert_eq!(turn_context.collaboration_mode(), expected);
-    assert_eq!(
-        turn_context.initial_settings.selected_collaboration_mode(),
-        &expected
-    );
-}
-
-#[tokio::test]
-async fn automatic_admission_rechecks_plan_mode_without_committing_sparse_settings() {
-    struct ConfigRecorder(Arc<std::sync::Mutex<Vec<(AskForApproval, ApprovalsReviewer)>>>);
-
-    impl codex_extension_api::ConfigContributor<crate::config::Config> for ConfigRecorder {
-        fn on_config_changed(
-            &self,
-            _session_store: &codex_extension_api::ExtensionData,
-            _thread_store: &codex_extension_api::ExtensionData,
-            _previous_config: &crate::config::Config,
-            new_config: &crate::config::Config,
-        ) {
-            self.0.lock().expect("config records lock").push((
-                new_config.permissions.approval_policy.value(),
-                new_config.approvals_reviewer,
-            ));
-        }
-    }
-
-    let (mut session, _turn_context, rx) = make_session_and_context_with_rx().await;
-    let records = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let mut extensions =
-        codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
-    extensions.config_contributor(Arc::new(ConfigRecorder(Arc::clone(&records))));
-    Arc::get_mut(&mut session)
-        .expect("unique test session")
-        .services
-        .extensions = Arc::new(extensions.build());
-    {
-        let mut state = session.state.lock().await;
-        let settings = Arc::make_mut(&mut state.session_configuration.step_settings);
-        settings.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-        settings.approvals_reviewer = ApprovalsReviewer::User;
-    }
-    let original_environments = session.services.turn_environments.selections();
-    let workspace = tempfile::tempdir().expect("create proposed workspace");
-    let proposed_environments = local_selections(
-        AbsolutePathBuf::try_from(workspace.path()).expect("absolute workspace path"),
-    );
-    assert_ne!(original_environments, proposed_environments.environments);
-    let default_mode = session.collaboration_mode().await;
-    let overrides = ThreadSettingsOverrides {
-        model: Some("automatic-model-must-not-be-applied".to_string()),
-        service_tier: Some(Some(ServiceTier::Fast.request_value().to_string())),
-        environments: Some(proposed_environments.clone()),
-        approval_policy: Some(AskForApproval::Never),
-        approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
-        ..Default::default()
-    };
-    let default_override = ThreadSettingsOverrides {
-        collaboration_mode: Some(default_mode.clone()),
-        ..overrides.clone()
-    };
-    let prepared = PreparedTurnInputSettings::prepare(
-        &session,
-        overrides.clone(),
-        TurnStartOptions::default(),
-    )
-    .await
-    .expect("sparse settings should preview successfully");
-    let prepared_default =
-        PreparedTurnInputSettings::prepare(&session, default_override, TurnStartOptions::default())
-            .await
-            .expect("Default replacement should preview successfully");
-
-    // Another settings writer changes the effective mode after preview. The
-    // sparse patch must not commit in Plan, and a full Default replacement
-    // must not let automatic work escape the now-current Plan configuration.
-    let mut collaboration_mode = default_mode;
-    collaboration_mode.mode = ModeKind::Plan;
-    session
-        .update_settings(SessionSettingsUpdate {
-            step_settings: StepSettingsUpdate {
-                collaboration_mode: Some(collaboration_mode),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .await
-        .expect("Plan mode should be allowed for explicit settings updates");
-    let desired_settings = session.thread_settings_snapshot().await;
-    records.lock().expect("config records lock").clear();
-    // Keep the existing refresh worker from consuming invalidation while the
-    // rejection and its positive control inspect MCP's dirty state.
-    let _mcp_refresh = session
-        .mcp_refresh
-        .acquire()
-        .await
-        .expect("acquire MCP refresh gate");
-    session.mcp_refresh.claim();
-    assert!(!session.mcp_refresh.is_pending());
-
-    for (submission_id, prepared) in [
-        ("automatic-after-preview", prepared),
-        ("automatic-default-after-preview", prepared_default),
-    ] {
-        let outcome = prepared
-            .apply_started(
-                &session,
-                submission_id.to_string(),
-                TurnStartKind::Automatic,
-            )
-            .await
-            .expect("automatic admission should return a typed rejection");
-        assert!(outcome.is_none());
-        assert_eq!(session.thread_settings_snapshot().await, desired_settings);
-        assert!(session.active_turn.lock().await.is_none());
-        assert_eq!(
-            session.services.turn_environments.selections(),
-            original_environments
-        );
-        assert!(!session.mcp_refresh.is_pending());
-        assert_eq!(*records.lock().expect("config records lock"), Vec::new());
-        while let Ok(event) = rx.try_recv() {
-            assert_ne!(event.id, submission_id);
-        }
-    }
-
-    assert_eq!(
-        session
-            .input_queue
-            .get_pending_input(&session.active_turn)
-            .await
-            .0,
-        Vec::<TurnInput>::new()
-    );
-
-    // The rejected candidate is valid and would have real runtime effects if
-    // accepted by an ordinary settings update.
-    session
-        .update_settings(thread_settings::prepare_update(overrides))
-        .await
-        .expect("explicit settings update accepts the same patch");
-    assert_eq!(
-        session.configured_environment_selections().await,
-        proposed_environments.environments
-    );
-    assert!(session.mcp_refresh.is_pending());
-    assert_eq!(
-        *records.lock().expect("config records lock"),
-        vec![(AskForApproval::Never, ApprovalsReviewer::AutoReview)]
-    );
-}
-
-#[test_case(TurnStartKind::User; "ordinary constructor")]
-#[test_case(TurnStartKind::Automatic; "conditional constructor")]
-#[tokio::test]
-async fn admission_revalidates_constraints_before_committing(kind: TurnStartKind) {
-    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
-    {
-        let mut state = session.state.lock().await;
-        Arc::make_mut(&mut state.session_configuration.step_settings).approval_policy =
-            Constrained::allow_any(AskForApproval::OnRequest);
-    }
-    let prepared = PreparedTurnInputSettings::prepare(
-        &session,
-        ThreadSettingsOverrides {
-            approval_policy: Some(AskForApproval::Never),
-            service_tier: Some(Some(ServiceTier::Fast.request_value().to_string())),
-            ..Default::default()
-        },
-        TurnStartOptions::default(),
-    )
-    .await
-    .expect("approval-policy edit should initially be valid");
-
-    let approval_policy = Constrained::allow_only(AskForApproval::OnRequest);
-    let expected_message = CodexErr::InvalidRequest(
-        approval_policy
-            .can_set(&AskForApproval::Never)
-            .expect_err("new constraint must reject the prepared edit")
-            .to_string(),
-    )
-    .to_string();
-    {
-        let mut state = session.state.lock().await;
-        Arc::make_mut(&mut state.session_configuration.step_settings).approval_policy =
-            approval_policy;
-    }
-    let desired_settings = session.thread_settings_snapshot().await;
-    let submission_id = "constraints-after-preview";
-    let result = prepared
-        .apply_started(&session, submission_id.to_string(), kind)
-        .await;
-    let Err(error) = result else {
-        panic!("commit-time constraint failure must return InvalidRequest");
-    };
-    let CodexErrorDetails::InvalidRequest(message) = error.details() else {
-        panic!("unexpected commit-time error: {error}");
-    };
-    assert_eq!(message, &expected_message);
-    let errors: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok())
-        .filter(|event| event.id == submission_id)
-        .map(|event| match event.msg {
-            EventMsg::Error(error) => error,
-            other => panic!("unexpected rejected-turn event: {other:?}"),
-        })
-        .collect();
-    assert_eq!(
-        errors,
-        vec![ErrorEvent {
-            misalignment: None,
-            message: expected_message,
-            codex_error_info: Some(CodexErrorInfo::BadRequest),
-        }]
-    );
-    assert_eq!(session.thread_settings_snapshot().await, desired_settings);
-    assert!(session.active_turn.lock().await.is_none());
-    assert_eq!(
-        session
-            .input_queue
-            .get_pending_input(&session.active_turn)
-            .await
-            .0,
-        Vec::<TurnInput>::new()
-    );
-}
-
-#[tokio::test]
 async fn start_only_accepts_user_input_in_plan_mode() {
     let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
     let mut collaboration_mode = session.collaboration_mode().await;
@@ -752,6 +462,39 @@ async fn start_only_accepts_user_input_in_plan_mode() {
         },
     )
     .await;
+    assert!(matches!(submission, TurnInputSubmission::Started { .. }));
+    assert!(
+        session
+            .state
+            .lock()
+            .await
+            .get_connector_selection()
+            .is_empty()
+    );
+
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+}
+
+#[tokio::test]
+async fn start_or_steer_clears_connector_selection_when_starting() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    session
+        .state
+        .lock()
+        .await
+        .merge_connector_selection(["calendar".to_string()]);
+
+    let submission = handle(
+        &session,
+        TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "new user turn".to_string(),
+            text_elements: Vec::new(),
+        }]),
+        TurnInputMode::StartOrSteer,
+        "new-user-turn".to_string(),
+    )
+    .await
+    .expect("user turn should start");
     assert!(matches!(submission, TurnInputSubmission::Started { .. }));
     assert!(
         session
@@ -853,6 +596,207 @@ async fn steer_only_requires_active_turn() {
         },
         submission
     );
+}
+
+#[tokio::test]
+async fn realtime_input_cannot_replace_idle_turn_reservation() {
+    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
+    let reserved_turn_state = idle_turn::reserve(&session)
+        .await
+        .expect("idle turn should be reserved");
+
+    timeout(
+        std::time::Duration::from_secs(5),
+        session.route_realtime_text_input("realtime input during reservation".to_string()),
+    )
+    .await
+    .expect("realtime routing should reject reservation promptly")
+    .expect("realtime routing should not be draining");
+
+    let reservation_state = {
+        let active_turn = session.active_turn.lock().await;
+        let active_turn = active_turn
+            .as_ref()
+            .expect("realtime input must preserve reservation");
+        (
+            active_turn.task.is_none(),
+            Arc::ptr_eq(&active_turn.turn_state, &reserved_turn_state),
+        )
+    };
+    assert_eq!(reservation_state, (true, true));
+    let event = timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("realtime rejection event should arrive promptly")
+        .expect("realtime rejection event");
+    let EventMsg::Error(error) = event.msg else {
+        panic!("expected realtime rejection error, got: {event:?}");
+    };
+    assert_eq!(error.message, "failed to submit turn input: NotIdle");
+    assert_eq!(error.codex_error_info, Some(CodexErrorInfo::BadRequest));
+
+    idle_turn::clear(&session, &reserved_turn_state).await;
+    assert!(session.active_turn.lock().await.is_none());
+}
+
+#[tokio::test]
+async fn shell_command_cannot_replace_idle_turn_reservation() {
+    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
+    let reserved_turn_state = idle_turn::reserve(&session)
+        .await
+        .expect("idle turn should be reserved");
+
+    crate::session::handlers::run_user_shell_command(
+        &session,
+        "shell-turn".to_string(),
+        "echo must-not-run".to_string(),
+        /*timeout_ms*/ Some(1_000),
+    )
+    .await;
+
+    let reservation_state = {
+        let active_turn = session.active_turn.lock().await;
+        let active_turn = active_turn
+            .as_ref()
+            .expect("shell command must preserve reservation");
+        (
+            active_turn.task.is_none(),
+            Arc::ptr_eq(&active_turn.turn_state, &reserved_turn_state),
+        )
+    };
+    assert_eq!(reservation_state, (true, true));
+    let event = timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("shell rejection event should arrive promptly")
+        .expect("shell rejection event");
+    let EventMsg::Error(error) = event.msg else {
+        panic!("expected shell rejection error, got: {event:?}");
+    };
+    assert_eq!(
+        error,
+        ErrorEvent {
+            misalignment: None,
+            message: "Cannot run a shell command while a turn is starting.".to_string(),
+            codex_error_info: Some(CodexErrorInfo::BadRequest),
+        }
+    );
+
+    idle_turn::clear(&session, &reserved_turn_state).await;
+    assert!(session.active_turn.lock().await.is_none());
+}
+
+#[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "hold active-turn lock to order both competing mutex waiters"
+)]
+async fn realtime_start_cannot_replace_reservation_acquired_after_idle_observation() {
+    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
+    let active_turn_guard = session.active_turn.lock().await;
+    let realtime = session.route_realtime_text_input("stale realtime start".to_string());
+    tokio::pin!(realtime);
+    assert!(matches!(
+        futures::poll!(&mut realtime),
+        std::task::Poll::Pending
+    ));
+    let reservation = idle_turn::reserve(&session);
+    tokio::pin!(reservation);
+    assert!(matches!(
+        futures::poll!(&mut reservation),
+        std::task::Poll::Pending
+    ));
+    // Tokio mutex waiters are FIFO: realtime observes idle first, then the
+    // competing reservation wins before realtime can reacquire for its start.
+    drop(active_turn_guard);
+    let (realtime_result, reservation_result) = timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(realtime, reservation)
+    })
+    .await
+    .expect("both ordered contenders should resolve promptly");
+    realtime_result.expect("realtime routing should not be draining");
+    let reserved_turn_state =
+        reservation_result.expect("idle turn should be reserved after realtime observed idle");
+    let reservation_state = {
+        let active_turn = session.active_turn.lock().await;
+        let active_turn = active_turn
+            .as_ref()
+            .expect("stale realtime start must preserve newer reservation");
+        (
+            active_turn.task.is_none(),
+            Arc::ptr_eq(&active_turn.turn_state, &reserved_turn_state),
+        )
+    };
+    assert_eq!(reservation_state, (true, true));
+    let event = timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("stale realtime rejection should arrive promptly")
+        .expect("stale realtime rejection event");
+    let EventMsg::Error(error) = event.msg else {
+        panic!("expected stale realtime rejection error, got: {event:?}");
+    };
+    assert_eq!(error.message, "failed to submit turn input: NotIdle");
+
+    idle_turn::clear(&session, &reserved_turn_state).await;
+    assert!(session.active_turn.lock().await.is_none());
+}
+
+#[test_case(CompetingStart::Shell; "shell_command")]
+#[test_case(CompetingStart::Workflow; "workflow_command")]
+#[tokio::test]
+async fn realtime_start_is_serialized_with_other_start_paths(competing_start: CompetingStart) {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let turn_start_guard = session.acquire_turn_start_lock().await;
+    let realtime = session.route_realtime_text_input("serialized realtime start".to_string());
+    tokio::pin!(realtime);
+    assert!(matches!(
+        futures::poll!(&mut realtime),
+        std::task::Poll::Pending
+    ));
+    let competing_start = async {
+        match competing_start {
+            CompetingStart::Shell => {
+                crate::session::handlers::run_user_shell_command(
+                    &session,
+                    "competing-turn".to_string(),
+                    "echo serialized".to_string(),
+                    /*timeout_ms*/ Some(1_000),
+                )
+                .await;
+            }
+            CompetingStart::Workflow => {
+                crate::session::handlers::run_workflow_command(
+                    &session,
+                    "competing-turn".to_string(),
+                    std::path::PathBuf::from("unused"),
+                    serde_json::Value::Null,
+                )
+                .await;
+            }
+        }
+    };
+    tokio::pin!(competing_start);
+    assert!(matches!(
+        futures::poll!(&mut competing_start),
+        std::task::Poll::Pending
+    ));
+    drop(turn_start_guard);
+
+    timeout(std::time::Duration::from_secs(5), async {
+        let (realtime_result, ()) = tokio::join!(realtime, competing_start);
+        realtime_result.expect("realtime routing should not be draining");
+    })
+    .await
+    .expect("serialized starts should resolve promptly");
+
+    let active_turn_id = session
+        .active_turn
+        .lock()
+        .await
+        .as_ref()
+        .and_then(|active_turn| active_turn.task.as_ref())
+        .map(|task| task.turn_context.sub_id.clone());
+    assert!(active_turn_id.is_some_and(|turn_id| turn_id != "competing-turn"));
+
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
 }
 
 #[tokio::test]

@@ -19,6 +19,7 @@ def main() -> None:
 
     with TemporaryDirectory() as directory, AppServerHarness(Path(directory)) as harness:
         harness.responses.enqueue_assistant_message("Installed SDK works")
+        harness.responses.enqueue_assistant_message("Legacy compaction works")
         config = replace(harness.app_server_config(), codex_bin=None)
         with Codex(config=config) as codex:
             thread = codex.thread_start()
@@ -27,10 +28,11 @@ def main() -> None:
             )
             codex.thread_resume(thread.id, include_turns=False)
             codex.thread_fork(thread.id, include_turns=True)
+            compact_response = thread.compact()
+            requests = harness.responses.wait_for_requests(2)
         assert result.final_response == "Installed SDK works"
-        assert harness.responses.single_request().message_input_texts("user")[-1:] == [
-            "Check the installed SDK"
-        ]
+        assert compact_response.turn_id is None
+        assert requests[0].message_input_texts("user")[-1:] == ["Check the installed SDK"]
 
     print(f"Installed SDK passed with CLI runtime {version('openai-codex-cli-bin')}")
 

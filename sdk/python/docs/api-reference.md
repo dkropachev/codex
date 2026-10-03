@@ -234,7 +234,10 @@ before sending these options to an older runtime, which would otherwise ignore
 them. Published SDK releases install a matching runtime automatically; when
 using `CodexConfig.codex_bin`, choose a compatible executable. Unversioned local
 builds are checked lazily against their experimental schema before these options
-are sent. A custom `launch_args_override` must report a supported version.
+are sent. A custom `launch_args_override` must report a supported version. To use
+schema-gated options such as `start_if_idle` with a custom launcher, also set
+`schema_command_override` to a command prefix that supports
+`generate-json-schema --experimental --out`.
 
 ## Sandbox
 

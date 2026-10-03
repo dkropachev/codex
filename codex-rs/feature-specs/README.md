@@ -254,6 +254,7 @@ relay, or WebSocket service-boundary behavior.
 ## Feature Index
 
 - [account-pool](account-pool.md)
+- [context-management](context-management.md)
 - [mcp](mcp.md)
 - [plugins](plugins.md)
 - [skills](skills.md)

@@ -585,12 +585,31 @@ impl TestCodexBuilder {
         &mut self,
         server: &StreamingSseServer,
     ) -> anyhow::Result<TestCodex> {
+        let test_env = TestEnv::local().await?;
+        self.build_with_streaming_server_and_environment(server, test_env)
+            .await
+    }
+
+    /// Builds a streaming-server test with the execution environment selected by the test process.
+    pub async fn build_with_streaming_server_auto_env(
+        &mut self,
+        server: &StreamingSseServer,
+    ) -> anyhow::Result<TestCodex> {
+        let test_env = test_env().await?;
+        self.build_with_streaming_server_and_environment(server, test_env)
+            .await
+    }
+
+    async fn build_with_streaming_server_and_environment(
+        &mut self,
+        server: &StreamingSseServer,
+        test_env: TestEnv,
+    ) -> anyhow::Result<TestCodex> {
         let base_url = server.uri();
         let home = match self.home.clone() {
             Some(home) => home,
             None => Arc::new(TempDir::new()?),
         };
-        let test_env = TestEnv::local().await?;
         Box::pin(self.build_with_home_and_base_url(
             format!("{base_url}/v1"),
             home,

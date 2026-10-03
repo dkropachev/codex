@@ -80,6 +80,8 @@ use codex_rollout::state_db::StateDbHandle;
 
 static LIVE_THREADS: Gauge = Gauge::new("core.threads.live");
 
+mod context_management;
+
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
     pub model: String,
@@ -337,30 +339,6 @@ impl CodexThread {
             .await
     }
 
-    /// Starts a regular turn only when the thread is idle.
-    ///
-    /// Core declines the input without recording or enqueueing it when idle
-    /// work cannot start.
-    pub async fn start_turn_if_idle(
-        &self,
-        request: TurnInputRequest,
-    ) -> CodexResult<StartIfIdleSubmission> {
-        match self
-            .submit_turn_input_with_mode(request, TurnInputMode::StartIfIdle)
-            .await?
-        {
-            TurnInputSubmission::Started { turn_id } => {
-                Ok(StartIfIdleSubmission::Started { turn_id })
-            }
-            TurnInputSubmission::NotSubmitted { reason } => {
-                Ok(StartIfIdleSubmission::NotSubmitted { reason })
-            }
-            TurnInputSubmission::Steered { .. } => {
-                unreachable!("start-if-idle submission cannot steer")
-            }
-        }
-    }
-
     /// Starts a new internal continuation turn when idle, including in Plan mode.
     /// Rejects if a newer task has started, even if it has already finished.
     /// The input must be a response item; it is never treated as user authorization.
@@ -377,7 +355,6 @@ impl CodexThread {
         )
         .await
     }
-
     /// Resumes an interrupted regular turn only when the thread is idle.
     ///
     /// Recovery starts no new user input and preserves the turn ID that was
@@ -491,12 +468,18 @@ impl CodexThread {
         request: TurnInputRequest,
         mode: TurnInputMode,
     ) -> CodexResult<TurnInputSubmission> {
-        if !matches!(mode, TurnInputMode::Steer { .. }) {
-            self.session
-                .services
-                .agent_control
-                .ensure_execution_capacity_for_turn_start(self)
-                .await?;
+        match &mode {
+            TurnInputMode::StartOrSteer
+            | TurnInputMode::StartIfIdle
+            | TurnInputMode::ContinueIfIdle { .. }
+            | TurnInputMode::StartUserIfIdle => {
+                self.session
+                    .services
+                    .agent_control
+                    .ensure_execution_capacity_for_turn_start(self)
+                    .await?;
+            }
+            TurnInputMode::Steer { .. } => {}
         }
         self.io.submit_turn_input(request, mode).await
     }
