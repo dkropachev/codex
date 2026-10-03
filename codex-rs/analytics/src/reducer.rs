@@ -1296,7 +1296,7 @@ impl AnalyticsReducer {
             invocations,
         } = input;
         for invocation in invocations {
-            let (skill_id, repo_url, skill_scope) = match invocation.location {
+            let (skill_id, skill_scope) = match invocation.location {
                 SkillInvocationLocation::Host { path, scope } => {
                     let skill_scope = match scope {
                         SkillScope::User => "user",
@@ -1318,7 +1318,7 @@ impl AnalyticsReducer {
                         path.as_path(),
                         invocation.skill_name.as_str(),
                     );
-                    (skill_id, repo_url, Some(skill_scope.to_string()))
+                    (skill_id, Some(skill_scope.to_string()))
                 }
                 SkillInvocationLocation::Resource {
                     id,
@@ -1341,7 +1341,7 @@ impl AnalyticsReducer {
                             SkillScope::Admin => "admin",
                         })
                         .map(str::to_owned);
-                    (skill_id, None, skill_scope)
+                    (skill_id, skill_scope)
                 }
             };
             out.push(TrackEventRequest::SkillInvocation(
@@ -1355,7 +1355,6 @@ impl AnalyticsReducer {
                         invoke_type: Some(invocation.invocation_type),
                         model_slug: Some(tracking.model_slug.clone()),
                         product_client_id: Some(tracking.product_client_id.clone()),
-                        repo_url: repo_url.map(String::from),
                         skill_scope,
                         plugin_id: invocation.plugin_id,
                         remote_plugin_id: invocation.remote_plugin_id,
@@ -2115,6 +2114,11 @@ impl AnalyticsReducer {
         out: &mut Vec<TrackEventRequest>,
     ) {
         let session_source: SessionSource = thread.source.into();
+        let is_worktree =
+            codex_git_utils::repository_identity(thread.cwd.as_path()).and_then(|_| {
+                codex_git_utils::get_git_repo_root(thread.cwd.canonicalize().ok()?.as_path())
+                    .map(|root| root.join(".git").is_file())
+            });
         let session_id = thread.session_id;
         let thread_id = thread.id;
         let parent_thread_id = thread.parent_thread_id;
@@ -2146,6 +2150,7 @@ impl AnalyticsReducer {
                     runtime: connection_state.runtime.clone(),
                     model,
                     ephemeral: thread.ephemeral,
+                    is_worktree,
                     thread_source: thread_metadata.thread_source,
                     initialization_mode,
                     subagent_source: thread_metadata.subagent_source.clone(),
@@ -2937,6 +2942,7 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                         saved_path_present: item.saved_path.is_some(),
                         transparent_background: item.transparent_background,
                         imagegen_request_id: item.imagegen_request_id.clone(),
+                        generation_id: item.generation_id.clone(),
                     },
                 },
             ))

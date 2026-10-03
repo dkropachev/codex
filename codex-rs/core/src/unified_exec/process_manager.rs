@@ -390,11 +390,11 @@ async fn finish_deferred_network_approval_after_process_exit_for_session(
 
 fn fail_process_with_message(process: &UnifiedExecProcess, message: String) -> UnifiedExecError {
     if let Some(message) = process.failure_message() {
-        process.terminate();
+        process.terminate_tree();
         return UnifiedExecError::process_failed(message);
     }
 
-    process.fail_and_terminate(message.clone());
+    process.fail_and_terminate_tree(message.clone());
     UnifiedExecError::process_failed(process.failure_message().unwrap_or(message))
 }
 
@@ -417,6 +417,7 @@ async fn emit_failed_initial_exec_end_if_unstored(
     emit_failed_exec_end_for_unified_exec(
         Arc::clone(&context.session),
         Arc::clone(&context.step_context.turn),
+        Arc::clone(&context.step_context.settings.model_info),
         context.call_id.clone(),
         request.command.clone(),
         cwd,
@@ -449,7 +450,7 @@ fn terminate_process_on_network_denial(
         }
         let session = session.upgrade();
         let message = network_denial_message_for_session(session.as_ref(), Some(deferred)).await;
-        process.fail_and_terminate(message);
+        process.fail_and_terminate_tree(message);
     })
 }
 
@@ -594,6 +595,7 @@ impl UnifiedExecProcessManager {
         let event_ctx = ToolEventCtx::new(
             context.session.as_ref(),
             context.step_context.turn.as_ref(),
+            &context.step_context.settings.model_info,
             &context.call_id,
             /*turn_diff_tracker*/ None,
         );
@@ -828,6 +830,7 @@ impl UnifiedExecProcessManager {
             emit_exec_end_for_unified_exec(
                 Arc::clone(&context.session),
                 Arc::clone(&context.step_context.turn),
+                Arc::clone(&context.step_context.settings.model_info),
                 context.call_id.clone(),
                 request.command.clone(),
                 cwd.clone(),
@@ -946,7 +949,7 @@ impl UnifiedExecProcessManager {
                     "terminal input and permission details are too large to review safely; use a smaller input or start a new terminal with fewer grants".to_string(),
                 ))
             };
-            let reviewed = crate::guardian::format_guardian_action_pretty(
+            let reviewed = crate::guardian::format_guardian_action_pretty_with_metadata(
                 &approval
                     .clone()
                     .into_guardian_request(/*exec_command_cwd_convention*/ None)
@@ -1326,9 +1329,7 @@ impl UnifiedExecProcessManager {
 
         spawn_exit_watcher(
             Arc::clone(&process),
-            Arc::clone(&context.session),
-            Arc::clone(&context.step_context.turn),
-            context.call_id.clone(),
+            context,
             command.to_vec(),
             cwd,
             process_id,

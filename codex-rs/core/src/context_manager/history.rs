@@ -58,6 +58,7 @@ use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
 use codex_utils_output_truncation::truncate_function_output_payload;
 use codex_utils_output_truncation::truncate_text;
+use codex_utils_output_truncation::with_serialization_allowance;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
@@ -370,9 +371,9 @@ impl ContextManager {
             let item_policy = self.policy_for_item(item, policy);
             // A persisted per-tool override already includes the serialization allowance.
             let item_policy = metadata
-                .and_then(|metadata| metadata.fallback_token_limit_override)
+                .and_then(|metadata| metadata.history_truncation_token_limit)
                 .map(TruncationPolicy::Tokens)
-                .unwrap_or(item_policy * 1.2);
+                .unwrap_or_else(|| with_serialization_allowance(item_policy));
             let processed = ResponseItemEnvelope {
                 item: Self::process_item(item, item_policy),
                 metadata: metadata.cloned(),

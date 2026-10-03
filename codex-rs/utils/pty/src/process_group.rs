@@ -266,6 +266,54 @@ pub fn kill_process_group(process_group_id: u32) -> io::Result<()> {
     signal_process_group_id(process_group_id as libc::pid_t, libc::SIGKILL).map(|_| ())
 }
 
+#[cfg(target_os = "linux")]
+/// Hard-kill a Linux process tree, including descendants that created new sessions.
+pub fn kill_process_tree_by_pid(root: u32) -> io::Result<()> {
+    let root = root as libc::pid_t;
+    let mut descendants = Vec::new();
+    let mut pending = vec![root];
+    while let Some(process_id) = pending.pop() {
+        let children_path = format!("/proc/{process_id}/task/{process_id}/children");
+        let Ok(children) = std::fs::read_to_string(children_path) else {
+            continue;
+        };
+        for child in children
+            .split_whitespace()
+            .filter_map(|child| child.parse::<libc::pid_t>().ok())
+        {
+            descendants.push(child);
+            pending.push(child);
+        }
+    }
+    let mut first_error = kill_process_group(root as u32).err();
+    for process_id in descendants.into_iter().rev() {
+        if let Err(error) = signal_process_id(process_id, libc::SIGKILL)
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+#[cfg(not(target_os = "linux"))]
+/// Best-effort process-tree termination on platforms without `/proc` traversal.
+pub fn kill_process_tree_by_pid(root: u32) -> io::Result<()> {
+    kill_process_group(root)
+}
+
+#[cfg(target_os = "linux")]
+fn signal_process_id(process_id: libc::pid_t, signal: libc::c_int) -> io::Result<bool> {
+    if unsafe { libc::kill(process_id, signal) } == -1 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(false);
+        }
+        return Err(error);
+    }
+    Ok(true)
+}
+
 #[cfg(target_os = "macos")]
 /// Retry a denied SIGKILL against the exact group's individual members.
 pub fn kill_process_group_with_member_fallback(process_group_id: u32) -> io::Result<()> {

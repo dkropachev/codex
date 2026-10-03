@@ -133,6 +133,7 @@ pub(crate) async fn record_workflow_output(
     session
         .record_response_item_and_emit_turn_item(
             turn_context.as_ref(),
+            turn_context.model_info().as_ref(),
             ResponseItem::Message {
                 id: None,
                 role: "assistant".to_string(),

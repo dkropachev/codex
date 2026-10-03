@@ -51,8 +51,9 @@ pub(crate) async fn run_codex_thread_interactive(
     parent_environments: TurnEnvironmentSnapshot,
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
+    isolation: codex_extension_api::SessionIsolation,
     initial_history: Option<InitialHistory>,
-    thread_extension_init: ExtensionDataInit,
+    mut thread_extension_init: ExtensionDataInit,
     git_enrichment_policy: GitEnrichmentPolicy,
     windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
 ) -> Result<(Arc<Session>, SessionIo), CodexErr> {
@@ -67,8 +68,6 @@ pub(crate) async fn run_codex_thread_interactive(
         .model_client
         .responses_websocket_enabled();
 
-    let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
-    let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let conversation_history = initial_history.unwrap_or(InitialHistory::New);
     let forked_from_thread_id = conversation_history.forked_from_id();
     let user_instructions = LoadedUserInstructions {
@@ -77,11 +76,15 @@ pub(crate) async fn run_codex_thread_interactive(
     };
     let session_source = SessionSource::SubAgent(subagent_source.clone());
     let is_guardian_reviewer = crate::guardian::is_basic_session_source(&session_source);
-    let extensions = if is_guardian_reviewer {
+    let extensions = if isolation == codex_extension_api::SessionIsolation::Isolated {
         codex_extension_api::empty_extension_registry()
     } else {
         Arc::clone(&parent_session.services.extensions)
     };
+    // Inline delegates never register with ThreadManager or receive on_thread_ready.
+    // Bind their standalone spawn path before inherited extensions run.
+    thread_extension_init.insert(isolation);
+    thread_extension_init.insert(crate::guardian::GuardianReviewSessionHost::default());
     let (session, io) = Session::spawn(SessionSpawnArgs {
         config,
         allow_provider_model_fallback: false,
@@ -100,6 +103,7 @@ pub(crate) async fn run_codex_thread_interactive(
         code_mode_session_provider: parent_session.services.code_mode_service.session_provider(),
         extensions,
         conversation_history,
+        disabled_plugin_ids: None,
         requested_history_mode: None,
         fork_persistence: ForkPersistence::Copied,
         session_source,
@@ -144,12 +148,18 @@ pub(crate) async fn run_codex_thread_interactive(
         thread_config,
         subagent_source,
     );
+    Ok((session, forward_session_io(Arc::new(io), cancel_token)))
+}
+
+/// Keeps delegate IO cancellation identical for standalone and manager-owned reviewers.
+pub(crate) fn forward_session_io(io: Arc<SessionIo>, cancel_token: CancellationToken) -> SessionIo {
+    let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     // Use a child token so parent cancel cascades but we can scope it to this task
     let cancel_token_events = cancel_token.child_token();
     let cancel_token_ops = cancel_token.child_token();
 
     // Forward public events from the sub-agent to the consumer.
-    let io = Arc::new(io);
     let caller_io = SessionIo {
         tx_sub: tx_ops,
         rx_event: rx_sub,
@@ -166,7 +176,7 @@ pub(crate) async fn run_codex_thread_interactive(
         forward_ops(io, rx_ops, cancel_token_ops).await;
     });
 
-    Ok((session, caller_io))
+    caller_io
 }
 
 async fn forward_events(

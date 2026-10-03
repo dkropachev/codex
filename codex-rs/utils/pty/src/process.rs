@@ -52,6 +52,10 @@ pub(crate) trait ChildTerminator: Send + Sync {
     fn signal(&mut self, signal: ProcessSignal) -> io::Result<()>;
 
     fn kill(&mut self) -> io::Result<()>;
+
+    fn kill_tree(&mut self) -> io::Result<()> {
+        self.kill()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -226,6 +230,15 @@ impl ProcessHandle {
         }
     }
 
+    /// Attempts to kill the child plus descendants that escaped its process group.
+    pub fn request_terminate_tree(&self) {
+        if let Ok(mut killer_opt) = self.killer.lock()
+            && let Some(mut killer) = killer_opt.take()
+        {
+            let _ = killer.kill_tree();
+        }
+    }
+
     pub fn signal(&self, signal: ProcessSignal) -> io::Result<()> {
         let Ok(mut killer_opt) = self.killer.lock() else {
             return Ok(());
@@ -246,6 +259,17 @@ impl ProcessHandle {
     pub fn terminate(&self) {
         self.request_terminate();
 
+        self.abort_io_tasks();
+    }
+
+    /// Hard-kill the complete process tree and abort I/O helper tasks.
+    pub fn terminate_tree(&self) {
+        self.request_terminate_tree();
+
+        self.abort_io_tasks();
+    }
+
+    fn abort_io_tasks(&self) {
         if let Ok(mut h) = self.reader_handle.lock()
             && let Some(handle) = h.take()
         {
