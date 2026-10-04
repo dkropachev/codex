@@ -169,19 +169,14 @@ async fn mcp_startup_warning_interaction_works_in_live_tui() -> Result<()> {
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("gpt-5.6-terra default")
+        contents.contains("GPT-5.6-Terra default")
     })
     .await?;
-    wait_for_screen(
-        &mut output_rx,
-        &mut screen,
-        "MCP startup warning summary",
-        |contents| {
-            contents.contains("startup issues (1 MCP)") || contents.contains("MCP startup issue")
-        },
-    )
+    wait_for_screen(&mut output_rx, &mut screen, "warning footer", |contents| {
+        contents.contains("f2 to view")
+    })
     .await?;
-    writer.send(vec![0x14]).await?;
+    writer.send(b"\x1bOQ".to_vec()).await?;
     wait_for_screen(
         &mut output_rx,
         &mut screen,
@@ -226,7 +221,7 @@ async fn mcp_elicitation_form_submission_works_in_live_tui() -> Result<()> {
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("gpt-5.6-terra default")
+        contents.contains("GPT-5.6-Terra default")
     })
     .await?;
     wait_for_screen(
@@ -380,6 +375,7 @@ fn write_config(
 model_provider = "mock_provider"
 suppress_unstable_features_warning = true
 approval_policy = "on-request"
+sandbox_mode = "danger-full-access"
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

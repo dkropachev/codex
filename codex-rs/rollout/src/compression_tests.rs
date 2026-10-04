@@ -17,6 +17,7 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use uuid::Uuid;
 
+use super::RolloutCompressionTrigger::Startup;
 use super::*;
 use crate::InitialHistory;
 use crate::RolloutConfig;
@@ -291,6 +292,7 @@ async fn worker_compresses_old_active_and_archived_rollouts() -> anyhow::Result<
 
     worker::run(
         home.path().to_path_buf(),
+        Startup,
         RolloutCompressionMode::Standalone,
     )
     .await?;
@@ -325,6 +327,7 @@ async fn worker_waits_for_rollout_maintenance_before_compressing() -> anyhow::Re
 
     worker::run(
         home.path().to_path_buf(),
+        Startup,
         RolloutCompressionMode::Standalone,
     )
     .await?;
@@ -334,6 +337,7 @@ async fn worker_waits_for_rollout_maintenance_before_compressing() -> anyhow::Re
     drop(guard);
     worker::run(
         home.path().to_path_buf(),
+        Startup,
         RolloutCompressionMode::Standalone,
     )
     .await?;
@@ -371,7 +375,7 @@ async fn worker_compresses_archived_fork_chain_only_with_shared_mode() -> anyhow
         let original_source = fs::read(&source_path)?;
         let original_child = fs::read(&child_path)?;
 
-        worker::run(home.path().to_path_buf(), mode).await?;
+        worker::run(home.path().to_path_buf(), Startup, mode).await?;
 
         for (path, original) in [
             (&source_path, original_source),
@@ -406,6 +410,7 @@ async fn worker_skips_unreadable_metadata_without_blocking_other_compression() -
 
     worker::run(
         home.path().to_path_buf(),
+        Startup,
         RolloutCompressionMode::Standalone,
     )
     .await?;
@@ -484,6 +489,7 @@ async fn compression_preserves_rollout_permissions() -> anyhow::Result<()> {
 
     worker::run(
         home.path().to_path_buf(),
+        Startup,
         RolloutCompressionMode::Standalone,
     )
     .await?;
@@ -570,6 +576,7 @@ async fn compression_preserves_read_only_rollout_permissions() -> anyhow::Result
 
     worker::run(
         home.path().to_path_buf(),
+        Startup,
         RolloutCompressionMode::Standalone,
     )
     .await?;
@@ -595,6 +602,7 @@ async fn worker_skips_existing_compressed_archived_rollouts() -> anyhow::Result<
 
     worker::run(
         home.path().to_path_buf(),
+        Startup,
         RolloutCompressionMode::Standalone,
     )
     .await?;
@@ -623,6 +631,7 @@ async fn worker_skips_when_fresh_run_marker_exists() -> anyhow::Result<()> {
 
     worker::run(
         home.path().to_path_buf(),
+        Startup,
         RolloutCompressionMode::Standalone,
     )
     .await?;
@@ -825,6 +834,7 @@ async fn worker_compresses_parallel_cold_candidates_without_skipping_other_publi
     }
     worker::run(
         home.path().to_path_buf(),
+        Startup,
         RolloutCompressionMode::Standalone,
     )
     .await?;

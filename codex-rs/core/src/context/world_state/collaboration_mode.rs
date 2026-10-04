@@ -2,13 +2,13 @@ use super::PreviousSectionState;
 use super::WorldStateHash;
 use super::WorldStateSection;
 use crate::context::ContextualUserFragment;
-use crate::context::without_update_plan_instructions;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
+use codex_prompts::ResolvedCollaborationModeMessages;
+use codex_prompts::without_update_plan_instructions;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItemKind;
-use codex_protocol::openai_models::CollaborationModeMessages;
 use codex_protocol::protocol::COLLABORATION_MODE_CLOSE_TAG;
 use codex_protocol::protocol::COLLABORATION_MODE_OPEN_TAG;
 use serde::Deserialize;
@@ -24,19 +24,18 @@ pub(crate) struct CollaborationModeState {
 impl CollaborationModeState {
     pub(crate) fn from_collaboration_mode(
         collaboration_mode: &CollaborationMode,
-        catalog_messages: Option<&CollaborationModeMessages>,
+        messages: ResolvedCollaborationModeMessages<'_>,
         update_plan_enabled: bool,
         custom_model_catalog: bool,
         collaboration_modes_config: CollaborationModesConfig,
     ) -> Self {
-        let catalog_instructions =
-            catalog_messages.and_then(|messages| match collaboration_mode.mode {
-                ModeKind::Default => messages.default.as_ref(),
-                ModeKind::Plan => messages.plan.as_ref(),
-                ModeKind::Workflow => None,
-            });
+        let catalog_instructions = match collaboration_mode.mode {
+            ModeKind::Default => messages.default.catalog_override(),
+            ModeKind::Plan => messages.plan.catalog_override(),
+            ModeKind::Workflow => None,
+        };
 
-        let instructions = catalog_instructions.cloned().or_else(|| {
+        let instructions = catalog_instructions.map(str::to_string).or_else(|| {
             collaboration_mode
                 .settings
                 .developer_instructions
@@ -47,8 +46,6 @@ impl CollaborationModeState {
             if update_plan_enabled {
                 return instructions;
             }
-            // Clients send built-in presets through the override field too. Match the
-            // entire preset, never a heading that could also occur in custom text.
             let builtin = match catalog_instructions {
                 Some(_) => !custom_model_catalog,
                 None => builtin_collaboration_mode_presets(collaboration_modes_config)

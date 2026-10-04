@@ -7,6 +7,7 @@ use codex_config::config_toml::ModelRouterModelSelectorToml;
 use codex_config::config_toml::ModelRouterModelsToml;
 use codex_config::config_toml::ModelRouterReasoningEffortToml;
 use codex_config::config_toml::ModelRouterToml;
+use codex_core::TurnInputRequest;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -17,7 +18,6 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ModelRerouteReason;
-use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::user_input::UserInput;
@@ -39,36 +39,31 @@ use pretty_assertions::assert_eq;
 const DEFAULT_MODEL: &str = "gpt-5.4";
 const ROUTED_MODEL: &str = "gpt-5.2";
 
-fn disabled_turn(test: &TestCodex, prompt: &str) -> Op {
+fn disabled_turn(test: &TestCodex, prompt: &str) -> TurnInputRequest {
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, test.cwd_path());
-    Op::UserInput {
-        items: vec![UserInput::Text {
-            text: prompt.to_string(),
-            text_elements: Vec::new(),
-        }],
-        final_output_json_schema: None,
-        responsesapi_client_metadata: None,
-        additional_context: Default::default(),
-        thread_settings: ThreadSettingsOverrides {
-            environments: Some(TurnEnvironmentSelections::new(
-                test.config.cwd.clone(),
-                Vec::new(),
-            )),
-            approval_policy: Some(AskForApproval::Never),
-            sandbox_policy: Some(sandbox_policy),
-            permission_profile,
-            collaboration_mode: Some(CollaborationMode {
-                mode: ModeKind::Default,
-                settings: Settings {
-                    model: DEFAULT_MODEL.to_string(),
-                    reasoning_effort: test.config.model_reasoning_effort.clone(),
-                    developer_instructions: None,
-                },
-            }),
-            ..Default::default()
-        },
-    }
+    TurnInputRequest::user_input(vec![UserInput::Text {
+        text: prompt.to_string(),
+        text_elements: Vec::new(),
+    }])
+    .with_thread_settings(ThreadSettingsOverrides {
+        environments: Some(TurnEnvironmentSelections::new(
+            test.config.cwd.clone(),
+            Vec::new(),
+        )),
+        approval_policy: Some(AskForApproval::Never),
+        sandbox_policy: Some(sandbox_policy),
+        permission_profile,
+        collaboration_mode: Some(CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model: DEFAULT_MODEL.to_string(),
+                reasoning_effort: test.config.model_reasoning_effort.clone(),
+                developer_instructions: None,
+            },
+        }),
+        ..Default::default()
+    })
 }
 
 fn require_routed_model_router() -> ModelRouterToml {
@@ -148,7 +143,7 @@ async fn regular_turn_uses_routed_model_and_records_usage() -> Result<()> {
     let test = builder.build(&server).await?;
 
     test.codex
-        .submit(disabled_turn(&test, "route this turn"))
+        .start_or_steer_turn(disabled_turn(&test, "route this turn"))
         .await?;
 
     let reroute = wait_for_event(&test.codex, |event| {
@@ -207,7 +202,7 @@ async fn regular_turn_warns_when_router_changes_non_model_settings() -> Result<(
     let test = builder.build(&server).await?;
 
     test.codex
-        .submit(disabled_turn(&test, "keep model but route settings"))
+        .start_or_steer_turn(disabled_turn(&test, "keep model but route settings"))
         .await?;
 
     let warning = wait_for_event(&test.codex, |event| matches!(event, EventMsg::Warning(_))).await;

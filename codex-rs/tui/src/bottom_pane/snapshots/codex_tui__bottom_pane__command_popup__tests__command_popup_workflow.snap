@@ -5,11 +5,11 @@ expression: "format!(\"{buf:?}\")"
 Buffer {
     area: Rect { x: 0, y: 0, width: 72, height: 1 },
     content: [
-        "  /code-review  Run a code review workflow.                             ",
+        "› /code-review  Run a code review workflow.                             ",
     ],
     styles: [
-        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 2, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
-        x: 43, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 16, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 43, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
     ]
 }

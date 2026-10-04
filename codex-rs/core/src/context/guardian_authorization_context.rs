@@ -11,7 +11,6 @@ use codex_utils_string::take_bytes_at_char_boundary;
 
 use super::ContextualUserFragment;
 use crate::context_manager::MAX_MODEL_CONTEXT_ITEM_TOKENS;
-use crate::context_manager::estimate_item_token_count;
 
 const GUARDIAN_PROMPT_SERIALIZATION_HEADROOM_TOKENS: usize = 64;
 const GUARDIAN_MAX_ENRICHED_ITEM_TOKENS: usize =
@@ -91,8 +90,7 @@ pub fn bound_guardian_model_input(
 
 /// Returns whether one fully constructed Guardian request item fits the model-context item cap.
 pub fn guardian_model_context_item_is_bounded(item: &ResponseItem) -> bool {
-    estimate_item_token_count(item)
-        <= i64::try_from(MAX_MODEL_CONTEXT_ITEM_TOKENS).unwrap_or(i64::MAX)
+    guardian_response_item_tokens(item) <= MAX_MODEL_CONTEXT_ITEM_TOKENS
 }
 
 fn best_guardian_context_candidate(
@@ -232,5 +230,14 @@ pub(crate) fn guardian_model_input_tokens(items: &[UserInput]) -> usize {
         "msg",
         "00000000-0000-7000-8000-000000000000",
     )));
-    usize::try_from(estimate_item_token_count(&item)).unwrap_or(usize::MAX)
+    guardian_response_item_tokens(&item)
+}
+
+fn guardian_response_item_tokens(item: &ResponseItem) -> usize {
+    // Guardian's hard item limit includes transport annotations such as content-item kinds. The
+    // shared history estimator intentionally excludes that metadata, so measure the complete wire
+    // item here instead.
+    serde_json::to_string(item)
+        .map(|item| approx_token_count(&item))
+        .unwrap_or(usize::MAX)
 }

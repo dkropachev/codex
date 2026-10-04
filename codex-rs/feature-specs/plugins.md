@@ -165,8 +165,8 @@ plugin mention flows in a live terminal session when those surfaces are availabl
 
 #### Test cases
 
-- Live TUI installed-plugin list and toggle flows are covered: codex-rs/tui/tests/suite/plugins__live.rs:plugin_popup_lists_installed_plugin_and_toggles_enabled_state
-- Live TUI plugin mention selection and submission are covered: codex-rs/tui/tests/suite/plugins__live.rs:plugin_mention_selection_submits_plugin_guidance
+- Live TUI installed-plugin listing, disabled-to-enabled toggling, and config persistence are covered: codex-rs/tui/tests/suite/plugins__live.rs:plugin_popup_lists_installed_plugin_and_toggles_enabled_state
+- Live TUI plugin mention disambiguation, selection, and developer-guidance submission are covered: codex-rs/tui/tests/suite/plugins__live.rs:plugin_mention_selection_submits_plugin_guidance
 
 ### tui-component (focused TUI component behavior)
 

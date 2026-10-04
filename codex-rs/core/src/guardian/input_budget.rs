@@ -98,7 +98,7 @@ pub(crate) async fn finalize(
         ReasoningSummary::None,
         /*service_tier*/ None,
         &session
-            .responses_metadata(&step.turn, CodexResponsesRequestKind::Turn)
+            .responses_metadata(step, CodexResponsesRequestKind::Turn)
             .await,
     )?;
     let mut existing = super::request_budget::estimate_request_tokens(&request)
@@ -123,8 +123,7 @@ pub(crate) async fn finalize(
     if let Some(reminder) = session
         .services
         .agent_control
-        .rollout_budget()
-        .pending_reminder(session.thread_id(), &session.current_window_id().await)
+        .pending_budget_reminder(session.thread_id(), &session.current_window_id().await)
     {
         let reminder = ContextualUserFragment::into(crate::context::RolloutBudgetContext {
             remaining_tokens: reminder.remaining_tokens,
@@ -178,9 +177,29 @@ pub(crate) async fn finalize(
                 );
         }
     }
-    *content = context
+    let mut bounded_content = context
         .into_user_inputs()
         .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+    let approval_request_start = bounded_content
+        .iter()
+        .position(|item| {
+            matches!(
+                item,
+                codex_protocol::user_input::UserInput::Text { text, .. }
+                    if text.starts_with(">>> APPROVAL REQUEST START\n")
+            )
+        })
+        .ok_or_else(|| CodexErr::InvalidRequest("Guardian approval request is missing".into()))?;
+    if let Err(message) =
+        crate::context::bound_guardian_model_input(&mut bounded_content, approval_request_start)
+    {
+        session
+            .services
+            .thread_extension_data
+            .insert(super::request_budget::ExhaustedReviewBudget::Detected);
+        return Err(CodexErr::InvalidRequest(message));
+    }
+    *content = bounded_content;
     session
         .services
         .thread_extension_data

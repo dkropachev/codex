@@ -243,14 +243,14 @@ for unknown workflows.
 #### Description
 
 Full TUI coverage should exercise workflow slash autocomplete, workflow option completion, workflow
-command insertion, and the standard running indicator in a live terminal session. It should also
-exercise visible workflow mode state during a submitted mocked turn.
+command insertion, and the standard running indicator from a fully rendered live composer. It
+should also exercise visible workflow mode state during a submitted mocked turn.
 
 #### Test cases
 
-- Workflow slash autocomplete is covered: codex-rs/tui/tests/suite/workflows__slash_autocomplete.rs:workflow_command_autocompletes_in_live_tui
+- Workflow slash autocomplete and option completion from the configured-model composer are covered: codex-rs/tui/tests/suite/workflows__slash_autocomplete.rs:workflow_command_autocompletes_in_live_tui
 - Workflow command running status is covered: codex-rs/tui/tests/suite/workflows__slash_autocomplete.rs:workflow_command_shows_running_status_in_live_tui
-- Workflow mode footer and mocked turn submission are covered: codex-rs/tui/tests/suite/workflows__mode.rs:workflow_slash_enters_mode_and_submits_mocked_ai_turn
+- Workflow mode entry from the configured-model composer, footer rendering, and mocked turn submission are covered: codex-rs/tui/tests/suite/workflows__mode.rs:workflow_slash_enters_mode_and_submits_mocked_ai_turn
 
 ### tui-component (focused TUI component behavior)
 

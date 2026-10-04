@@ -47,6 +47,7 @@ pub(crate) enum GuardianApprovalRequest {
     #[cfg(unix)]
     Execve {
         id: String,
+        environment_id: String,
         source: GuardianCommandSource,
         program: String,
         argv: Vec<String>,
@@ -62,6 +63,7 @@ pub(crate) enum GuardianApprovalRequest {
     NetworkAccess {
         id: String,
         turn_id: String,
+        environment_id: String,
         target: String,
         host: String,
         protocol: NetworkApprovalProtocol,
@@ -87,6 +89,21 @@ pub(crate) enum GuardianApprovalRequest {
         reason: Option<String>,
         permissions: RequestPermissionProfile,
     },
+}
+
+impl GuardianApprovalRequest {
+    pub(super) fn background_environment_id(&self) -> Option<&str> {
+        match self {
+            Self::NetworkAccess { environment_id, .. } => Some(environment_id),
+            #[cfg(unix)]
+            Self::Execve { environment_id, .. } => Some(environment_id),
+            Self::ExecCommand { .. }
+            | Self::WriteStdin { .. }
+            | Self::ApplyPatch { .. }
+            | Self::McpToolCall { .. }
+            | Self::RequestPermissions { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -294,6 +311,7 @@ pub(crate) fn guardian_approval_request_to_json(
         #[cfg(unix)]
         GuardianApprovalRequest::Execve {
             id: _,
+            environment_id: _,
             source,
             program,
             argv,
@@ -320,6 +338,7 @@ pub(crate) fn guardian_approval_request_to_json(
         GuardianApprovalRequest::NetworkAccess {
             id: _,
             turn_id: _,
+            environment_id: _,
             target,
             host,
             protocol,
@@ -421,6 +440,7 @@ pub(crate) fn guardian_assessment_action(
         GuardianApprovalRequest::NetworkAccess {
             id: _id,
             turn_id: _turn_id,
+            environment_id: _,
             target,
             host,
             protocol,
@@ -542,7 +562,8 @@ pub(crate) fn guardian_request_turn_id<'a>(
 pub(crate) fn format_guardian_action_pretty(
     action: &GuardianApprovalRequest,
 ) -> serde_json::Result<String> {
-    let mut value = guardian_action_for_review(action)?;
+    let mut value =
+        codex_guardian_context::action_for_review(guardian_approval_request_to_json(action)?);
     value.sort_all_objects();
     serde_json::to_string_pretty(&value)
 }
@@ -556,7 +577,8 @@ pub(crate) struct FormattedGuardianAction {
 pub(crate) fn format_guardian_action_pretty_with_metadata(
     action: &GuardianApprovalRequest,
 ) -> serde_json::Result<FormattedGuardianAction> {
-    let value = guardian_action_for_review(action)?;
+    let value =
+        codex_guardian_context::action_for_review(guardian_approval_request_to_json(action)?);
     let (value, truncated) = truncate_guardian_action_value(value);
     let text = enforce_guardian_action_byte_limit(serde_json::to_string_pretty(&value)?)?;
     Ok(FormattedGuardianAction { text, truncated })
@@ -606,17 +628,4 @@ fn enforce_guardian_action_byte_limit(text: String) -> serde_json::Result<String
         )));
     }
     Ok(text)
-}
-
-fn guardian_action_for_review(action: &GuardianApprovalRequest) -> serde_json::Result<Value> {
-    let mut value = guardian_approval_request_to_json(action)?;
-    if matches!(action, GuardianApprovalRequest::McpToolCall { .. })
-        && let Some(fields) = value.as_object_mut()
-    {
-        // Only host-provided metadata is optional. A nested argument named
-        // "description" is still part of the exact action under review.
-        fields.remove("tool_description");
-        fields.remove("connector_description");
-    }
-    Ok(value)
 }

@@ -90,6 +90,12 @@ pub(crate) const MAX_ARCHIVED_EXEC_OUTPUTS: usize = 64;
 pub(crate) const MAX_ARCHIVED_EXEC_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 const SOURCE_READ_DEDUPE_SUGGESTION_KEY: &str = "exec.source-read-dedupe-v1";
 
+const MAX_TRACE_ID_BYTES: usize = 256;
+
+fn trace_id(id: &str) -> Option<&str> {
+    (!id.is_empty() && id.len() <= MAX_TRACE_ID_BYTES).then_some(id)
+}
+
 pub(crate) struct UnifiedExecContext {
     pub session: Arc<Session>,
     pub step_context: Arc<StepContext>,
@@ -165,7 +171,9 @@ pub(crate) struct ProcessStore {
 
 impl ProcessStore {
     fn remove(&mut self, process_id: i32) -> Option<ProcessEntry> {
-        self.reserved_process_ids.remove(&process_id);
+        if !process_manager::should_use_deterministic_process_ids() {
+            self.reserved_process_ids.remove(&process_id);
+        }
         self.processes.remove(&process_id)
     }
 }

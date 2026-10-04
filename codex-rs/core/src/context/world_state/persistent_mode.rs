@@ -1,5 +1,5 @@
 //! Keeps persistent-mode developer instructions current without repeating unchanged context.
-//! Mode changes retire prior instructions; missing catalog values use the bundled default.
+//! Mode changes retire prior instructions; callers provide the resolved instruction template.
 
 use super::PreviousSectionState;
 use super::WorldStateHash;
@@ -12,7 +12,6 @@ use codex_utils_output_truncation::truncate_text;
 use serde::Deserialize;
 use serde::Serialize;
 
-const DEFAULT_INSTRUCTIONS: &str = include_str!("../../../assets/persistent_mode.md");
 // Reserve 200 estimated tokens for the replacement notice, truncation marker, and XML markers.
 const MAX_PERSISTENT_MODE_BODY_TOKENS: usize = 9_800;
 const REPLACEMENT_NOTICE: &str = "These persistent-mode instructions replace all previously provided persistent-mode instructions.";
@@ -55,21 +54,18 @@ pub(crate) struct PersistentModeSnapshot {
 impl PersistentModeState {
     pub(crate) fn new(
         reasoning_effort: Option<&ReasoningEffort>,
-        catalog_instructions: Option<&str>,
+        instructions_template: &str,
         send_user_message_async_available: bool,
     ) -> Self {
         let instructions = if reasoning_effort == Some(&ReasoningEffort::Persistent) {
-            let instructions = catalog_instructions
-                .unwrap_or(DEFAULT_INSTRUCTIONS)
-                .trim()
-                .replace(
-                    "{{ approval_request_channel }}",
-                    if send_user_message_async_available {
-                        " via functions.send_user_message_async"
-                    } else {
-                        ""
-                    },
-                );
+            let instructions = instructions_template.trim().replace(
+                "{{ approval_request_channel }}",
+                if send_user_message_async_available {
+                    " via functions.send_user_message_async"
+                } else {
+                    ""
+                },
+            );
             truncate_text(
                 &instructions,
                 TruncationPolicy::Tokens(MAX_PERSISTENT_MODE_BODY_TOKENS),

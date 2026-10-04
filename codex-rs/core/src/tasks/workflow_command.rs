@@ -6,7 +6,6 @@ use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::TurnStartedEvent;
 use codex_thread_store::PersistContext;
 use codex_workflows::runner::MAX_RUNNER_ERROR_BYTES;
 use codex_workflows::runner::WorkflowRunConfig;
@@ -63,14 +62,7 @@ impl SessionTask for WorkflowCommandTask {
             &[],
         );
 
-        let event = EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: turn_context.sub_id.clone(),
-            trace_id: turn_context.trace_id.clone(),
-            started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
-            model_context_window: turn_context.model_context_window(),
-            collaboration_mode_kind: turn_context.mode(),
-        });
-        session.send_event(turn_context.as_ref(), event).await;
+        session.emit_turn_started(turn_context.as_ref()).await;
 
         let run_config = match WorkflowRunConfig::new(turn_context.config.workflow_output_max_bytes)
         {

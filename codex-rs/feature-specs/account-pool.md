@@ -436,6 +436,7 @@ errors.
 - Usage-not-included errors do not retry with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_does_not_retry_usage_not_included_with_next_member
 - Usage errors after visible output do not retry with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_does_not_retry_usage_error_after_visible_output
 - Usage-limit errors without account pool surface original error: codex-rs/core/tests/suite/account_pool__routing.rs:usage_limit_without_account_pool_surfaces_original_error
+- Model routing uses the account pool selected by the routed model candidate: codex-rs/core/tests/suite/account_pool__routing.rs:model_router_uses_the_selected_account_pool
 
 ### app-server-api (app-server API behavior)
 

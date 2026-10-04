@@ -57,9 +57,12 @@ fn workflow_preset_is_feature_gated() {
 
 #[test]
 fn default_mode_instructions_replace_mode_names_placeholder() {
-    let default_instructions = default_preset(CollaborationModesConfig::default())
+    let default_preset = default_preset(CollaborationModesConfig::default());
+    let default_instructions = default_preset
         .developer_instructions
+        .as_ref()
         .expect("default preset should include instructions")
+        .as_ref()
         .expect("default instructions should be set");
 
     assert!(!default_instructions.contains("{{KNOWN_MODE_NAMES}}"));

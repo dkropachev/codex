@@ -10,6 +10,10 @@ use codex_protocol::protocol::TurnAbortReason;
 use std::sync::Arc;
 
 fn required_context(text: String) -> ComposedContext {
+    required_context_with_history(Vec::new(), text)
+}
+
+fn required_context_with_history(history: Vec<ResponseItem>, text: String) -> ComposedContext {
     let action = PlannedAction {
         tool_descriptions: None,
         json: text,
@@ -17,7 +21,7 @@ fn required_context(text: String) -> ComposedContext {
         reason: None,
     };
     let context = super::super::prompt::collect_guardian_context(
-        &Vec::<ResponseItem>::new(),
+        &history,
         super::super::GUARDIAN_MAX_TOOL_ENTRY_TOKENS,
         &[],
         &[],
@@ -36,6 +40,67 @@ fn required_context(text: String) -> ComposedContext {
             transcript,
         )
         .expect("compose required context")
+}
+
+#[tokio::test]
+async fn finalization_bounds_the_complete_model_visible_item() {
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
+    let session = Arc::new(session);
+    let step = session
+        .capture_step_context(Arc::new(turn), &tokio_util::sync::CancellationToken::new())
+        .await
+        .unwrap();
+    let history = (0..6)
+        .map(|index| ResponseItem::Message {
+            id: None,
+            role: "user".to_owned(),
+            content: vec![codex_protocol::models::ContentItem::InputText {
+                text: format!(
+                    "context-{index}-start {} context-{index}-end",
+                    "x".repeat(20_000)
+                ),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        })
+        .collect();
+    let context = required_context_with_history(history, "required action".to_owned());
+    let mut input = vec![TurnInput::UserInput {
+        acceptance_order: None,
+        content: context.clone().into_user_inputs().unwrap(),
+        client_id: None,
+    }];
+    let [TurnInput::UserInput { content, .. }] = input.as_slice() else {
+        unreachable!("the test constructs one Guardian user input");
+    };
+    assert!(!crate::context::guardian_model_context_item_is_bounded(
+        &session.response_item_from_user_input(content.clone())
+    ));
+    session
+        .services
+        .thread_extension_data
+        .insert(PendingReviewContext(context));
+
+    finalize(&session, &step, &mut input, HistoryTruncation::Allow)
+        .await
+        .unwrap();
+
+    let [TurnInput::UserInput { content, .. }] = input.as_slice() else {
+        panic!("Guardian should retain one user input");
+    };
+    let item = session.response_item_from_user_input(content.clone());
+    assert!(crate::context::guardian_model_context_item_is_bounded(
+        &item
+    ));
+    let text = content
+        .iter()
+        .filter_map(|item| match item {
+            codex_protocol::user_input::UserInput::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    assert!(text.contains("required action"));
+    assert!(text.ends_with(">>> APPROVAL REQUEST END\n"));
 }
 
 #[tokio::test]

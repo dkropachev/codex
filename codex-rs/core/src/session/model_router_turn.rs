@@ -17,7 +17,6 @@ use crate::model_router::ModelRouterSource;
 use crate::model_router::apply_model_router_with_state_prompt_estimate_and_exclusions;
 use crate::model_router::available_router_models;
 use crate::model_router::config_account_pool_default;
-use crate::skills_load_input_from_config;
 
 impl Session {
     pub(crate) async fn model_router_prompt_estimate_for_turn(
@@ -178,27 +177,8 @@ impl Session {
             model_info,
             self.features.enabled(Feature::FastMode),
         ));
-        let plugin_outcome = self
-            .services
-            .plugins_manager
-            .plugins_for_config(&per_turn_config.plugins_config_input())
-            .await;
-        let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-        let plugin_skill_snapshots = self
-            .services
-            .plugins_manager
-            .plugin_skill_snapshots_for_config(&per_turn_config.plugins_config_input());
-        let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots)
-            .with_plugin_skill_snapshots(plugin_skill_snapshots);
-        let fs = previous
-            .environments
-            .primary()
-            .map(|turn_environment| turn_environment.environment.get_filesystem());
-        let skills_snapshot = self
-            .services
-            .skills_service
-            .snapshot_for_config(&skills_input, fs)
-            .await;
+        let environments = previous.next_step_input.load().environments.clone();
+        let skills_snapshot = previous.skills_snapshot().as_ref().clone();
         let mut rebuilt = Self::make_turn_context(
             self.thread_id(),
             self.session_id(),
@@ -214,16 +194,22 @@ impl Session {
             step_settings,
             &self.services.models_manager,
             previous.network.clone(),
-            previous.environments.clone(),
+            environments,
             previous.cwd.clone(),
             previous.sub_id.clone(),
             skills_snapshot,
         );
         rebuilt.trace_id = previous.trace_id.clone();
         rebuilt.realtime_active = previous.realtime_active;
+        rebuilt.code_mode_available = previous.code_mode_available;
+        rebuilt.active_host_plugin_identities = previous.active_host_plugin_identities.clone();
+        rebuilt.current_date = previous.current_date.clone();
+        rebuilt.timezone = previous.timezone.clone();
         rebuilt.final_output_json_schema = previous.final_output_json_schema.clone();
         rebuilt.turn_metadata_state = Arc::clone(&previous.turn_metadata_state);
+        rebuilt.extension_data = Arc::clone(&previous.extension_data);
         rebuilt.turn_timing_state = Arc::clone(&previous.turn_timing_state);
+        rebuilt.terminal_error = Arc::clone(&previous.terminal_error);
         rebuilt.server_model_warning_emitted = AtomicBool::new(
             previous
                 .server_model_warning_emitted
@@ -231,6 +217,7 @@ impl Session {
         );
         rebuilt.model_verification_emitted =
             AtomicBool::new(previous.model_verification_emitted.load(Ordering::Relaxed));
+        rebuilt.cyber_access_program = previous.cyber_access_program;
         rebuilt
     }
 }

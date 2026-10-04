@@ -933,31 +933,40 @@ fn promoted_policy_route_index(
     None
 }
 
-#[allow(dead_code)]
-pub(crate) fn auth_manager_for_config(
-    _config: &Config,
+pub(crate) async fn auth_manager_for_config(
+    config: &Config,
     parent: &Arc<AuthManager>,
 ) -> Arc<AuthManager> {
-    Arc::clone(parent)
+    let selected_pool = config_account_pool_default(config);
+    let active_pool = parent.account_pool_status().map(|status| status.pool_id);
+    if selected_pool == active_pool {
+        return Arc::clone(parent);
+    }
+
+    match AuthManager::shared_from_config(config, parent.codex_api_key_env_enabled()).await {
+        Ok(manager) => manager,
+        Err(error) => {
+            tracing::warn!(%error, "failed to apply model-router auth configuration");
+            Arc::clone(parent)
+        }
+    }
 }
 
-#[allow(dead_code)]
-pub(crate) fn model_client_for_config(
+pub(crate) async fn model_client_for_config(
     config: &Config,
     parent: &ModelClient,
     parent_auth_manager: &Arc<AuthManager>,
 ) -> ModelClient {
-    if parent.provider_info() == &config.model_provider {
+    let auth_manager = auth_manager_for_config(config, parent_auth_manager).await;
+    if parent.provider_info() == &config.model_provider
+        && Arc::ptr_eq(&auth_manager, parent_auth_manager)
+    {
         return parent.clone();
     }
 
-    parent.with_provider_info(
-        config.model_provider.clone(),
-        Some(auth_manager_for_config(config, parent_auth_manager)),
-    )
+    parent.with_provider_info(config.model_provider.clone(), Some(auth_manager))
 }
 
-#[allow(dead_code)]
 pub(crate) async fn record_model_router_request_usage_for_config(
     state_db: Option<&StateRuntime>,
     config: &Config,
@@ -2969,10 +2978,12 @@ mod tests {
         ModelProviderInfo {
             name: "DeepSeek".to_string(),
             base_url: Some(base_url),
+            model_catalog_url: None,
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,
             auth: None,
+            gateway_oauth: None,
             aws: None,
             wire_api: WireApi::Responses,
             query_params: None,

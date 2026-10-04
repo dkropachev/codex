@@ -164,8 +164,8 @@ composer preservation.
 
 #### Test cases
 
-- Live TUI skill mention submission is covered: codex-rs/tui/tests/suite/skills__live.rs:skill_mention_submits_skill_instructions
-- Disabled skill state, toggling, and composer preservation are covered: codex-rs/tui/tests/suite/skills__live.rs:skill_toggle_enables_disabled_skill_and_preserves_draft
+- Live TUI skill mention autocomplete, submission, and instruction injection are covered: codex-rs/tui/tests/suite/skills__live.rs:skill_mention_submits_skill_instructions
+- Disabled skill filtering, enabling, config persistence, and composer preservation are covered: codex-rs/tui/tests/suite/skills__live.rs:skill_toggle_enables_disabled_skill_and_preserves_draft
 
 ### tui-component (focused TUI component behavior)
 

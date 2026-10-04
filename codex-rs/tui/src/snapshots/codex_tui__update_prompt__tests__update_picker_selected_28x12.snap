@@ -1,0 +1,15 @@
+---
+source: tui/src/update_prompt.rs
+expression: rendered
+---
+
+  Update available ·
+  <VERSION> → 9.9.9
+  Release notes:
+  https://github.com/dkrop
+  achev/codex/releases/lat
+↑
+› 3. Skip until next version
+
+  enter continue · esc
+  skip

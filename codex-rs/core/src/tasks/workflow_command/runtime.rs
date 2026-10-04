@@ -104,7 +104,7 @@ pub(super) async fn run_workflow_for_tui(
     let working_directory = if input_has_working_directory {
         String::new()
     } else {
-        let primary_environment = turn_context.environments.resolve_primary();
+        let primary_environment = turn_context.initial_environments.resolve_primary();
         tokio::pin!(primary_environment);
         let workflow_environment = tokio::select! {
             biased;
