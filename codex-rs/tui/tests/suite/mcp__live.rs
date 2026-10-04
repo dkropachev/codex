@@ -182,7 +182,7 @@ async fn mcp_startup_warning_interaction_works_in_live_tui() -> Result<()> {
         &mut output_rx,
         &mut screen,
         "MCP startup warning details",
-        |contents| contents.contains("MCP startup incomplete") && contents.contains("broken"),
+        |contents| contents.contains("MCP client for `broken` failed to start"),
     )
     .await?;
 
