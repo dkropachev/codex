@@ -966,6 +966,7 @@ impl App {
                         .apply_reserve_fallback_to_pending_turn(&mut op);
                 }
                 let is_user_turn = matches!(&op, AppCommand::UserTurn { .. });
+                let is_compact = matches!(&op, AppCommand::Compact);
                 let is_realtime_stop = matches!(&op, AppCommand::RealtimeConversationStop { .. });
                 let realtime_stop_thread_id = match &op {
                     AppCommand::RealtimeConversationStop { thread_id } => Some(*thread_id),
@@ -1010,15 +1011,25 @@ impl App {
                         self.chat_widget
                             .set_queue_autosend_suppressed(/*suppressed*/ true);
                     }
-                    let handled = is_user_turn
+                    let handled = ((is_user_turn
                         && (matches!(
                             err.downcast_ref::<TypedRequestError>(),
                             Some(TypedRequestError::Server { method, .. })
                                 if method == "turn/start"
-                        ) || unsupported_permissions)
+                        ) || unsupported_permissions))
+                        || (is_compact
+                            && matches!(
+                                err.downcast_ref::<TypedRequestError>(),
+                                Some(TypedRequestError::Server { method, .. })
+                                    if method == "thread/compact/start"
+                            )))
                         && self
                             .chat_widget
-                            .handle_turn_start_rejection(format!("Failed to start turn: {err:#}"));
+                            .handle_turn_start_rejection(if is_compact {
+                                format!("Failed to compact context: {err:#}")
+                            } else {
+                                format!("Failed to start turn: {err:#}")
+                            });
                     if is_realtime_conversation {
                         let message = format!("Voice conversation failed: {err:#}");
                         if is_realtime_stop {
