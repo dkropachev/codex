@@ -334,6 +334,12 @@ if [[ "${RUNNER_OS:-}" == "macOS" && "${GITHUB_REPOSITORY:-}" != "openai/codex" 
   post_config_bazel_args+=(--jobs=80 --local_test_jobs=4)
 fi
 
+if [[ "${RUNNER_OS:-}" == "Linux" && "${GITHUB_REPOSITORY:-}" != "openai/codex" && "${bazel_args[0]}" == "test" ]]; then
+  # Fork Linux runners share limited remote test capacity. Keep Core's
+  # integration shards concurrent without saturating that capacity.
+  post_config_bazel_args+=(--jobs=8)
+fi
+
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
   pass_windows_build_env=1
   if [[ $windows_cross_compile -eq 1 && -n "${BUILDBUDDY_API_KEY:-}" ]]; then

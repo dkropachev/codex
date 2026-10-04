@@ -41,9 +41,7 @@ codex_rust_crate(
         "//:AGENTS.md",
     ],
     test_shard_counts = {
-        # Keep remote integration test processes from contending over the
-        # shared CI executor capacity and timing out on event waits.
-        "core-all-test": 4,
+        "core-all-test": 16,
         "core-unit-tests": 8,
     },
     test_tags = ["no-sandbox"],
