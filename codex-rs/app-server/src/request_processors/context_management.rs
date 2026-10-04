@@ -17,6 +17,12 @@ pub(super) struct AcceptedTurnInput {
     pub(super) started: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum TurnAdmission {
+    StartOrSteer,
+    StartIfIdle,
+}
+
 pub(super) async fn start_compaction(
     thread: &CodexThread,
     source: Option<ThreadCompactStartSource>,
@@ -58,22 +64,23 @@ pub(super) async fn start_compaction(
 pub(super) async fn submit_turn(
     thread: &CodexThread,
     request: TurnInputRequest,
-    start_if_idle: bool,
+    admission: TurnAdmission,
 ) -> Result<AcceptedTurnInput, JSONRPCErrorError> {
-    let submission = if start_if_idle {
-        thread
-            .start_user_turn_if_idle(request)
-            .await
-            .map(|submission| match submission {
-                StartIfIdleSubmission::Started { turn_id } => {
-                    TurnInputSubmission::Started { turn_id }
-                }
-                StartIfIdleSubmission::NotSubmitted { reason } => {
-                    TurnInputSubmission::NotSubmitted { reason }
-                }
-            })
-    } else {
-        thread.start_or_steer_turn(request).await
+    let submission = match admission {
+        TurnAdmission::StartIfIdle => {
+            thread
+                .start_user_turn_if_idle(request)
+                .await
+                .map(|submission| match submission {
+                    StartIfIdleSubmission::Started { turn_id } => {
+                        TurnInputSubmission::Started { turn_id }
+                    }
+                    StartIfIdleSubmission::NotSubmitted { reason } => {
+                        TurnInputSubmission::NotSubmitted { reason }
+                    }
+                })
+        }
+        TurnAdmission::StartOrSteer => thread.start_or_steer_turn(request).await,
     }
     .map_err(|err| internal_error(format!("failed to submit turn input: {err}")))?;
 
@@ -93,7 +100,7 @@ pub(super) async fn submit_turn(
                     Err(crate::error_code::server_draining_error())
                 }
                 NotSubmittedReason::NotIdle | NotSubmittedReason::PendingTriggerTurn
-                    if start_if_idle =>
+                    if admission == TurnAdmission::StartIfIdle =>
                 {
                     Err(invalid_request(
                         "thread already has an active or pending turn",

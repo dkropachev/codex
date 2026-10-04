@@ -570,8 +570,13 @@ impl TurnRequestProcessor {
                 mcp_elicitations_auto_deny,
             })
             .with_trace(self.request_trace_context(&request_id).await);
+        let admission = if start_if_idle {
+            context_management::TurnAdmission::StartIfIdle
+        } else {
+            context_management::TurnAdmission::StartOrSteer
+        };
         let context_management::AcceptedTurnInput { turn_id, started } =
-            context_management::submit_turn(thread.as_ref(), turn_input_request, start_if_idle)
+            context_management::submit_turn(thread.as_ref(), turn_input_request, admission)
                 .await
                 .inspect_err(|error| {
                     self.track_error_response(&request_id, error, /*error_type*/ None);
