@@ -399,9 +399,11 @@ release_asset_digest() {
 
 select_release_assets() {
   package_asset="codex-package-$vendor_target.tar.gz"
+  host_asset="codex-code-mode-host-$vendor_target"
   checksum_asset="codex-package_SHA256SUMS"
 
   if release_asset_exists "$package_asset" &&
+    release_asset_exists "$host_asset" &&
     release_asset_exists "$checksum_asset"; then
     asset="$package_asset"
   else
@@ -410,6 +412,7 @@ select_release_assets() {
   fi
 
   download_url="$(release_url_for_asset "$asset" "$resolved_version")"
+  host_url="$(release_url_for_asset "$host_asset" "$resolved_version")"
   checksum_url="$(release_url_for_asset "$checksum_asset" "$resolved_version")"
 }
 
@@ -461,9 +464,9 @@ file_sha256() {
 }
 
 verify_archive_digest() {
-  archive_path="$1"
+  verified_path="$1"
   expected_digest="$2"
-  actual_digest="$(file_sha256 "$archive_path")"
+  actual_digest="$(file_sha256 "$verified_path")"
 
   if [ "$actual_digest" != "$expected_digest" ]; then
     echo "Downloaded Codex archive checksum did not match expected digest." >&2
@@ -855,12 +858,18 @@ handle_conflicting_install() {
 install_package_release() {
   release_dir="$1"
   archive_path="$2"
+  host_path="$3"
   stage_release="$RELEASES_DIR/.staging.$(basename "$release_dir").$$"
 
   mkdir -p "$RELEASES_DIR"
   rm -rf "$stage_release"
   mkdir -p "$stage_release"
   tar -xzf "$archive_path" -C "$stage_release"
+  if [ "$(file_sha256 "$stage_release/bin/codex-code-mode-host")" != "$(file_sha256 "$host_path")" ]; then
+    echo "Packaged code-mode host differs from the release host asset." >&2
+    rm -rf "$stage_release"
+    return 1
+  fi
   chmod 0755 \
     "$stage_release/bin/codex" \
     "$stage_release/bin/codex-code-mode-host" \
@@ -881,6 +890,7 @@ release_dir_is_complete() {
   release_dir="$1"
   expected_version="$2"
   expected_target="$3"
+  expected_host_digest="$4"
 
   [ -d "$release_dir" ] &&
     [ "$(basename "$release_dir")" = "dkropachev-$expected_version-$expected_target" ] ||
@@ -906,7 +916,8 @@ release_dir_is_complete() {
   esac
 
   installed_version="$(version_from_binary "$release_dir/bin/codex" || version_from_binary "$release_dir/codex" || true)"
-  [ "$installed_version" = "$expected_version" ]
+  [ "$installed_version" = "$expected_version" ] &&
+    [ "$(file_sha256 "$release_dir/bin/codex-code-mode-host")" = "$expected_host_digest" ]
 }
 
 update_current_link() {
@@ -1008,6 +1019,7 @@ else
 fi
 
 resolve_release
+expected_host_digest="$(release_asset_digest "$host_asset")"
 release_name="dkropachev-$resolved_version-$vendor_target"
 release_dir="$RELEASES_DIR/$release_name"
 current_version="$(current_installed_version)"
@@ -1096,7 +1108,7 @@ if [ "${CODEX_INSTALL_IF_LATEST:-}" = "1" ] || [ "${CODEX_INSTALL_IF_CURRENT:-}"
 fi
 cleanup_stale_install_artifacts
 
-if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"; then
+if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target" "$expected_host_digest"; then
   if [ -e "$release_dir" ] || [ -L "$release_dir" ]; then
     if [ "$DAEMON_ONLY" = "1" ]; then
       echo "Refusing to overwrite existing daemon release $release_dir." >&2
@@ -1106,6 +1118,7 @@ if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"
   fi
 
   archive_path="$tmp_dir/$asset"
+  host_path="$tmp_dir/$host_asset"
   checksum_path="$tmp_dir/$checksum_asset"
 
   step "Downloading Codex CLI"
@@ -1120,11 +1133,17 @@ if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"
     exit 1
   fi
   download_verified_file "$download_url" "$archive_path" "$github_digest"
+  host_manifest_digest="$(package_archive_digest "$host_asset" "$checksum_path")"
+  if [ "$host_manifest_digest" != "$expected_host_digest" ]; then
+    echo "GitHub and codex-package_SHA256SUMS disagree on the SHA-256 digest for $host_asset." >&2
+    exit 1
+  fi
+  download_verified_file "$host_url" "$host_path" "$expected_host_digest"
 
   step "Installing standalone package to $release_dir"
-  install_package_release "$release_dir" "$archive_path"
+  install_package_release "$release_dir" "$archive_path" "$host_path"
 fi
-if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"; then
+if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target" "$expected_host_digest"; then
   echo "Installed Codex command did not report expected version $resolved_version." >&2
   exit 1
 fi

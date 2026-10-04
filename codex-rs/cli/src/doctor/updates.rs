@@ -410,9 +410,38 @@ async fn fetch_latest_version(client: &RouteAwareClientPool) -> Result<String, S
     #[derive(Deserialize)]
     struct ReleaseInfo {
         tag_name: String,
+        assets: Vec<ReleaseAsset>,
+    }
+
+    #[derive(Deserialize)]
+    struct ReleaseAsset {
+        name: String,
+        digest: Option<String>,
     }
 
     let info = http_get_json::<ReleaseInfo>(client, GITHUB_LATEST_RELEASE_URL).await?;
+    for name in [
+        "codex-package_SHA256SUMS",
+        "codex-package-aarch64-apple-darwin.tar.gz",
+        "codex-package-x86_64-apple-darwin.tar.gz",
+        "codex-package-aarch64-unknown-linux-musl.tar.gz",
+        "codex-package-x86_64-unknown-linux-musl.tar.gz",
+        "codex-code-mode-host-aarch64-apple-darwin",
+        "codex-code-mode-host-x86_64-apple-darwin",
+        "codex-code-mode-host-aarch64-unknown-linux-musl",
+        "codex-code-mode-host-x86_64-unknown-linux-musl",
+    ] {
+        if !info.assets.iter().any(|asset| {
+            asset.name == name
+                && asset.digest.as_deref().is_some_and(|digest| {
+                    digest.len() == 71
+                        && digest.starts_with("sha256:")
+                        && digest[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+        }) {
+            return Err(format!("latest release is missing a verified {name} asset"));
+        }
+    }
     info.tag_name
         .strip_prefix("rust-v")
         .map(str::to_string)

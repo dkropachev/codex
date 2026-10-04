@@ -18,6 +18,7 @@ OLD_VERSION = "0.149.1"
 REPOSITORY = "dkropachev/codex"
 TARGET = "aarch64-apple-darwin"
 PACKAGE_ASSET = f"codex-package-{TARGET}.tar.gz"
+HOST_ASSET = f"codex-code-mode-host-{TARGET}"
 CHECKSUM_ASSET = "codex-package_SHA256SUMS"
 
 
@@ -54,6 +55,7 @@ class InstallShTest(unittest.TestCase):
                     tag_metadata_url(VERSION),
                     release_asset_url(VERSION, CHECKSUM_ASSET),
                     release_asset_url(VERSION, PACKAGE_ASSET),
+                    release_asset_url(VERSION, HOST_ASSET),
                 ],
             )
             self.assertIn(f"Resolved version: {VERSION}", result.stdout)
@@ -79,9 +81,53 @@ class InstallShTest(unittest.TestCase):
                     f"https://api.github.com/repos/{REPOSITORY}/releases/latest",
                     release_asset_url(VERSION, CHECKSUM_ASSET),
                     release_asset_url(VERSION, PACKAGE_ASSET),
+                    release_asset_url(VERSION, HOST_ASSET),
                 ],
             )
             self.assertIn(f"Resolved version: {VERSION}", result.stdout)
+
+    def test_release_without_host_asset_is_not_installable(self) -> None:
+        metadata = json.loads(release_metadata())
+        metadata["assets"] = [
+            asset
+            for asset in metadata["assets"]
+            if not asset["name"].startswith("codex-code-mode-host-")
+        ]
+
+        result, requests = run_installer(VERSION, metadata_json=json.dumps(metadata))
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(requests, [tag_metadata_url(VERSION)])
+        self.assertIn("Could not find Codex package release assets", result.stderr)
+
+    def test_packaged_host_must_match_standalone_host(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path, checksum_path, metadata_json = create_package_release(root)
+            host_path = root / HOST_ASSET
+            write_executable(host_path, "#!/bin/sh\nexit 1\n")
+            host_digest = file_sha256(host_path)
+            checksum_path.write_text(
+                f"{file_sha256(archive_path)}  {PACKAGE_ASSET}\n"
+                f"{host_digest}  {HOST_ASSET}\n",
+                encoding="utf-8",
+            )
+            metadata = json.loads(metadata_json)
+            set_asset_digest(metadata, HOST_ASSET, host_digest)
+            set_asset_digest(metadata, CHECKSUM_ASSET, file_sha256(checksum_path))
+
+            result, _requests = run_installer_in(
+                root,
+                VERSION,
+                metadata_json=json.dumps(metadata),
+                archive_path=archive_path,
+                checksum_path=checksum_path,
+                force_macos=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Packaged code-mode host differs", result.stderr)
+            self.assertFalse((root / "codex-home/packages/standalone/current").exists())
 
     def test_compact_metadata_is_independent_of_field_order(self) -> None:
         result, requests = run_installer(
@@ -215,6 +261,40 @@ class InstallShTest(unittest.TestCase):
             self.assertEqual(second_result.returncode, 0, second_result.stderr)
             self.assertEqual(second_requests, [tag_metadata_url(VERSION)])
             self.assertNotIn("Downloading Codex CLI", second_result.stdout)
+
+    def test_existing_release_with_wrong_host_is_reinstalled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path, checksum_path, metadata_json = create_package_release(root)
+            options = dict(
+                metadata_json=metadata_json,
+                archive_path=archive_path,
+                checksum_path=checksum_path,
+                force_macos=True,
+            )
+            installed, _requests = run_installer_in(root, VERSION, **options)
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            host_path = (
+                root
+                / "codex-home/packages/standalone/releases"
+                / f"dkropachev-{VERSION}-{TARGET}/bin/codex-code-mode-host"
+            )
+            write_executable(host_path, "#!/bin/sh\nexit 1\n")
+            (root / "requests.log").unlink()
+
+            repaired, requests = run_installer_in(root, VERSION, **options)
+
+            self.assertEqual(repaired.returncode, 0, repaired.stderr)
+            self.assertEqual(file_sha256(host_path), file_sha256(root / HOST_ASSET))
+            self.assertEqual(
+                requests,
+                [
+                    tag_metadata_url(VERSION),
+                    release_asset_url(VERSION, CHECKSUM_ASSET),
+                    release_asset_url(VERSION, PACKAGE_ASSET),
+                    release_asset_url(VERSION, HOST_ASSET),
+                ],
+            )
 
     def test_daemon_install_preserves_visible_cli_and_profile(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -459,6 +539,7 @@ class InstallShTest(unittest.TestCase):
                     tag_metadata_url(VERSION),
                     release_asset_url(VERSION, CHECKSUM_ASSET),
                     release_asset_url(VERSION, PACKAGE_ASSET),
+                    release_asset_url(VERSION, HOST_ASSET),
                 ],
             )
             self.assertTrue(os.access(zsh_path, os.X_OK))
@@ -705,6 +786,13 @@ def run_installer_in(
                   exit 22
                 fi
                 ;;
+              https://github.com/{REPOSITORY}/releases/download/*/codex-code-mode-host-*)
+                if [ -n "$CODEX_TEST_HOST_PATH" ]; then
+                  cp "$CODEX_TEST_HOST_PATH" "$output"
+                else
+                  exit 22
+                fi
+                ;;
               *)
                 exit 22
                 ;;
@@ -750,6 +838,9 @@ def run_installer_in(
             "CODEX_RELEASE": release,
             "CODEX_INSTALL_DAEMON_ONLY": "1" if daemon_only else "0",
             "CODEX_TEST_ARCHIVE_PATH": str(archive_path or ""),
+            "CODEX_TEST_HOST_PATH": str(
+                archive_path.parent / HOST_ASSET if archive_path else ""
+            ),
             "CODEX_TEST_CHECKSUM_PATH": str(checksum_path or ""),
             "CODEX_TEST_METADATA_FAILURE": "1" if metadata_failure else "0",
             "CODEX_TEST_METADATA_JSON": (
@@ -838,15 +929,19 @@ def create_package_release(
             archive.add(path, arcname=path.name)
 
     archive_digest = file_sha256(archive_path)
+    host_path = root / HOST_ASSET
+    host_path.write_bytes((package_dir / "bin" / "codex-code-mode-host").read_bytes())
+    host_digest = file_sha256(host_path)
     checksum_path = root / CHECKSUM_ASSET
     checksum_path.write_text(
-        f"{archive_digest}  {PACKAGE_ASSET}\n",
+        f"{archive_digest}  {PACKAGE_ASSET}\n{host_digest}  {HOST_ASSET}\n",
         encoding="utf-8",
     )
     metadata_json = json.dumps(
         {
             "assets": [
                 {"name": PACKAGE_ASSET, "digest": f"sha256:{archive_digest}"},
+                {"name": HOST_ASSET, "digest": f"sha256:{host_digest}"},
                 {
                     "name": CHECKSUM_ASSET,
                     "digest": f"sha256:{file_sha256(checksum_path)}",
@@ -898,6 +993,19 @@ def release_metadata(
             "x86_64-unknown-linux-musl",
         )
     ]
+    assets.extend(
+        asset_metadata(
+            f"codex-code-mode-host-{target}",
+            f"sha256:{'c' * 64}",
+            reorder=reorder,
+        )
+        for target in (
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "aarch64-unknown-linux-musl",
+            "x86_64-unknown-linux-musl",
+        )
+    )
     assets.append(
         asset_metadata(
             CHECKSUM_ASSET,
