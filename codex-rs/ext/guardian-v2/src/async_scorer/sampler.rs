@@ -183,7 +183,7 @@ impl LunaSampler {
                 }
             }
         }
-        input.extend(evidence);
+        input.extend(split_oversized_user_messages(evidence));
         // Assign IDs once so retries reuse the same input item identities.
         for item in &mut input {
             if item.id().is_none()
@@ -276,6 +276,116 @@ impl LunaSampler {
         .run(superseded, scored)
         .await
     }
+}
+
+fn split_oversized_user_messages(items: Vec<ResponseItem>) -> Vec<ResponseItem> {
+    items
+        .into_iter()
+        .flat_map(|mut item| {
+            let mut assigned_id = false;
+            if item.id().is_none()
+                && let Some(prefix) = item.id_prefix()
+            {
+                item.set_id(Some(ResponseItemId::new(prefix)));
+                assigned_id = true;
+            }
+            if guardian_model_context_item_is_bounded(&item) || !assigned_id {
+                return vec![item];
+            }
+            let ResponseItem::Message {
+                id,
+                role,
+                content,
+                phase,
+                internal_chat_message_metadata_passthrough,
+            } = item
+            else {
+                return vec![item];
+            };
+            if role != "user" {
+                return vec![ResponseItem::Message {
+                    id,
+                    role,
+                    content,
+                    phase,
+                    internal_chat_message_metadata_passthrough,
+                }];
+            }
+            if internal_chat_message_metadata_passthrough
+                .as_ref()
+                .and_then(|metadata| metadata.content_item_kinds.as_ref())
+                .is_some_and(|kinds| kinds.len() != content.len())
+            {
+                return vec![ResponseItem::Message {
+                    id,
+                    role,
+                    content,
+                    phase,
+                    internal_chat_message_metadata_passthrough,
+                }];
+            }
+            if content.is_empty() {
+                return vec![ResponseItem::Message {
+                    id,
+                    role,
+                    content,
+                    phase,
+                    internal_chat_message_metadata_passthrough,
+                }];
+            }
+
+            let content_len = content.len();
+            let message = |content, start: usize, end: usize| ResponseItem::Message {
+                id: Some(ResponseItemId::new("msg")),
+                role: role.clone(),
+                content,
+                phase: phase.clone(),
+                internal_chat_message_metadata_passthrough:
+                    internal_chat_message_metadata_passthrough
+                        .clone()
+                        .map(|mut metadata| {
+                            if let Some(kinds) = internal_chat_message_metadata_passthrough
+                                .as_ref()
+                                .and_then(|metadata| metadata.content_item_kinds.as_ref())
+                            {
+                                metadata.content_item_kinds = Some(kinds[start..end].to_vec());
+                            }
+                            metadata
+                        }),
+            };
+            let mut messages = Vec::new();
+            let mut current = Vec::new();
+            let mut current_start = 0;
+            for (index, item) in content.into_iter().enumerate() {
+                current.push(item);
+                let candidate = message(std::mem::take(&mut current), current_start, index + 1);
+                let bounded = guardian_model_context_item_is_bounded(&candidate);
+                let ResponseItem::Message {
+                    content: mut candidate,
+                    ..
+                } = candidate
+                else {
+                    unreachable!("the message constructor always returns a message")
+                };
+                if bounded {
+                    current = candidate;
+                } else {
+                    let Some(item) = candidate.pop() else {
+                        continue;
+                    };
+                    if !candidate.is_empty() {
+                        messages.push(message(candidate, current_start, index));
+                    }
+                    current_start = index;
+                    current.push(item);
+                }
+            }
+            if !current.is_empty() {
+                messages.push(message(current, current_start, content_len));
+            }
+            messages
+        })
+        .collect()
 }
 
 #[cfg(test)]

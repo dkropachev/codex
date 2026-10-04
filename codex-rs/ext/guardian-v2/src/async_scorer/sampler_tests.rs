@@ -1,5 +1,6 @@
 use anyhow::Result;
 use codex_context_fragments::RenderedFragment;
+use codex_core::context::guardian_model_context_item_is_bounded;
 use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionMetrics;
 use codex_guardian_context::PreviousReviews;
@@ -17,6 +18,8 @@ use codex_prompts::GuardianClassifierInstructions;
 use codex_protocol::ResponseItemId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::SessionSource;
@@ -47,6 +50,7 @@ use super::LunaSamplerConfig;
 use super::LunaSamplerError;
 use super::LunaSamplingRequest;
 use super::MAX_CONCURRENT_REQUESTS;
+use super::split_oversized_user_messages;
 
 impl LunaSampler {
     /// Waits for warm sockets to enter the client pool, beyond the server handshake.
@@ -74,6 +78,170 @@ async fn sampler_rejects_oversized_items_before_connecting() {
         sampler.sample(request).await,
         Err(LunaSamplerError::InputTooLarge)
     ));
+}
+
+#[test]
+fn oversized_user_messages_split_at_content_boundaries_and_partition_kinds() {
+    let content = vec![
+        ContentItem::InputText {
+            text: "a".repeat(/*n*/ 24_000),
+        },
+        ContentItem::InputText {
+            text: "b".repeat(/*n*/ 24_000),
+        },
+    ];
+    let kinds = vec![
+        ContentItemKind("first.kind".to_owned()),
+        ContentItemKind("second.kind".to_owned()),
+    ];
+    let metadata = InternalChatMessageMetadataPassthrough {
+        turn_id: Some("turn-1".to_owned()),
+        content_item_kinds: Some(kinds.clone()),
+        ..Default::default()
+    };
+    let mut messages = split_oversized_user_messages(vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_owned(),
+        content: content.clone(),
+        phase: None,
+        internal_chat_message_metadata_passthrough: Some(metadata.clone()),
+    }]);
+
+    assert_eq!(messages.len(), 2);
+    assert!(messages.iter().all(guardian_model_context_item_is_bounded));
+    assert!(messages.iter().all(|message| message.id().is_some()));
+    for message in &mut messages {
+        message.set_id(None);
+    }
+    assert_eq!(
+        messages,
+        vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_owned(),
+                content: vec![content[0].clone()],
+                phase: None,
+                internal_chat_message_metadata_passthrough: Some(
+                    InternalChatMessageMetadataPassthrough {
+                        content_item_kinds: Some(vec![kinds[0].clone()]),
+                        ..metadata.clone()
+                    },
+                ),
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_owned(),
+                content: vec![content[1].clone()],
+                phase: None,
+                internal_chat_message_metadata_passthrough: Some(
+                    InternalChatMessageMetadataPassthrough {
+                        content_item_kinds: Some(vec![kinds[1].clone()]),
+                        ..metadata
+                    },
+                ),
+            },
+        ]
+    );
+}
+
+#[test]
+fn idless_user_message_is_sized_with_its_final_id_before_splitting() {
+    let message = |text_len, id| ResponseItem::Message {
+        id,
+        role: "user".to_owned(),
+        content: vec![
+            ContentItem::InputText {
+                text: "a".repeat(/*n*/ 100),
+            },
+            ContentItem::InputText {
+                text: "b".repeat(text_len),
+            },
+        ],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let mut low = 0usize;
+    let mut high = 100_000usize;
+    while low < high {
+        let mid = low + (high - low).div_ceil(/*rhs*/ 2);
+        if guardian_model_context_item_is_bounded(&message(mid, None)) {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    let idless = message(low, None);
+    let with_id = message(low, Some(ResponseItemId::new("msg")));
+    assert!(guardian_model_context_item_is_bounded(&idless));
+    assert!(!guardian_model_context_item_is_bounded(&with_id));
+
+    let messages = split_oversized_user_messages(vec![idless]);
+
+    assert_eq!(messages.len(), 2);
+    assert!(messages.iter().all(guardian_model_context_item_is_bounded));
+    assert!(messages.iter().all(|message| message.id().is_some()));
+}
+
+#[test]
+fn splitter_leaves_misaligned_content_item_kinds_for_cap_rejection() {
+    let content = vec![
+        ContentItem::InputText {
+            text: "a".repeat(/*n*/ 24_000),
+        },
+        ContentItem::InputText {
+            text: "b".repeat(/*n*/ 24_000),
+        },
+    ];
+    for kinds in [
+        vec![ContentItemKind("only.kind".to_owned())],
+        vec![
+            ContentItemKind("first.kind".to_owned()),
+            ContentItemKind("second.kind".to_owned()),
+            ContentItemKind("extra.kind".to_owned()),
+        ],
+    ] {
+        let message = ResponseItem::Message {
+            id: None,
+            role: "user".to_owned(),
+            content: content.clone(),
+            phase: None,
+            internal_chat_message_metadata_passthrough: Some(
+                InternalChatMessageMetadataPassthrough {
+                    content_item_kinds: Some(kinds),
+                    ..Default::default()
+                },
+            ),
+        };
+
+        let mut messages = split_oversized_user_messages(vec![message.clone()]);
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].id().is_some());
+        assert!(!guardian_model_context_item_is_bounded(&messages[0]));
+        messages[0].set_id(None);
+        assert_eq!(messages, vec![message]);
+    }
+}
+
+#[test]
+fn splitting_preserves_an_unsplittable_empty_message() {
+    let message = ResponseItem::Message {
+        id: None,
+        role: "user".to_owned(),
+        content: Vec::new(),
+        phase: None,
+        internal_chat_message_metadata_passthrough: Some(InternalChatMessageMetadataPassthrough {
+            turn_id: Some("x".repeat(/*n*/ 50_000)),
+            ..Default::default()
+        }),
+    };
+
+    assert!(!guardian_model_context_item_is_bounded(&message));
+    let mut messages = split_oversized_user_messages(vec![message.clone()]);
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].id().is_some());
+    messages[0].set_id(None);
+    assert_eq!(messages, vec![message]);
 }
 
 fn assert_connection_metadata(

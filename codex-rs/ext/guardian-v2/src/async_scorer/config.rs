@@ -2,11 +2,14 @@ use codex_config::GuardianPolicyLoader;
 use codex_context_fragments::ContextualUserFragment;
 use codex_context_fragments::RenderedFragment;
 use codex_core::config::Config;
+use codex_core::context::guardian_model_context_item_is_bounded;
 use codex_features::FeatureToml;
 use codex_features::GuardianV2ConfigToml;
 use codex_features::GuardianV2TranscriptConfigToml;
 use codex_prompts::GuardianClassifierInstructions;
 use codex_prompts::ResolvedModelMessages;
+use codex_protocol::ResponseItemId;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::GuardianModelPolicy;
 use codex_protocol::openai_models::GuardianV2ModelConfig;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -24,7 +27,7 @@ pub(crate) const DEFAULT_PARENT_COMPACTION_TOKENS: usize = 10_000;
 const MIN_MODEL_CONTEXT_ITEM_TOKENS: usize = 100;
 const MAX_MODEL_CONTEXT_ITEM_TOKENS: usize = 100_000;
 // Reserve room for the enclosing developer message, its ID, and content metadata.
-const MAX_CLASSIFIER_INSTRUCTION_TOKENS: usize = 9_936;
+const MAX_CLASSIFIER_INSTRUCTION_TOKENS: usize = 9_919;
 const MAX_PARENT_COMPACTION_TOKENS: usize = 10_000;
 const DEFAULT_REVIEW_THRESHOLD: f64 = 0.5;
 const LEGACY_REVIEW_THRESHOLD: f64 = 0.8;
@@ -291,13 +294,39 @@ impl GuardianV2Config {
     }
 
     pub(crate) fn render_classifier_instructions(&self, policy: &str) -> RenderedFragment {
-        GuardianClassifierInstructions::new(
-            &self.classifier_instructions,
-            policy,
-            CLASSIFICATION_OUTPUT_INSTRUCTIONS,
-            Some(self.max_classifier_instruction_tokens),
-        )
-        .render_fragment()
+        let render = |max_tokens| {
+            GuardianClassifierInstructions::new(
+                &self.classifier_instructions,
+                policy,
+                CLASSIFICATION_OUTPUT_INSTRUCTIONS,
+                Some(max_tokens),
+            )
+            .render_fragment()
+        };
+        let is_bounded = |instructions: &RenderedFragment| {
+            let mut item = ResponseItem::from(instructions.clone());
+            item.set_id(Some(ResponseItemId::new("msg")));
+            guardian_model_context_item_is_bounded(&item)
+        };
+        let mut instructions = render(self.max_classifier_instruction_tokens);
+        if is_bounded(&instructions) {
+            return instructions;
+        }
+
+        let mut lower = 0;
+        let mut upper = self.max_classifier_instruction_tokens;
+        instructions = render(lower);
+        while lower < upper {
+            let candidate_tokens = lower + (upper - lower).div_ceil(/*rhs*/ 2);
+            let candidate = render(candidate_tokens);
+            if is_bounded(&candidate) {
+                lower = candidate_tokens;
+                instructions = candidate;
+            } else {
+                upper = candidate_tokens - 1;
+            }
+        }
+        instructions
     }
 }
 

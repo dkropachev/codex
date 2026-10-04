@@ -2881,11 +2881,16 @@ async fn contributor_sends_compacted_conversation_history_to_luna() -> Result<()
         Some(TEST_GUARDIAN_POLICY),
     )
     .await?;
-    let content = request["input"][2]["content"]
+    let entries = request["input"]
         .as_array()
-        .expect("Luna request should contain separate transcript text items");
-    let entries = content
+        .expect("Luna request should contain input items")
         .iter()
+        .filter(|item| item["role"] == "user")
+        .flat_map(|item| {
+            item["content"]
+                .as_array()
+                .expect("Luna user messages should contain content items")
+        })
         .filter_map(|entry| entry["text"].as_str())
         .collect::<Vec<_>>();
 

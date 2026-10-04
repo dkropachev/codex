@@ -1,8 +1,11 @@
+use codex_core::context::guardian_model_context_item_is_bounded;
 use codex_features::GuardianV2ConfigToml;
 use codex_features::GuardianV2TranscriptConfigToml;
 use codex_guardian_context::truncate_text as truncate_entry;
 use codex_prompts::ResolvedModelMessages;
+use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::GuardianV2ModelConfig;
 use codex_protocol::openai_models::GuardianV2TranscriptModelConfig;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -10,6 +13,7 @@ use pretty_assertions::assert_eq;
 
 use super::CLASSIFICATION_OUTPUT_INSTRUCTIONS;
 use super::GuardianV2Config;
+use super::MAX_CLASSIFIER_INSTRUCTION_TOKENS;
 
 fn rendered_classifier_text(config: &GuardianV2Config, policy: &str) -> String {
     let (_, content) = config.render_classifier_instructions(policy).into_parts();
@@ -54,19 +58,47 @@ fn evaluated_configuration_preserves_rendered_prompt_and_gate() {
     .unwrap();
     assert_eq!(config.review_threshold, 0.5);
     assert_eq!(config.reasoning_effort, ReasoningEffort::Low);
-    assert_eq!(config.max_classifier_instruction_tokens, 9_936);
+    assert_eq!(
+        config.max_classifier_instruction_tokens,
+        MAX_CLASSIFIER_INSTRUCTION_TOKENS
+    );
     assert_eq!(config.max_parent_compaction_tokens, 10_000);
     assert_eq!(config.classifier_instructions, instructions);
 
     for policy in ["Tenant policy.".to_owned(), "é".repeat(80_000)] {
         // This is the exact pre-review rendering path used by the eval config.
         let previous = truncate_entry(
-            &truncate_entry(instructions, /*max_tokens*/ 9_936)
-                .replace("{{ tenant_policy_config }}", &policy),
-            /*max_tokens*/ 9_936,
+            &truncate_entry(
+                instructions,
+                /*max_tokens*/ MAX_CLASSIFIER_INSTRUCTION_TOKENS,
+            )
+            .replace("{{ tenant_policy_config }}", &policy),
+            /*max_tokens*/ MAX_CLASSIFIER_INSTRUCTION_TOKENS,
         );
         assert_eq!(rendered_classifier_text(&config, &policy), previous);
     }
+}
+
+#[test]
+fn classifier_instructions_are_bounded_after_json_escaping() {
+    let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+        classifier_instructions: Some("Classify {{ tenant_policy_config }}".to_owned()),
+        max_classifier_instruction_tokens: Some(30_000),
+        ..Default::default()
+    })
+    .unwrap();
+    let policy = "\"\\\n\r\t\0\u{001f}".repeat(/*n*/ 20_000);
+    let rendered = config.render_classifier_instructions(&policy);
+    let (_, content) = rendered.clone().into_parts();
+    let (ContentItem::InputText { text }, _) = content.into_parts() else {
+        panic!("classifier instructions must be text");
+    };
+    assert!(text.ends_with(CLASSIFICATION_OUTPUT_INSTRUCTIONS));
+
+    let mut instructions = ResponseItem::from(rendered);
+    instructions.set_id(Some(ResponseItemId::new("msg")));
+
+    assert!(guardian_model_context_item_is_bounded(&instructions));
 }
 
 #[test]
@@ -230,7 +262,7 @@ fn model_runtime_settings_preserve_local_overrides() {
             &format!(
                 "{prompt}\n\n# Security Policy\nTenant policy.\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
             ),
-            /*max_tokens*/ 9_936,
+            /*max_tokens*/ MAX_CLASSIFIER_INSTRUCTION_TOKENS,
         )
     );
 }

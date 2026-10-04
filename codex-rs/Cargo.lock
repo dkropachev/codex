@@ -4378,11 +4378,9 @@ dependencies = [
 name = "codex-prompts"
 version = "0.156.0"
 dependencies = [
- "anyhow",
  "codex-collaboration-mode-templates",
  "codex-context-fragments",
  "codex-execpolicy",
- "codex-git-utils",
  "codex-guardian-context",
  "codex-protocol",
  "codex-utils-absolute-path",

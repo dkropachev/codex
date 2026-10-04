@@ -102,7 +102,8 @@ pub(super) async fn run(http: &impl InstallerHttp, legacy: &Daemon) -> Result<Up
     let binary = release.join(entrypoint);
     let version = managed_install::managed_codex_version(&binary).await?;
     anyhow::ensure!(
-        name.to_string_lossy().starts_with(&format!("{version}-")),
+        name.to_string_lossy()
+            .starts_with(&format!("dkropachev-{version}-")),
         "prepared daemon version does not match its release"
     );
     // An older production updater understands only the legacy package/PID paths.

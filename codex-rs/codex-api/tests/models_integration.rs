@@ -51,19 +51,21 @@ fn provider(base_url: &str) -> Provider {
 #[tokio::test]
 async fn invalid_models_response_reports_bounded_decode_metadata() {
     let server = MockServer::start().await;
-    for (body, category, column_offset) in [
+    for (body, category, line, column) in [
         (
-            json!({ "data": [{ "id": "private-model" }] }).to_string(),
+            json!({ "data": [{ "object": "model" }] }).to_string(),
             "Data",
+            0,
             0,
         ),
         (
             json!({ "models": "private-value".repeat(4096) }).to_string(),
             "Data",
-            1,
+            0,
+            0,
         ),
-        (r#"{"models":]}"#.to_string(), "Syntax", 1),
-        (r#"{"models":["#.to_string(), "Eof", 0),
+        (r#"{"models":]}"#.to_string(), "Syntax", 1, 1),
+        (r#"{"models":["#.to_string(), "Eof", 1, 0),
     ] {
         let response = Mock::given(method("GET"))
             .and(path("/models"))
@@ -92,8 +94,8 @@ async fn invalid_models_response_reports_bounded_decode_metadata() {
         assert_eq!(
             error.to_string(),
             format!(
-                "stream error: failed to decode models response: {category} at line 1 column {} (body: {} bytes)",
-                body.len() - column_offset,
+                "stream error: failed to decode models response: {category} at line {line} column {} (body: {} bytes)",
+                if line == 0 { 0 } else { body.len() - column },
                 body.len()
             )
         );

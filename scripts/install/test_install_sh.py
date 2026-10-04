@@ -238,7 +238,7 @@ class InstallShTest(unittest.TestCase):
             installed, _ = run_installer_in(root, "latest", daemon_only=True, **options)
             self.assertEqual(installed.returncode, 0, installed.stderr)
             daemon = root / "codex-home/packages/app-server-daemon"
-            release_name = f"{VERSION}-aarch64-apple-darwin"
+            release_name = f"dkropachev-{VERSION}-aarch64-apple-darwin"
             self.assertEqual(
                 (daemon / "current").resolve(), daemon / "releases" / release_name
             )

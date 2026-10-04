@@ -7,13 +7,6 @@ NON_INTERACTIVE="${CODEX_NON_INTERACTIVE:-false}"
 GITHUB_REPOSITORY="dkropachev/codex"
 MIN_MANAGED_VERSION="0.150.0"
 DAEMON_ONLY="${CODEX_INSTALL_DAEMON_ONLY:-0}"
-DEFAULT_PREFER_RELEASES_OPENAI_COM="false"
-PREFER_RELEASES_OPENAI_COM="${CODEX_INSTALLER_USE_RELEASES_OPENAI_COM:-$DEFAULT_PREFER_RELEASES_OPENAI_COM}"
-RELEASES_BASE_URL="https://releases.openai.com/codex"
-RELEASES_CONNECT_TIMEOUT=10
-RELEASES_METADATA_TIMEOUT=30
-RELEASES_ASSET_TIMEOUT=300
-release_source="github"
 
 BIN_DIR="${CODEX_INSTALL_DIR:-$HOME/.local/bin}"
 BIN_PATH="$BIN_DIR/codex"
@@ -1136,10 +1129,7 @@ if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"
   exit 1
 fi
 if [ "$DAEMON_ONLY" = "1" ] && [ "${CODEX_INSTALL_DEFER_SELECTION:-0}" != "1" ]; then
-  installed_codex="$release_dir/codex"
-  if [ "$install_layout" = "package" ]; then
-    installed_codex="$release_dir/bin/codex"
-  fi
+  installed_codex="$release_dir/bin/codex"
   if ! "$installed_codex" app-server daemon pid-update-loop --check-package-ownership >/dev/null 2>&1; then
     echo "The production release does not support daemon-owned packages; the current selection was left unchanged." >&2
     exit 1

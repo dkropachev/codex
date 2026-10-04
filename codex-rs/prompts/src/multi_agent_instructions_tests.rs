@@ -49,7 +49,7 @@ fn role_instructions_bound_model_visible_items() {
     for instructions in [
         MultiAgentRoleInstructions::Configured(oversized.clone()),
         MultiAgentRoleInstructions::Composed {
-            base: oversized.clone(),
+            base: oversized,
             marked: true,
             omit_update_plan_instructions: false,
             max_concurrency: 2,
