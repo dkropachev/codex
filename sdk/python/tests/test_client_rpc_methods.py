@@ -171,6 +171,10 @@ def test_unversioned_checkout_probes_and_caches_its_own_schema(
             ),
             ("ThreadResumeParams", ["excludeTurns"]),
             ("ThreadForkParams", ["excludeTurns"]),
+            (
+                "ThreadCompactStartParams",
+                ["source"] if supports_context_contracts else [],
+            ),
         ):
             (output / f"{name}.json").write_text(
                 json.dumps({"properties": {field: {} for field in fields}})
@@ -181,13 +185,18 @@ def test_unversioned_checkout_probes_and_caches_its_own_schema(
         ("turn/start", {"input": [], "turnTrigger": "automation"}, False),
         ("thread/resume", {"threadId": "thread-1", "excludeTurns": False}, False),
         ("turn/start", {"input": [], "startIfIdle": True}, True),
+        (
+            "thread/compact/start",
+            {"threadId": "thread-1", "source": "automaticContextManagement"},
+            True,
+        ),
     ):
         if supports_context_contracts or not needs_context_contract:
             client.request(method, params, response_model=InitializeResponse)
         else:
             with pytest.raises(CodexError, match="checkout does not support"):
                 client.request(method, params, response_model=InitializeResponse)
-    assert len(requests) == (3 if supports_context_contracts else 2)
+    assert len(requests) == (4 if supports_context_contracts else 2)
     assert probes == [
         (
             [*command, "generate-json-schema", "--experimental", "--out"],
@@ -209,6 +218,10 @@ def test_unversioned_checkout_probes_and_caches_its_own_schema(
     ("method", "params"),
     [
         ("turn/start", {"input": [], "startIfIdle": True}),
+        (
+            "thread/compact/start",
+            {"threadId": "thread-1", "source": "automaticContextManagement"},
+        ),
     ],
 )
 def test_context_management_contracts_reject_older_runtimes(
@@ -235,10 +248,27 @@ def test_false_start_if_idle_preserves_older_runtime_default(
     assert requests == [("turn/start", params)]
 
 
+def test_manual_compact_source_preserves_older_runtime_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, requests = _initialized_client(monkeypatch, {"userAgent": "codex-cli/0.151.0"})
+    client._checkout_capabilities = None
+    params = {"threadId": "thread-1", "source": "manual"}
+
+    client.request("thread/compact/start", params, response_model=InitializeResponse)
+
+    assert requests == [("thread/compact/start", params)]
+
+
 @pytest.mark.parametrize(
     ("method", "params", "supported"),
     [
         ("turn/start", {"input": [], "startIfIdle": True}, {"startIfIdle"}),
+        (
+            "thread/compact/start",
+            {"threadId": "thread-1", "source": "automaticContextManagement"},
+            {"source"},
+        ),
     ],
 )
 def test_context_management_contracts_use_schema_even_for_versioned_runtime(

@@ -343,7 +343,8 @@ class CodexClient:
             "thread/fork": ("excludeTurns",),
         }
         schema_fields = {
-            "turn/start": ("startIfIdle",),
+            "turn/start": {"startIfIdle": True},
+            "thread/compact/start": {"source": "automaticContextManagement"},
         }
         supplied_fields = [
             field
@@ -351,7 +352,9 @@ class CodexClient:
             if (params or {}).get(field) is not None
         ]
         required_schema_fields = {
-            field for field in schema_fields.get(method, ()) if (params or {}).get(field) is True
+            field
+            for field, value in schema_fields.get(method, {}).items()
+            if (params or {}).get(field) == value
         }
         if supplied_fields or required_schema_fields:
             try:

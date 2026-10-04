@@ -51,6 +51,7 @@ class CheckoutCapabilities:
                 result = {}
                 for method, name in (
                     ("turn/start", "TurnStartParams"),
+                    ("thread/compact/start", "ThreadCompactStartParams"),
                     ("thread/resume", "ThreadResumeParams"),
                     ("thread/fork", "ThreadForkParams"),
                 ):
