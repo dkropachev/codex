@@ -5,5 +5,6 @@ mod account_pool_auth_refresh;
 mod account_pool_selection;
 mod auth_refresh;
 mod device_code_login;
+mod login_proxy_fallback;
 mod login_server_e2e;
 mod logout;

@@ -175,12 +175,11 @@ pub fn prepare_local_sandbox_command(
                     environment_id: None,
                     network: None,
                     sandbox_policy_cwd: &sandbox_policy_cwd,
-                    codex_linux_sandbox_exe: runtime
+                    sandbox_exe: runtime
                         .linux_sandbox_executable
                         .map(AbsolutePathBuf::as_path),
                     use_legacy_landlock: runtime.use_legacy_landlock,
                     windows_sandbox_level: runtime.windows_sandbox_level,
-                    windows_sandbox_private_desktop: runtime.windows_sandbox_private_desktop,
                 },
                 workspace_roots,
                 windows_sandbox_proxy_settings_mode: WindowsSandboxProxySettingsMode::Preserve,
@@ -192,6 +191,11 @@ pub fn prepare_local_sandbox_command(
             Err(SandboxTransformError::MissingLinuxSandboxExecutable) => {
                 return Ok(LocalSandboxPreparation::Unavailable(
                     LocalSandboxUnavailableReason::MissingLinuxSandboxExecutable,
+                ));
+            }
+            Err(SandboxTransformError::WindowsMxcPreparation(_)) => {
+                return Ok(LocalSandboxPreparation::Unavailable(
+                    LocalSandboxUnavailableReason::PlatformPreparation,
                 ));
             }
             Err(

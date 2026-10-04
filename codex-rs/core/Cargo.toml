@@ -69,6 +69,7 @@ codex-sandboxing = { workspace = true }
 codex-skills = { workspace = true }
 codex-skills-extension = { workspace = true }
 codex-state = { workspace = true }
+codex-agent-message-board-extension = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-thread-store = { workspace = true }
 codex-tools = { workspace = true }
@@ -186,6 +187,4 @@ zstd = { workspace = true }
 ignored = ["openssl-sys"]
 ignored-paths = [
     "tests/remote_env_windows/*.rs",
-    "tests/suite/account_pool__routing.rs",
-    "tests/suite/model_router.rs",
 ]

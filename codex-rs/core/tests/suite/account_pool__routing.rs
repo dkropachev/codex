@@ -12,8 +12,15 @@ use codex_app_server_protocol::AuthMode;
 use codex_config::config_toml::AccountPoolDefinitionToml;
 use codex_config::config_toml::AccountPoolPolicyToml;
 use codex_config::config_toml::AccountPoolToml;
+use codex_config::config_toml::ModelRouterCandidateToml;
+use codex_config::config_toml::ModelRouterDiscoveryToml;
+use codex_config::config_toml::ModelRouterModelRuleToml;
+use codex_config::config_toml::ModelRouterModelRuleTypeToml;
+use codex_config::config_toml::ModelRouterModelSelectorToml;
+use codex_config::config_toml::ModelRouterModelsToml;
+use codex_config::config_toml::ModelRouterToml;
+use codex_core::TurnInputRequest;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::WebSocketConnectionConfig;
@@ -247,7 +254,10 @@ async fn account_pool_websocket_failover_reconnects_with_next_member() -> Result
 
     let work_retry = connections[0][2].body_json();
     assert_eq!(work_retry["type"].as_str(), Some("response.create"));
-    assert_eq!(work_retry.get("previous_response_id"), None);
+    assert_eq!(
+        work_retry["previous_response_id"].as_str(),
+        Some("resp-work")
+    );
     assert!(work_retry.to_string().contains("second websocket turn"));
 
     let personal_retry = connections[1][0].body_json();
@@ -347,6 +357,90 @@ async fn usage_limit_without_account_pool_surfaces_original_error() -> Result<()
     wait_for_turn_complete(&codex).await;
 
     assert!(error.to_lowercase().contains("usage limit"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_router_uses_the_selected_account_pool() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    let responses = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-routed-pool"),
+            ev_completed("resp-routed-pool"),
+        ]),
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_config_auth_manager()
+        .with_pre_build_hook(|codex_home| {
+            write_chatgpt_auth(codex_home, "work-pro", "work@example.com");
+            write_chatgpt_auth(codex_home, "personal-pro", "personal@example.com");
+        })
+        .with_config(|config| {
+            config.model = Some("gpt-5.4".to_string());
+            config.account_pool = Some(AccountPoolToml {
+                enabled: true,
+                default_pool: Some("work".to_string()),
+                pools: [
+                    (
+                        "work".to_string(),
+                        AccountPoolDefinitionToml {
+                            provider: "openai".to_string(),
+                            policy: AccountPoolPolicyToml::Drain,
+                            accounts: vec!["work-pro".to_string()],
+                        },
+                    ),
+                    (
+                        "personal".to_string(),
+                        AccountPoolDefinitionToml {
+                            provider: "openai".to_string(),
+                            policy: AccountPoolPolicyToml::Drain,
+                            accounts: vec!["personal-pro".to_string()],
+                        },
+                    ),
+                ]
+                .into(),
+            });
+            config.model_router = Some(ModelRouterToml {
+                enabled: true,
+                discovery: Some(ModelRouterDiscoveryToml::Manual),
+                candidates: vec![ModelRouterCandidateToml {
+                    model: Some("gpt-5.2".to_string()),
+                    account_pool: Some("personal".to_string()),
+                    intelligence_score: Some(1.0),
+                    success_rate: Some(1.0),
+                    median_latency_ms: Some(1),
+                    ..Default::default()
+                }],
+                models: Some(ModelRouterModelsToml {
+                    rules: vec![ModelRouterModelRuleToml {
+                        id: Some("force-routed-account-pool".to_string()),
+                        rule_type: ModelRouterModelRuleTypeToml::Require,
+                        tasks: vec!["chat.codex".to_string()],
+                        except_tasks: Vec::new(),
+                        models: vec![ModelRouterModelSelectorToml {
+                            provider: None,
+                            model: Some("gpt-5.2".to_string()),
+                        }],
+                    }],
+                }),
+                ..Default::default()
+            });
+        });
+    let test = builder.build(&server).await?;
+
+    submit_prompt(&test.codex, "route through the personal account pool").await?;
+    wait_for_turn_complete(&test.codex).await;
+
+    let request = responses.single_request();
+    assert_eq!(
+        request.header("ChatGPT-Account-ID").as_deref(),
+        Some("personal-pro")
+    );
+    assert_eq!(request.body_json()["model"].as_str(), Some("gpt-5.2"));
 
     Ok(())
 }
@@ -532,16 +626,10 @@ fn ev_completed_with_cached_tokens(id: &str) -> serde_json::Value {
 
 async fn submit_prompt(codex: &codex_core::CodexThread, text: &str) -> Result<()> {
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: text.to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
     Ok(())
 }

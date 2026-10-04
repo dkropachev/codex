@@ -2,6 +2,10 @@
 #[path = "account_pool__live.rs"]
 mod account_pool_live;
 #[cfg(unix)]
+mod daemon_compatibility;
+#[cfg(unix)]
+mod directory_trust;
+#[cfg(unix)]
 mod focus_palette;
 #[path = "mcp__live.rs"]
 mod mcp_live;
@@ -10,6 +14,8 @@ mod plugins_live;
 #[cfg(unix)]
 mod reconnect;
 mod resize_reflow;
+#[cfg(unix)]
+mod screen_reader;
 #[path = "skills__live.rs"]
 mod skills_live;
 mod status_indicator;

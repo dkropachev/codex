@@ -66,7 +66,7 @@ async fn workflow_slash_enters_mode_and_submits_mocked_ai_turn() -> Result<()> {
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("gpt-5.6-terra default")
+        contents.contains("GPT-5.6-Terra default")
     })
     .await?;
 

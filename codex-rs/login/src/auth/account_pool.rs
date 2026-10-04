@@ -12,6 +12,7 @@ use codex_protocol::account::PlanType;
 use serde_json::Value;
 
 use crate::CodexAuth;
+use crate::default_client::ClientRedirectPolicy;
 use crate::default_client::create_client_for_route_async;
 use crate::outbound_proxy::AuthRouteConfig;
 
@@ -26,6 +27,7 @@ use super::account_pool_selection::DEFAULT_ACCOUNT_POOL_AFFINITY_KEY;
 use super::manager::AuthConfig;
 use super::manager::AuthManager;
 use super::manager::RefreshTokenError;
+use super::manager::UnauthorizedRecovery;
 
 const USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const ACTIVE_AFFINITY_PENALTY: i64 = 3;
@@ -239,6 +241,31 @@ impl AccountPoolManager {
         };
         pool.mark_exhausted(&selection.account_id, bucket, error);
         pool.has_available_member(bucket)
+    }
+
+    pub fn unauthorized_recovery_for_selection(
+        &self,
+        selection: &AccountPoolAuthSelection,
+    ) -> Option<UnauthorizedRecovery> {
+        let pool = self.pools.get(&selection.pool_id)?;
+        let member = pool.member(&selection.account_id)?;
+        Some(member.manager.unauthorized_recovery())
+    }
+
+    pub fn unauthorized_recovery_for_auth(&self, auth: &CodexAuth) -> Option<UnauthorizedRecovery> {
+        let account_id = auth.get_account_id()?;
+        self.pools
+            .values()
+            .find_map(|pool| pool.member(&account_id))
+            .map(|member| member.manager.unauthorized_recovery())
+    }
+
+    pub async fn auth_for_account_id(&self, account_id: &str) -> Option<CodexAuth> {
+        let member = self
+            .pools
+            .values()
+            .find_map(|pool| pool.member(account_id))?;
+        member_auth(account_id, &member.manager).await
     }
 
     pub fn record_cache_hint(
@@ -1037,6 +1064,7 @@ async fn fetch_usage_remaining(
         auth_route_config.http_client_factory().clone(),
         url.clone(),
         ClientRouteClass::Api,
+        ClientRedirectPolicy::Default,
     )
     .await
     .map_err(|err| {

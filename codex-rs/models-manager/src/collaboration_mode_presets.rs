@@ -1,6 +1,5 @@
-use codex_collaboration_mode_templates::DEFAULT as COLLABORATION_MODE_DEFAULT;
-use codex_collaboration_mode_templates::PLAN as COLLABORATION_MODE_PLAN;
 use codex_collaboration_mode_templates::WORKFLOW as COLLABORATION_MODE_WORKFLOW;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
@@ -12,8 +11,13 @@ const KNOWN_MODE_NAMES_TEMPLATE_KEY: &str = "KNOWN_MODE_NAMES";
 const REQUEST_USER_INPUT_AVAILABILITY_TEMPLATE_KEY: &str = "REQUEST_USER_INPUT_AVAILABILITY";
 const ASKING_QUESTIONS_GUIDANCE_TEMPLATE_KEY: &str = "ASKING_QUESTIONS_GUIDANCE";
 static COLLABORATION_MODE_DEFAULT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    Template::parse(COLLABORATION_MODE_DEFAULT)
-        .unwrap_or_else(|err| panic!("collaboration mode default template must parse: {err}"))
+    Template::parse(
+        ResolvedModelMessages::bundled()
+            .collaboration_modes()
+            .default
+            .text(),
+    )
+    .unwrap_or_else(|err| panic!("collaboration mode default template must parse: {err}"))
 });
 
 /// Feature flags that control collaboration-mode preset behavior.
@@ -42,7 +46,13 @@ fn plan_preset() -> CollaborationModeMask {
         mode: Some(ModeKind::Plan),
         model: None,
         reasoning_effort: Some(Some(ReasoningEffort::Medium)),
-        developer_instructions: Some(Some(COLLABORATION_MODE_PLAN.to_string())),
+        developer_instructions: Some(Some(
+            ResolvedModelMessages::bundled()
+                .collaboration_modes()
+                .plan
+                .text()
+                .to_string(),
+        )),
     }
 }
 

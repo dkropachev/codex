@@ -258,7 +258,6 @@ use codex_app_server_protocol::ThreadRealtimeStopResponse;
 use codex_app_server_protocol::ThreadResumeInitialTurnsPageParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
-use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSearchOccurrence;
 use codex_app_server_protocol::ThreadSearchOccurrencesParams;
 use codex_app_server_protocol::ThreadSearchOccurrencesResponse;
@@ -552,6 +551,7 @@ mod plugins;
 mod process_exec_processor;
 mod projects;
 mod remote_control_processor;
+mod rollout;
 mod search;
 mod thread_attachments;
 mod thread_enrichment;
@@ -702,7 +702,6 @@ use self::thread_resume_redaction::*;
 use self::thread_summary::*;
 
 pub(crate) use self::thread_lifecycle::populate_thread_turns_from_history;
-pub(crate) use self::thread_processor::thread_from_stored_thread;
 #[cfg(test)]
 pub(crate) use self::thread_summary::read_summary_from_rollout;
 #[cfg(test)]

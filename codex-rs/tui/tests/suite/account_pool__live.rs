@@ -53,7 +53,7 @@ async fn account_pool_status_renders_in_live_tui() -> Result<()> {
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 100, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("gpt-5.6-terra default")
+        contents.contains("GPT-5.6-Terra default")
     })
     .await?;
 

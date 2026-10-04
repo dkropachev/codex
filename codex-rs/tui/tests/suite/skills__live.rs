@@ -56,7 +56,7 @@ async fn skill_mention_submits_skill_instructions() -> Result<()> {
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("gpt-5.6-terra default")
+        contents.contains("GPT-5.6-Terra default")
     })
     .await?;
 
@@ -160,7 +160,7 @@ async fn skill_toggle_enables_disabled_skill_and_preserves_draft() -> Result<()>
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("gpt-5.6-terra default")
+        contents.contains("GPT-5.6-Terra default")
     })
     .await?;
     writer.send(b"$".to_vec()).await?;
@@ -177,7 +177,7 @@ async fn skill_toggle_enables_disabled_skill_and_preserves_draft() -> Result<()>
         &mut output_rx,
         &mut screen,
         "cleared skill probe",
-        |contents| contents.contains("gpt-5.6-terra default") && !contents.contains('$'),
+        |contents| contents.contains("GPT-5.6-Terra default") && !contents.contains('$'),
     )
     .await?;
 
@@ -210,7 +210,10 @@ async fn skill_toggle_enables_disabled_skill_and_preserves_draft() -> Result<()>
         &mut output_rx,
         &mut screen,
         "filtered disabled skill",
-        |contents| contents.contains("> disabled") && contents.contains("[ ] disabled-scout"),
+        |contents| {
+            contents.lines().any(|line| line.trim() == "disabled")
+                && contents.contains("› [ ] disabled-scout")
+        },
     )
     .await?;
     writer.send(b" ".to_vec()).await?;

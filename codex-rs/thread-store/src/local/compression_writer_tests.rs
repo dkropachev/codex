@@ -82,6 +82,7 @@ async fn compress(home: &Path) -> TestResult<()> {
     }
     codex_rollout::spawn_rollout_compression_worker(
         home.to_path_buf(),
+        codex_rollout::RolloutCompressionTrigger::Startup,
         codex_rollout::RolloutCompressionMode::Standalone,
     );
     // The marker proves startup; the maintenance lock proves every blocking job finished.

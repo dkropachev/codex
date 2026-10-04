@@ -89,7 +89,11 @@ fn unavailable_and_platform_selections_fail_closed() {
     let root = AbsolutePathBuf::current_dir().expect("current directory");
     let unavailable_sandbox = match get_platform_sandbox(/*windows_sandbox_enabled*/ true) {
         Some(SandboxType::LinuxSeccomp) => SandboxType::MacosSeatbelt,
-        Some(SandboxType::MacosSeatbelt | SandboxType::WindowsRestrictedToken)
+        Some(
+            SandboxType::MacosSeatbelt
+            | SandboxType::WindowsRestrictedToken
+            | SandboxType::WindowsMxc,
+        )
         | Some(SandboxType::None)
         | None => SandboxType::LinuxSeccomp,
     };

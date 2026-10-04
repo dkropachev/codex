@@ -55,6 +55,7 @@ fn selection_view_params_with_copy(
         Some(mask) => {
             let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::FollowTranscript);
                 tx.send(AppEvent::SubmitUserMessageWithMode {
                     text: user_text.clone(),
                     collaboration_mode: mask.clone(),
@@ -129,7 +130,7 @@ fn selection_view_params_with_copy(
                 ..Default::default()
             },
         ],
-        ..Default::default()
+        ..SelectionViewParams::picker()
     }
 }
 

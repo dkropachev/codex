@@ -13,6 +13,7 @@ use core_test_support::responses;
 use tempfile::tempdir;
 use tokio::sync::broadcast;
 use wiremock::MockServer;
+use wiremock::matchers::body_string_contains;
 
 const MCP_ELICITATION_SERVER_PY: &str = r#"
 import json
@@ -169,24 +170,19 @@ async fn mcp_startup_warning_interaction_works_in_live_tui() -> Result<()> {
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("gpt-5.6-terra default")
+        contents.contains("GPT-5.6-Terra default")
     })
     .await?;
-    wait_for_screen(
-        &mut output_rx,
-        &mut screen,
-        "MCP startup warning summary",
-        |contents| {
-            contents.contains("startup issues (1 MCP)") || contents.contains("MCP startup issue")
-        },
-    )
+    wait_for_screen(&mut output_rx, &mut screen, "warning footer", |contents| {
+        contents.contains("f2 to view")
+    })
     .await?;
-    writer.send(vec![0x14]).await?;
+    writer.send(b"\x1bOQ".to_vec()).await?;
     wait_for_screen(
         &mut output_rx,
         &mut screen,
         "MCP startup warning details",
-        |contents| contents.contains("MCP startup incomplete") && contents.contains("broken"),
+        |contents| contents.contains("MCP client for `broken` failed to start"),
     )
     .await?;
 
@@ -226,7 +222,7 @@ async fn mcp_elicitation_form_submission_works_in_live_tui() -> Result<()> {
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("gpt-5.6-terra default")
+        contents.contains("GPT-5.6-Terra default")
     })
     .await?;
     wait_for_screen(
@@ -237,8 +233,22 @@ async fn mcp_elicitation_form_submission_works_in_live_tui() -> Result<()> {
     )
     .await?;
     tokio::time::sleep(Duration::from_secs(/*secs*/ 1)).await;
-    let function_call_mock = responses::mount_sse_once(
+    // Automatic title generation must not consume either user-turn response.
+    let _title_mock = responses::mount_sse_once_match(
         &server,
+        body_string_contains(r#"\"thread_source\":\"system\""#),
+        responses::sse(vec![
+            responses::ev_assistant_message(
+                "title-mcp-elicit",
+                r#"{"title":"MCP elicitation live test"}"#,
+            ),
+            responses::ev_completed("title-response-mcp-elicit"),
+        ]),
+    )
+    .await;
+    let function_call_mock = responses::mount_sse_once_match(
+        &server,
+        body_string_contains(r#"\"thread_source\":\"user\""#),
         responses::sse(vec![
             responses::ev_response_created("resp-mcp-elicit-1"),
             responses::ev_function_call_with_namespace(
@@ -251,8 +261,9 @@ async fn mcp_elicitation_form_submission_works_in_live_tui() -> Result<()> {
         ]),
     )
     .await;
-    let completion_mock = responses::mount_sse_once(
+    let completion_mock = responses::mount_sse_once_match(
         &server,
+        body_string_contains(r#"\"thread_source\":\"user\""#),
         responses::sse(vec![
             responses::ev_response_created("resp-mcp-elicit-2"),
             responses::ev_assistant_message("msg-mcp-elicit", "mcp elicitation e2e sentinel"),
@@ -380,6 +391,7 @@ fn write_config(
 model_provider = "mock_provider"
 suppress_unstable_features_warning = true
 approval_policy = "on-request"
+sandbox_mode = "danger-full-access"
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

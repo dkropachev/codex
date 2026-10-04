@@ -1,0 +1,20 @@
+---
+source: tui/src/app/tests.rs
+expression: transcript
+---
+  /status - show current session configuration
+  /permissions - choose what Codex is allowed to do
+  /model - choose what model and reasoning effort to use
+
+
+› retained prompt
+
+
+
+  [Image #1]
+  [Image #2]
+
+› selected prompt [Image #1]
+
+
+• Conversation reverted to this point. File changes are unchanged.

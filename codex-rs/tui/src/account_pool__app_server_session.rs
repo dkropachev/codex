@@ -35,6 +35,7 @@ fn account_ui_state_from_response_preserves_chatgpt_pool_details() {
             ],
         }),
         requires_openai_auth: true,
+        workspace_routing: None,
     };
 
     let account_ui = account_ui_state_from_response(&response);
@@ -93,6 +94,7 @@ fn account_ui_state_from_response_uses_pool_member_metadata_without_active_assig
             ],
         }),
         requires_openai_auth: true,
+        workspace_routing: None,
     };
 
     let account_ui = account_ui_state_from_response(&response);

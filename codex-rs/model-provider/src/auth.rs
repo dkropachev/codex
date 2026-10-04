@@ -248,14 +248,17 @@ pub(crate) async fn resolve_provider_auth_for_scope(
         return resolve_provider_auth(auth, provider).map(ResolvedProviderAuth::new);
     };
 
+    let Some(auth) = auth else {
+        return resolve_provider_auth(/*auth*/ None, provider).map(ResolvedProviderAuth::new);
+    };
     match auth_manager
-        .agent_identity_auth(agent_identity_policy, session_source)
+        .agent_identity_auth_for_auth(auth, agent_identity_policy, session_source)
         .await
     {
         Ok(Some(agent_identity_auth)) => Ok(ResolvedProviderAuth::for_agent_identity(
             agent_identity_auth,
         )),
-        Ok(None) => resolve_provider_auth(auth, provider).map(ResolvedProviderAuth::new),
+        Ok(None) => resolve_provider_auth(Some(auth), provider).map(ResolvedProviderAuth::new),
         Err(err) => {
             if let Some(AgentIdentityAuthError::BootstrapUnavailable {
                 operation,
@@ -273,7 +276,7 @@ pub(crate) async fn resolve_provider_auth_for_scope(
                     newly_engaged,
                     "agent identity bootstrap unavailable; using ChatGPT bearer auth for this session"
                 );
-                resolve_provider_auth(auth, provider).map(ResolvedProviderAuth::new)
+                resolve_provider_auth(Some(auth), provider).map(ResolvedProviderAuth::new)
             } else {
                 Err(err.into())
             }

@@ -128,6 +128,7 @@ accounts = ["work-pro", "personal-pro"]
     let received = read_account_response(codex_home.path()).await?;
 
     let expected = GetAccountResponse {
+        workspace_routing: None,
         account: Some(Account::ChatgptPool {
             id: "codex-pro".to_string(),
             active_account_id: Some("work-pro".to_string()),
@@ -207,6 +208,7 @@ accounts = ["work-pro", "api-key-pro", "missing-pro"]
     let received = read_account_response(codex_home.path()).await?;
 
     let expected = GetAccountResponse {
+        workspace_routing: None,
         account: Some(Account::ChatgptPool {
             id: "codex-pro".to_string(),
             active_account_id: Some("work-pro".to_string()),
@@ -331,6 +333,7 @@ accounts = ["work-pro", "personal-pro"]
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let expected_account = GetAccountResponse {
+        workspace_routing: None,
         account: Some(Account::ChatgptPool {
             id: "codex-pro".to_string(),
             active_account_id: Some("work-pro".to_string()),
@@ -497,6 +500,7 @@ accounts = ["work-pro", "personal-pro"]
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let expected_account = GetAccountResponse {
+        workspace_routing: None,
         account: Some(Account::ChatgptPool {
             id: "codex-pro".to_string(),
             active_account_id: Some("work-pro".to_string()),

@@ -956,6 +956,7 @@ mod tests {
                 && let ServerRequest::McpServerElicitationRequest { params, .. } = &mut request
             {
                 params.request = McpServerElicitationRequest::UserVerification {
+                    meta: None,
                     title: "Verify".to_string(),
                     description: "Approve deployment".to_string(),
                     challenge: "AQID".to_string(),
