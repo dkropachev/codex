@@ -223,6 +223,18 @@ def test_context_management_contracts_reject_older_runtimes(
     assert requests == []
 
 
+def test_false_start_if_idle_preserves_older_runtime_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, requests = _initialized_client(monkeypatch, {"userAgent": "codex-cli/0.151.0"})
+    client._checkout_capabilities = None
+    params = {"input": [], "startIfIdle": False}
+
+    client.request("turn/start", params, response_model=InitializeResponse)
+
+    assert requests == [("turn/start", params)]
+
+
 @pytest.mark.parametrize(
     ("method", "params", "supported"),
     [

@@ -351,9 +351,7 @@ class CodexClient:
             if (params or {}).get(field) is not None
         ]
         required_schema_fields = {
-            field
-            for field in schema_fields.get(method, ())
-            if (params or {}).get(field) is not None
+            field for field in schema_fields.get(method, ()) if (params or {}).get(field) is True
         }
         if supplied_fields or required_schema_fields:
             try:
