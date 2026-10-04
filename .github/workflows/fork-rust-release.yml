@@ -384,6 +384,8 @@ jobs:
             args+=(--bwrap-bin "${release_dir}/bwrap")
           fi
           python3 scripts/build_codex_package.py "${args[@]}"
+          cp "${release_dir}/codex-code-mode-host" \
+            "${archive_dir}/codex-code-mode-host-${TARGET}"
           python3 - "$package_dir" "$archive" <<'PY'
           import gzip
           import pathlib
@@ -461,16 +463,18 @@ jobs:
           fi
           git diff --exit-code -- Cargo.lock
 
-      - name: Upload package directly to the release
+      - name: Upload package and code-mode host to the release
         if: ${{ needs.validate.outputs.mode != 'dry-run' }}
         env:
-          ASSET_PATH: ${{ github.workspace }}/dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz
+          PACKAGE_ASSET_PATH: ${{ github.workspace }}/dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz
+          HOST_ASSET_PATH: ${{ github.workspace }}/dist/${{ matrix.target }}/codex-code-mode-host-${{ matrix.target }}
           EXPECTED_COMMIT: ${{ needs.validate.outputs.tag_commit }}
           GH_TOKEN: ${{ github.token }}
         shell: bash
         working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
+          for ASSET_PATH in "$PACKAGE_ASSET_PATH" "$HOST_ASSET_PATH"; do
           remote_commit="$(git ls-remote origin "refs/tags/${RELEASE_TAG}^{}" | awk '{print $1}')"
           if [[ -z "$remote_commit" ]]; then
             remote_commit="$(git ls-remote origin "refs/tags/${RELEASE_TAG}" | awk '{print $1}')"
@@ -498,7 +502,7 @@ jobs:
             remote_state="$(jq -r '.state // ""' <<<"$existing")"
             if [[ "$remote_digest" == "sha256:${digest}" ]]; then
               echo "$asset already has the expected digest"
-              exit 0
+              continue
             fi
             [[ "$remote_state" == "starter" || "$REPLACE_EXISTING" == "true" ]] || {
               echo "$asset exists with digest $remote_digest, expected sha256:$digest" >&2
@@ -551,11 +555,14 @@ jobs:
                 --json assets | \
                 jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .digest // ""'
             )"
-            [[ "$remote_digest" == "sha256:${digest}" ]] && exit 0
+            [[ "$remote_digest" == "sha256:${digest}" ]] && break
             sleep $((attempt * 5))
           done
-          echo "GitHub recorded $remote_digest for $asset, expected sha256:$digest" >&2
-          exit 1
+          [[ "$remote_digest" == "sha256:${digest}" ]] || {
+            echo "GitHub recorded $remote_digest for $asset, expected sha256:$digest" >&2
+            exit 1
+          }
+          done
 
   finalize:
     needs:
@@ -605,13 +612,14 @@ jobs:
             x86_64-apple-darwin \
             aarch64-unknown-linux-musl \
             x86_64-unknown-linux-musl; do
-            asset="codex-package-${target}.tar.gz"
-            digest="$(jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .digest // ""' <<<"$release")"
-            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-              echo "GitHub did not record a SHA-256 digest for $asset" >&2
-              exit 1
-            }
-            printf '%s  %s\n' "${digest#sha256:}" "$asset" >>dist/codex-package_SHA256SUMS
+            for asset in "codex-package-${target}.tar.gz" "codex-code-mode-host-${target}"; do
+              digest="$(jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .digest // ""' <<<"$release")"
+              [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+                echo "GitHub did not record a SHA-256 digest for $asset" >&2
+                exit 1
+              }
+              printf '%s  %s\n' "${digest#sha256:}" "$asset" >>dist/codex-package_SHA256SUMS
+            done
           done
           cat dist/codex-package_SHA256SUMS
 
@@ -713,6 +721,10 @@ jobs:
             codex-package-x86_64-apple-darwin.tar.gz
             codex-package-aarch64-unknown-linux-musl.tar.gz
             codex-package-x86_64-unknown-linux-musl.tar.gz
+            codex-code-mode-host-aarch64-apple-darwin
+            codex-code-mode-host-x86_64-apple-darwin
+            codex-code-mode-host-aarch64-unknown-linux-musl
+            codex-code-mode-host-x86_64-unknown-linux-musl
             codex-package_SHA256SUMS
           )
           if [[ "$MODE" == "release" ]]; then
@@ -756,6 +768,18 @@ jobs:
             }
           done
           (cd "$verify_dir" && sha256sum --check codex-package_SHA256SUMS)
+          for target in \
+            aarch64-apple-darwin \
+            x86_64-apple-darwin \
+            aarch64-unknown-linux-musl \
+            x86_64-unknown-linux-musl; do
+            package_host_digest="$(tar -xOzf "${verify_dir}/codex-package-${target}.tar.gz" bin/codex-code-mode-host | sha256sum | awk '{print $1}')"
+            standalone_host_digest="$(sha256sum "${verify_dir}/codex-code-mode-host-${target}" | awk '{print $1}')"
+            [[ "$package_host_digest" == "$standalone_host_digest" ]] || {
+              echo "Packaged and standalone code-mode hosts differ for $target" >&2
+              exit 1
+            }
+          done
           if [[ "$MODE" == "release" ]]; then
             cmp scripts/install/install.sh "${verify_dir}/install.sh"
           fi

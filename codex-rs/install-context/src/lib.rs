@@ -226,12 +226,13 @@ impl InstallContext {
     }
 
     pub fn code_mode_host_program(&self) -> PathBuf {
-        // prefer the one packed under codex-resources
+        let adjacent =
+            self.code_mode_host_program_from_exe(std::env::current_exe().ok().as_deref());
+        if adjacent.is_file() {
+            return adjacent;
+        }
         self.bundled_resource(CODE_MODE_HOST_EXECUTABLE_NAME)
-            .map_or_else(
-                || self.code_mode_host_program_from_exe(std::env::current_exe().ok().as_deref()),
-                AbsolutePathBuf::into_path_buf,
-            )
+            .map_or(adjacent, AbsolutePathBuf::into_path_buf)
     }
 
     fn code_mode_host_program_from_exe(&self, current_exe: Option<&Path>) -> PathBuf {
@@ -450,7 +451,7 @@ mod tests {
     const TEST_RESOURCE_NAME: &str = "codex-test-helper";
 
     #[test]
-    fn code_mode_host_program_prefers_package_resource_over_legacy_binary() -> std::io::Result<()> {
+    fn code_mode_host_program_prefers_package_binary_over_resource() -> std::io::Result<()> {
         let package_dir = tempfile::tempdir()?;
         let bin_dir = package_dir.path().join(BIN_DIRNAME);
         let resources_dir = package_dir.path().join(RESOURCES_DIRNAME);
@@ -460,7 +461,8 @@ mod tests {
         let exe_path = bin_dir.join(if cfg!(windows) { "codex.exe" } else { "codex" });
         let resource_host = resources_dir.join(CODE_MODE_HOST_EXECUTABLE_NAME);
         fs::write(&exe_path, "")?;
-        fs::write(bin_dir.join(CODE_MODE_HOST_EXECUTABLE_NAME), "legacy host")?;
+        let package_host = bin_dir.join(CODE_MODE_HOST_EXECUTABLE_NAME);
+        fs::write(&package_host, "package host")?;
         fs::write(&resource_host, "managed host")?;
 
         let context = InstallContext::from_exe(
@@ -471,7 +473,7 @@ mod tests {
 
         assert_eq!(
             context.code_mode_host_program(),
-            AbsolutePathBuf::from_absolute_path(resource_host.canonicalize()?)?.into_path_buf()
+            AbsolutePathBuf::from_absolute_path(package_host.canonicalize()?)?.into_path_buf()
         );
         Ok(())
     }
@@ -576,7 +578,7 @@ mod tests {
         );
         assert_eq!(
             context.code_mode_host_program(),
-            canonical_resources_dir
+            canonical_release_dir
                 .join(CODE_MODE_HOST_EXECUTABLE_NAME)
                 .into_path_buf()
         );

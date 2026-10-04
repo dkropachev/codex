@@ -61,6 +61,38 @@ const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/dkropachev/codex/
 #[derive(Deserialize, Debug, Clone)]
 struct ReleaseInfo {
     tag_name: String,
+    assets: Vec<ReleaseAsset>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+struct ReleaseAsset {
+    name: String,
+    digest: Option<String>,
+}
+
+fn release_version(info: ReleaseInfo) -> anyhow::Result<String> {
+    for name in [
+        "codex-package_SHA256SUMS",
+        "codex-package-aarch64-apple-darwin.tar.gz",
+        "codex-package-x86_64-apple-darwin.tar.gz",
+        "codex-package-aarch64-unknown-linux-musl.tar.gz",
+        "codex-package-x86_64-unknown-linux-musl.tar.gz",
+        "codex-code-mode-host-aarch64-apple-darwin",
+        "codex-code-mode-host-x86_64-apple-darwin",
+        "codex-code-mode-host-aarch64-unknown-linux-musl",
+        "codex-code-mode-host-x86_64-unknown-linux-musl",
+    ] {
+        anyhow::ensure!(
+            info.assets.iter().any(|asset| asset.name == name
+                && asset.digest.as_deref().is_some_and(|digest| {
+                    digest.len() == 71
+                        && digest.starts_with("sha256:")
+                        && digest[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
+                })),
+            "latest release is missing a verified {name} asset"
+        );
+    }
+    extract_version_from_latest_tag(&info.tag_name)
 }
 
 async fn check_for_update(
@@ -93,9 +125,7 @@ async fn check_for_update(
 async fn fetch_latest_github_release_version(
     client_pool: &RouteAwareClientPool,
 ) -> anyhow::Result<String> {
-    let ReleaseInfo {
-        tag_name: latest_tag_name,
-    } = client_pool
+    let info = client_pool
         .get(LATEST_RELEASE_URL)
         .headers(default_headers())
         .send()
@@ -103,7 +133,7 @@ async fn fetch_latest_github_release_version(
         .error_for_status()?
         .json::<ReleaseInfo>()
         .await?;
-    extract_version_from_latest_tag(&latest_tag_name)
+    release_version(info)
 }
 
 /// Returns the latest version to show in a popup, if it should be shown.

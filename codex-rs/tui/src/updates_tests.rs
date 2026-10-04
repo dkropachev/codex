@@ -38,6 +38,41 @@ fn version_info(latest_version: &str, dismissed_version: Option<&str>) -> Versio
     }
 }
 
+#[test]
+fn update_requires_verified_release_assets() {
+    let assets = [
+        "codex-package_SHA256SUMS",
+        "codex-package-aarch64-apple-darwin.tar.gz",
+        "codex-package-x86_64-apple-darwin.tar.gz",
+        "codex-package-aarch64-unknown-linux-musl.tar.gz",
+        "codex-package-x86_64-unknown-linux-musl.tar.gz",
+        "codex-code-mode-host-aarch64-apple-darwin",
+        "codex-code-mode-host-x86_64-apple-darwin",
+        "codex-code-mode-host-aarch64-unknown-linux-musl",
+        "codex-code-mode-host-x86_64-unknown-linux-musl",
+    ]
+    .into_iter()
+    .map(|name| ReleaseAsset {
+        name: name.to_string(),
+        digest: Some(format!("sha256:{}", "a".repeat(64))),
+    })
+    .collect::<Vec<_>>();
+    let release = ReleaseInfo {
+        tag_name: "rust-v0.157.0".to_string(),
+        assets: assets.clone(),
+    };
+    assert_eq!(
+        release_version(release).expect("complete release"),
+        "0.157.0"
+    );
+
+    let incomplete = ReleaseInfo {
+        tag_name: "rust-v0.157.0".to_string(),
+        assets: assets[..assets.len() - 1].to_vec(),
+    };
+    assert!(release_version(incomplete).is_err());
+}
+
 #[tokio::test]
 async fn cached_upgrade_version_is_returned_without_refreshing_stale_cache() {
     let codex_home = tempdir().expect("temp codex home");
