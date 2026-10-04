@@ -11,7 +11,24 @@ use crate::state::TurnState;
 pub(super) async fn reserve(
     session: &Arc<Session>,
 ) -> Result<Arc<tokio::sync::Mutex<TurnState>>, NotSubmittedReason> {
-    reserve_with_precondition(session, ReservationPrecondition::Any).await
+    reserve_with_precondition(
+        session,
+        ReservationPrecondition::Any,
+        PendingMailPolicy::RejectTriggerTurn,
+    )
+    .await
+}
+
+/// Reserves the idle slot for an explicit user turn, which will consume pending mail.
+pub(super) async fn reserve_for_user_turn(
+    session: &Arc<Session>,
+) -> Result<Arc<tokio::sync::Mutex<TurnState>>, NotSubmittedReason> {
+    reserve_with_precondition(
+        session,
+        ReservationPrecondition::Any,
+        PendingMailPolicy::MergeIntoUserTurn,
+    )
+    .await
 }
 
 /// Reserves the idle slot only if no turn has started after `expected_previous_turn_id`.
@@ -22,6 +39,7 @@ pub(super) async fn reserve_after(
     reserve_with_precondition(
         session,
         ReservationPrecondition::PreviousTurn(expected_previous_turn_id),
+        PendingMailPolicy::RejectTriggerTurn,
     )
     .await
 }
@@ -31,6 +49,11 @@ enum ReservationPrecondition<'a> {
     PreviousTurn(&'a str),
 }
 
+enum PendingMailPolicy {
+    RejectTriggerTurn,
+    MergeIntoUserTurn,
+}
+
 #[expect(
     clippy::await_holding_invalid_type,
     reason = "the previous turn check and idle reservation must be atomic"
@@ -38,6 +61,7 @@ enum ReservationPrecondition<'a> {
 async fn reserve_with_precondition(
     session: &Arc<Session>,
     precondition: ReservationPrecondition<'_>,
+    pending_mail_policy: PendingMailPolicy,
 ) -> Result<Arc<tokio::sync::Mutex<TurnState>>, NotSubmittedReason> {
     let turn_state = {
         let mut active_turn = session.active_turn.lock().await;
@@ -58,7 +82,9 @@ async fn reserve_with_precondition(
         Arc::clone(&active_turn.turn_state)
     };
 
-    if session.input_queue.has_trigger_turn_mailbox_items().await {
+    if matches!(pending_mail_policy, PendingMailPolicy::RejectTriggerTurn)
+        && session.input_queue.has_trigger_turn_mailbox_items().await
+    {
         clear(session, &turn_state).await;
         let session = Arc::clone(session);
         drop(tokio::spawn(async move {

@@ -312,7 +312,10 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
-        let (pending_items, _) = self.input_queue.drain_mailbox_input_items().await;
+        let pending_items = match task_kind {
+            TaskKind::Regular => self.input_queue.drain_mailbox_input_items().await.0,
+            TaskKind::Compact => Vec::new(),
+        };
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             self.record_started_turn(&turn_context.sub_id).await;

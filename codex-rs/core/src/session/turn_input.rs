@@ -192,7 +192,7 @@ async fn start_or_steer(
                 };
                 Some(admission)
             };
-            let turn_state = match idle_turn::reserve(session).await {
+            let turn_state = match idle_turn::reserve_for_user_turn(session).await {
                 Ok(turn_state) => turn_state,
                 Err(reason) => return Ok(TurnInputSubmission::NotSubmitted { reason }),
             };

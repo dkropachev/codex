@@ -639,6 +639,63 @@ async fn realtime_input_cannot_replace_idle_turn_reservation() {
 }
 
 #[tokio::test]
+async fn explicit_user_turn_can_reserve_with_trigger_mail_pending() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let communication = InterAgentCommunication::new(
+        AgentPath::try_from("/root/worker").expect("valid agent path"),
+        AgentPath::root(),
+        Vec::new(),
+        "mail for the user turn".to_string(),
+        /*trigger_turn*/ true,
+    );
+    session
+        .input_queue
+        .enqueue_mailbox_communication(communication, Default::default())
+        .await;
+
+    let reservation = idle_turn::reserve_for_user_turn(&session)
+        .await
+        .expect("explicit user turn should accept pending trigger mail");
+    assert!(session.input_queue.has_trigger_turn_mailbox_items().await);
+    idle_turn::clear(&session, &reservation).await;
+}
+
+#[tokio::test]
+async fn compact_task_keeps_trigger_mail_arriving_after_reservation() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    idle_turn::reserve(&session)
+        .await
+        .expect("idle compact turn should reserve the thread");
+    let communication = InterAgentCommunication::new(
+        AgentPath::try_from("/root/worker").expect("valid agent path"),
+        AgentPath::root(),
+        Vec::new(),
+        "mail after compact reservation".to_string(),
+        /*trigger_turn*/ true,
+    );
+    session
+        .input_queue
+        .enqueue_mailbox_communication(communication, Default::default())
+        .await;
+    let turn_context = session
+        .new_turn_with_default_settings("compact-turn".to_string(), Default::default())
+        .await;
+    session
+        .start_task(
+            turn_context,
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Compact,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
+
+    assert!(session.input_queue.has_trigger_turn_mailbox_items().await);
+    session.abort_all_tasks(TurnAbortReason::Replaced).await;
+}
+
+#[tokio::test]
 async fn shell_command_cannot_replace_idle_turn_reservation() {
     let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
     let reserved_turn_state = idle_turn::reserve(&session)

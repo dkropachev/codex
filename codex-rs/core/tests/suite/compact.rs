@@ -14,6 +14,7 @@ use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::AgentPath;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -30,6 +31,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
@@ -1325,7 +1327,7 @@ async fn idle_only_compaction_is_atomic_and_reports_its_exact_turn_id() -> Resul
     .await;
     let test = test_codex()
         .with_config(|config| config.model_provider.name = "Local compaction test".to_string())
-        .build_with_streaming_server(&server)
+        .build_with_streaming_server_auto_env(&server)
         .await?;
     let barrier = Arc::new(Barrier::new(3));
     let submit = |codex: Arc<codex_core::CodexThread>, barrier: Arc<Barrier>| {
@@ -1386,6 +1388,72 @@ async fn idle_only_compaction_is_atomic_and_reports_its_exact_turn_id() -> Resul
     )?;
     assert_eq!(metadata["compaction"]["trigger"], "auto");
     assert_eq!(metadata["compaction"]["reason"], "context_limit");
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn idle_only_compaction_preserves_trigger_mail_for_followup_turn() -> Result<()> {
+    let (release, gate) = oneshot::channel();
+    let (server, _) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: Some(gate),
+            body: sse(vec![
+                ev_assistant_message("summary", SUMMARY_TEXT),
+                ev_completed("compact-response"),
+            ]),
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_assistant_message("reply", "I received the mail"),
+                ev_completed("mail-response"),
+            ]),
+        }],
+    ])
+    .await;
+    let test = test_codex()
+        .with_config(|config| config.model_provider.name = "Local compaction test".to_string())
+        .build_with_streaming_server_auto_env(&server)
+        .await?;
+    assert!(matches!(
+        test.codex
+            .compact_if_idle(CompactionRequest {
+                source: CompactionSource::Automatic,
+                trace: None,
+            })
+            .await?,
+        StartIfIdleSubmission::Started { .. }
+    ));
+    timeout(
+        Duration::from_secs(5),
+        server.wait_for_request_count(/*count*/ 1),
+    )
+    .await?;
+    test.codex
+        .submit(Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                AgentPath::try_from("/root/worker").expect("valid agent path"),
+                AgentPath::root(),
+                Vec::new(),
+                "mail during compaction".to_string(),
+                /*trigger_turn*/ true,
+            ),
+            start_options: Default::default(),
+        })
+        .await?;
+    release
+        .send(())
+        .expect("compaction response gate remains open");
+    for _ in 0..2 {
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 2);
+    assert!(String::from_utf8_lossy(&requests[1]).contains("mail during compaction"));
     server.shutdown().await;
     Ok(())
 }
