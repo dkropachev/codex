@@ -39,6 +39,7 @@ async fn workflow_command_shows_running_status_in_live_tui() -> Result<()> {
             r#"model = "gpt-5.6-terra"
 model_provider = "openai"
 suppress_unstable_features_warning = true
+notice.model_migrations."gpt-5.6-terra" = "gpt-6-sol"
 
 [tui]
 status_line = ["thread-id"]
@@ -276,6 +277,7 @@ async fn workflow_command_autocompletes_in_live_tui() -> Result<()> {
             r#"model = "gpt-5.6-terra"
 model_provider = "openai"
 suppress_unstable_features_warning = true
+notice.model_migrations."gpt-5.6-terra" = "gpt-6-sol"
 
 [features]
 workflows = true
