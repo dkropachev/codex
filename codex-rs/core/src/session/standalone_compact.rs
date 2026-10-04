@@ -9,6 +9,10 @@ use super::idle_turn;
 use super::session::Session;
 use crate::tasks::CompactTask;
 
+#[cfg(test)]
+#[path = "standalone_compact_tests.rs"]
+mod tests;
+
 pub(super) async fn run(session: &Arc<Session>, submission_id: String) {
     let _turn_start_guard = session.acquire_turn_start_lock().await;
     session.abort_all_tasks(TurnAbortReason::Replaced).await;

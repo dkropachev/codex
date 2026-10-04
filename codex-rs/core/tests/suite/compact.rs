@@ -36,6 +36,7 @@ use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -1416,15 +1417,16 @@ async fn idle_only_compaction_preserves_trigger_mail_for_followup_turn() -> Resu
         .with_config(|config| config.model_provider.name = "Local compaction test".to_string())
         .build_with_streaming_server_auto_env(&server)
         .await?;
-    assert!(matches!(
-        test.codex
-            .compact_if_idle(CompactionRequest {
-                source: CompactionSource::Automatic,
-                trace: None,
-            })
-            .await?,
-        StartIfIdleSubmission::Started { .. }
-    ));
+    let StartIfIdleSubmission::Started { turn_id } = test
+        .codex
+        .compact_if_idle(CompactionRequest {
+            source: CompactionSource::Automatic,
+            trace: None,
+        })
+        .await?
+    else {
+        panic!("compaction should start on an idle thread");
+    };
     timeout(
         Duration::from_secs(5),
         server.wait_for_request_count(/*count*/ 1),
@@ -1442,6 +1444,17 @@ async fn idle_only_compaction_preserves_trigger_mail_for_followup_turn() -> Resu
             start_options: Default::default(),
         })
         .await?;
+    // A reply from the same submission queue proves Core has enqueued the
+    // mail while compaction is still waiting on its model response.
+    let (reply, outcome) = oneshot::channel();
+    test.codex
+        .submit(Op::TurnSettings {
+            turn_id,
+            update: TurnSettingsUpdate::default(),
+            reply,
+        })
+        .await?;
+    timeout(Duration::from_secs(5), outcome).await??;
     release
         .send(())
         .expect("compaction response gate remains open");
