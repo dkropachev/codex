@@ -329,8 +329,9 @@ fi
 if [[ "${RUNNER_OS:-}" == "macOS" && "${GITHUB_REPOSITORY:-}" != "openai/codex" ]]; then
   # Public macOS runners have much lower process/thread limits than OpenAI's
   # macos-15-xlarge runners. The remote CI config's --jobs=800 can exhaust
-  # those limits during analysis or local test execution.
-  post_config_bazel_args+=(--jobs=80)
+  # those limits during analysis or local test execution. Keep remote build
+  # throughput while bounding the test processes that execute on the runner.
+  post_config_bazel_args+=(--jobs=80 --local_test_jobs=4)
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then

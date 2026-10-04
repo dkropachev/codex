@@ -13,6 +13,7 @@ use core_test_support::responses;
 use tempfile::tempdir;
 use tokio::sync::broadcast;
 use wiremock::MockServer;
+use wiremock::matchers::body_string_contains;
 
 const MCP_ELICITATION_SERVER_PY: &str = r#"
 import json
@@ -232,8 +233,22 @@ async fn mcp_elicitation_form_submission_works_in_live_tui() -> Result<()> {
     )
     .await?;
     tokio::time::sleep(Duration::from_secs(/*secs*/ 1)).await;
-    let function_call_mock = responses::mount_sse_once(
+    // Automatic title generation must not consume either user-turn response.
+    let _title_mock = responses::mount_sse_once_match(
         &server,
+        body_string_contains(r#"\"thread_source\":\"system\""#),
+        responses::sse(vec![
+            responses::ev_assistant_message(
+                "title-mcp-elicit",
+                r#"{"title":"MCP elicitation live test"}"#,
+            ),
+            responses::ev_completed("title-response-mcp-elicit"),
+        ]),
+    )
+    .await;
+    let function_call_mock = responses::mount_sse_once_match(
+        &server,
+        body_string_contains(r#"\"thread_source\":\"user\""#),
         responses::sse(vec![
             responses::ev_response_created("resp-mcp-elicit-1"),
             responses::ev_function_call_with_namespace(
@@ -246,8 +261,9 @@ async fn mcp_elicitation_form_submission_works_in_live_tui() -> Result<()> {
         ]),
     )
     .await;
-    let completion_mock = responses::mount_sse_once(
+    let completion_mock = responses::mount_sse_once_match(
         &server,
+        body_string_contains(r#"\"thread_source\":\"user\""#),
         responses::sse(vec![
             responses::ev_response_created("resp-mcp-elicit-2"),
             responses::ev_assistant_message("msg-mcp-elicit", "mcp elicitation e2e sentinel"),
