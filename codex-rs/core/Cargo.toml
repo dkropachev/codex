@@ -187,6 +187,4 @@ zstd = { workspace = true }
 ignored = ["openssl-sys"]
 ignored-paths = [
     "tests/remote_env_windows/*.rs",
-    "tests/suite/account_pool__routing.rs",
-    "tests/suite/model_router.rs",
 ]
