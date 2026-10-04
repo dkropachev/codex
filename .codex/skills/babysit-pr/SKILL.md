@@ -33,7 +33,7 @@ Accept any of the following:
 8. Do not post replies to human-authored review comments/threads unless the user explicitly confirms the exact response. If a human review item is non-actionable, already addressed, or not valid, surface the item and recommended response to the user instead of replying on GitHub.
 9. If the failure is likely flaky/unrelated and `retry_failed_checks` is present, rerun failed jobs with `--retry-failed-now`.
 10. If both actionable review feedback and `retry_failed_checks` are present, prioritize review feedback first; a new commit will retrigger CI, so avoid rerunning flaky checks on the old SHA unless you intentionally defer the review change.
-11. On every loop, look for newly surfaced review feedback before acting on CI failures or mergeability state. Read mergeability, merge-conflict status, and CI from the watcher snapshot.
+11. On every loop, check new watcher feedback first, then its CI, mergeability, and conflict status.
 12. After any push or rerun action, immediately return to step 1 and continue polling on the updated SHA/state.
 13. After a push, start a fresh wait in the same turn; restart on `generation_changed`, surface `ci_config_changed`, and investigate `execution_timeout` without blaming queued jobs.
 14. Repeat polling until `stop_pr_closed` appears or a user-help-required blocker is reached. A green + review-clean + mergeable PR is a progress milestone, not a reason to stop the watcher while the PR is still open.
@@ -74,11 +74,7 @@ python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr <number-or-url> --w
 
 State and completed-check timings persist below `${CODEX_HOME:-~/.codex}/state/babysit-pr/`; CI changes start a new timing cohort.
 
-## Use Watcher Output for PR Monitoring
-
-While a `--wait-for` or `--watch` command is running, consume its output instead of independently polling the PR. Do not run `gh pr view`, `gh pr checks`, `gh api`, browser requests, or another watcher process to check PR state, CI, mergeability, or reviews in parallel. The watcher snapshot already includes these fields, and unchanged wait polls are silent.
-
-After a wait returns, or after stopping a compatibility watch, use targeted GitHub reads only for details the snapshot does not contain, such as failed-job logs, a truncated review item, or the fresh state required before a GitHub mutation. Resume the watcher promptly afterward.
+While `--wait-for` or `--watch` runs, use its snapshots for PR state, CI, mergeability, and reviews; unchanged polls are silent. Do not check those through `gh pr view`, `gh pr checks`, `gh api`, a browser, or another watcher in parallel. After it yields or stops, fetch only missing details (such as failed-job logs or truncated review text) or fresh state before a GitHub mutation, then resume watching.
 
 ## CI Failure Classification
 Use `gh` commands to inspect failed runs before deciding to rerun.
@@ -142,8 +138,7 @@ review bot. When resolving, leave a comment prefixed with `[from Codex]: ` and e
 you made and which commit includes them. Don't touch review threads if other humans other than the
 user who requested babysitting have participated.
 
-Before making a GitHub mutation, fetch fresh PR state yourself after the watcher yields or stops. Do
-not query GitHub in parallel with a running watcher command.
+Before a GitHub mutation, fetch fresh PR state after the watcher yields or stops.
 
 Unless explicitly asked, do not:
 
