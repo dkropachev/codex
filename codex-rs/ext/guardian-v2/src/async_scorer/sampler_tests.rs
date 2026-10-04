@@ -111,7 +111,7 @@ fn oversized_user_messages_split_at_content_boundaries_and_partition_kinds() {
     assert!(messages.iter().all(guardian_model_context_item_is_bounded));
     assert!(messages.iter().all(|message| message.id().is_some()));
     for message in &mut messages {
-        message.set_id(None);
+        message.set_id(/*new_id*/ None);
     }
     assert_eq!(
         messages,
@@ -218,7 +218,7 @@ fn splitter_leaves_misaligned_content_item_kinds_for_cap_rejection() {
         assert_eq!(messages.len(), 1);
         assert!(messages[0].id().is_some());
         assert!(!guardian_model_context_item_is_bounded(&messages[0]));
-        messages[0].set_id(None);
+        messages[0].set_id(/*new_id*/ None);
         assert_eq!(messages, vec![message]);
     }
 }
@@ -240,7 +240,7 @@ fn splitting_preserves_an_unsplittable_empty_message() {
     let mut messages = split_oversized_user_messages(vec![message.clone()]);
     assert_eq!(messages.len(), 1);
     assert!(messages[0].id().is_some());
-    messages[0].set_id(None);
+    messages[0].set_id(/*new_id*/ None);
     assert_eq!(messages, vec![message]);
 }
 
