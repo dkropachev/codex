@@ -390,6 +390,7 @@ pub(crate) use self::permissions_menu::auto_review_available;
 pub(crate) use self::permissions_menu::cyber_model_approval_reviewer;
 mod backend_banners;
 mod compaction;
+mod context_pressure;
 mod luna_reserve_model;
 mod luna_reserve_return;
 pub(crate) use backend_banners::AutomaticModelSwitchReason;
@@ -609,6 +610,7 @@ pub(crate) struct ChatWidget {
     #[cfg(any(target_os = "windows", test))]
     pub(crate) windows_sandbox_elevated_setup_complete: bool,
     token_info: Option<TokenUsageInfo>,
+    context_pressure_state: context_pressure::SharedContextPressureState,
     token_usage_pending: bool,
     // Status and polling use account usage reads; response streams may identify meters differently.
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
@@ -1160,7 +1162,7 @@ impl ChatWidget {
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         match info {
-            Some(info) => self.apply_token_info(info),
+            Some(info) => self.apply_token_info(info, context_pressure::UsageUpdate::Uncorrelated),
             None => {
                 self.token_usage_pending = true;
                 self.bottom_pane
@@ -1172,7 +1174,12 @@ impl ChatWidget {
         }
     }
 
-    fn apply_token_info(&mut self, info: TokenUsageInfo) {
+    fn apply_token_info(
+        &mut self,
+        info: TokenUsageInfo,
+        update: context_pressure::UsageUpdate<'_>,
+    ) {
+        self.update_context_pressure_hint(&info, update);
         self.token_usage_pending = false;
         self.bottom_pane
             .set_context_window_pending(/*pending*/ false);

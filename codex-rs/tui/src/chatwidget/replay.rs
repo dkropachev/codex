@@ -102,6 +102,27 @@ impl ChatWidget {
     /// avoid triggering side effects. Event ids are passed as `None` to
     /// distinguish replayed events from live ones.
     pub(crate) fn replay_thread_turns(&mut self, turns: Vec<Turn>, replay_kind: ReplayKind) {
+        if let Some((turn_id, item_id)) = turns
+            .iter()
+            .rev()
+            .find_map(|turn| turn.items.last().map(|item| (turn.id.as_str(), item.id())))
+        {
+            self.record_context_pressure_item(item_id, turn_id);
+        }
+        let compaction_items = turns
+            .iter()
+            .flat_map(|turn| {
+                turn.items.iter().filter_map(|item| match item {
+                    ThreadItem::ContextCompaction { id } => {
+                        Some(context_pressure::CompactionItemKey {
+                            id: id.clone(),
+                            turn_id: turn.id.clone(),
+                        })
+                    }
+                    _ => None,
+                })
+            })
+            .collect::<Vec<_>>();
         if !turns.is_empty() || matches!(replay_kind, ReplayKind::ThreadSnapshot) {
             self.bottom_pane.dismiss_composer_sparkle();
         }
@@ -219,6 +240,7 @@ impl ChatWidget {
                 );
             }
         }
+        self.reconcile_replayed_compactions(&compaction_items, latest_turn_id.as_deref());
     }
 
     pub(crate) fn replay_thread_item(

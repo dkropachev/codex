@@ -60,6 +60,22 @@ pub(crate) struct TokenUsageInfo {
     pub(crate) model_context_window: Option<i64>,
 }
 
+impl TokenUsageInfo {
+    /// Percentage of the adjusted context window occupied by the latest active context.
+    pub(crate) fn adjusted_active_context_percent(&self) -> Option<i64> {
+        let window = self.model_context_window?.checked_sub(BASELINE_TOKENS)?;
+        if window <= 0 {
+            return None;
+        }
+        let used = self
+            .last_token_usage
+            .tokens_in_context_window()
+            .saturating_sub(BASELINE_TOKENS)
+            .max(0);
+        Some(((i128::from(used) * 100) / i128::from(window)).clamp(0, 100) as i64)
+    }
+}
+
 impl fmt::Display for TokenUsage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(

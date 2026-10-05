@@ -247,6 +247,8 @@ mod composer_submission;
 mod computer_activity_tests;
 #[path = "tests/config_errors_tests.rs"]
 mod config_errors;
+#[path = "tests/context_pressure_tests.rs"]
+mod context_pressure_tests;
 #[path = "tests/copy_export_picker_tests.rs"]
 mod copy_export_picker_tests;
 #[path = "tests/dynamic_activity_tests.rs"]
