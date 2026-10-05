@@ -4167,7 +4167,7 @@ impl ThreadRequestProcessor {
                 } else {
                     None
                 };
-                let token_usage_turn_id = (include_turns || paginated_resume)
+                let token_usage_attribution = (include_turns || paginated_resume)
                     .then(|| {
                         let turns = if thread.turns.is_empty() {
                             initial_turns_page
@@ -4176,9 +4176,12 @@ impl ThreadRequestProcessor {
                         } else {
                             thread.turns.as_slice()
                         };
-                        restored_token_usage_turn_id(response_history.get_rollout_items(), turns)
+                        restored_token_usage_attribution(
+                            response_history.get_rollout_items(),
+                            turns,
+                        )
                     })
-                    .filter(|turn_id| !turn_id.is_empty());
+                    .filter(|attribution| !attribution.turn_id.is_empty());
                 if redact_resume_payloads {
                     redact_thread_resume_payloads(&mut thread.turns);
                     if let Some(initial_turns_page) = initial_turns_page.as_mut() {
@@ -4214,7 +4217,7 @@ impl ThreadRequestProcessor {
                     .await;
                 // `excludeTurns` is explicitly the cheap resume path, so avoid
                 // rebuilding history only to attribute a replayed usage update.
-                if let Some(token_usage_turn_id) = token_usage_turn_id {
+                if let Some(token_usage_attribution) = token_usage_attribution {
                     // The client needs restored usage before it starts another turn.
                     // Sending after the response preserves JSON-RPC request ordering while
                     // still filling the status line before the next turn lifecycle begins.
@@ -4223,7 +4226,7 @@ impl ThreadRequestProcessor {
                         connection_id,
                         thread_id,
                         codex_thread.as_ref(),
-                        token_usage_turn_id,
+                        token_usage_attribution,
                     )
                     .await;
                 }
@@ -4505,7 +4508,7 @@ impl ThreadRequestProcessor {
             } else {
                 None
             };
-            let cold_resume_token_usage_turn_id = cold_resume_history
+            let cold_resume_token_usage_attribution = cold_resume_history
                 .map(|history| {
                     let turns = paginated_turns
                         .as_deref()
@@ -4515,9 +4518,9 @@ impl ThreadRequestProcessor {
                                 .as_ref()
                                 .map_or(&[][..], |page| page.data.as_slice())
                         });
-                    restored_token_usage_turn_id(history, turns)
+                    restored_token_usage_attribution(history, turns)
                 })
-                .filter(|turn_id| !turn_id.is_empty());
+                .filter(|attribution| !attribution.turn_id.is_empty());
             let paginated_initial_turns_page_with_active_slot = if paginated_resume {
                 match params.initial_turns_page.as_ref() {
                     Some(params)
@@ -4546,7 +4549,7 @@ impl ThreadRequestProcessor {
                 request: Box::new(crate::thread_state::PendingThreadResumeRequest {
                     request_id: request_id.clone(),
                     history_items,
-                    cold_resume_token_usage_turn_id,
+                    cold_resume_token_usage_attribution,
                     config_snapshot,
                     instruction_sources,
                     thread_summary,
@@ -5171,8 +5174,8 @@ impl ThreadRequestProcessor {
         } else {
             Vec::new()
         };
-        let ephemeral_token_usage_turn_id = (ephemeral && include_turns)
-            .then(|| restored_token_usage_turn_id(&history_items, ephemeral_turns.as_slice()));
+        let ephemeral_token_usage_attribution = (ephemeral && include_turns)
+            .then(|| restored_token_usage_attribution(&history_items, ephemeral_turns.as_slice()));
         let token_usage_history_items = paginated_source.then(|| Arc::clone(&history_items));
         let inherited_project_id = source_thread.project_id.clone();
         let reserved_thread_id = if config.ephemeral {
@@ -5303,7 +5306,8 @@ impl ThreadRequestProcessor {
 
         // Persistent forks materialize their own rollout immediately. Ephemeral forks stay
         // pathless, so their visible history is projected before the source history is consumed.
-        let (mut thread, mut token_usage_turn_id) = if session_configured.rollout_path.is_some() {
+        let (mut thread, mut token_usage_attribution) = if session_configured.rollout_path.is_some()
+        {
             let stored_thread = self
                 .read_stored_thread_for_new_fork(thread_id, include_turns && !paginated_source)
                 .await?;
@@ -5319,8 +5323,8 @@ impl ThreadRequestProcessor {
                     /*active_turn*/ None,
                 );
             }
-            let token_usage_turn_id = include_turns.then(|| {
-                restored_token_usage_turn_id(
+            let token_usage_attribution = include_turns.then(|| {
+                restored_token_usage_attribution(
                     history
                         .as_ref()
                         .map(|history| history.items.as_slice())
@@ -5329,7 +5333,7 @@ impl ThreadRequestProcessor {
                     thread.turns.as_slice(),
                 )
             });
-            (thread, token_usage_turn_id)
+            (thread, token_usage_attribution)
         } else {
             let mut thread = build_thread_from_snapshot(
                 thread_id,
@@ -5341,11 +5345,11 @@ impl ThreadRequestProcessor {
             thread.preview = ephemeral_preview;
             thread.forked_from_id = Some(source_thread_id.to_string());
             thread.turns = ephemeral_turns;
-            (thread, ephemeral_token_usage_turn_id)
+            (thread, ephemeral_token_usage_attribution)
         };
         if paginated_source && include_turns {
             thread.turns = self.paginated_thread_full_turns(thread_id).await?;
-            token_usage_turn_id = Some(restored_token_usage_turn_id(
+            token_usage_attribution = Some(restored_token_usage_attribution(
                 token_usage_history_items
                     .as_deref()
                     .map_or(&[], Vec::as_slice),
@@ -5404,7 +5408,7 @@ impl ThreadRequestProcessor {
             .await;
         // `excludeTurns` is the cheap fork path, so skip restored usage replay
         // instead of rebuilding history only to attribute a historical update.
-        if let Some(token_usage_turn_id) = token_usage_turn_id {
+        if let Some(token_usage_attribution) = token_usage_attribution {
             // Mirror the resume contract for forks: the new thread is usable as soon
             // as the response arrives, so restored usage must follow immediately.
             send_thread_token_usage_update_to_connection(
@@ -5412,7 +5416,7 @@ impl ThreadRequestProcessor {
                 connection_id,
                 thread_id,
                 forked_thread.as_ref(),
-                token_usage_turn_id,
+                token_usage_attribution,
             )
             .await;
         }

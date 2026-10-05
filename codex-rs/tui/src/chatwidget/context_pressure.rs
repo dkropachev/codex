@@ -77,7 +77,10 @@ pub(super) enum CompactionObservation {
 pub(super) enum UsageUpdate<'a> {
     LiveServerTurn(&'a str),
     BufferedServerTurn(&'a str),
-    AttachmentReplay(&'a str),
+    AttachmentReplay {
+        turn_id: &'a str,
+        after_compaction_item_id: Option<&'a str>,
+    },
     Uncorrelated,
 }
 
@@ -184,65 +187,71 @@ impl ChatWidget {
         let live_turn_id = match update {
             UsageUpdate::LiveServerTurn(turn_id)
             | UsageUpdate::BufferedServerTurn(turn_id)
-            | UsageUpdate::AttachmentReplay(turn_id) => Some(turn_id.to_string()),
+            | UsageUpdate::AttachmentReplay { turn_id, .. } => Some(turn_id.to_string()),
             UsageUpdate::Uncorrelated => self.turn_lifecycle.last_turn_id.clone(),
         };
         let hint_turn_running = self.turn_lifecycle.agent_turn_running;
-        let show_hint = {
-            let mut state = self
-                .context_pressure_state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let cycle = state.by_thread.entry(thread_id).or_default();
-            if let UsageUpdate::LiveServerTurn(turn_id)
-            | UsageUpdate::BufferedServerTurn(turn_id)
-            | UsageUpdate::AttachmentReplay(turn_id) = update
+        let show_hint =
             {
-                if cycle
-                    .last_usage_turn_id
-                    .as_deref()
-                    .is_some_and(|previous| turn_order(turn_id, previous) == Some(Ordering::Less))
-                {
-                    return;
-                }
-                cycle.last_usage_turn_id = Some(turn_id.to_string());
-            }
-            let is_post_compaction_usage = match update {
-                UsageUpdate::LiveServerTurn(turn_id)
+                let mut state = self
+                    .context_pressure_state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let cycle = state.by_thread.entry(thread_id).or_default();
+                if let UsageUpdate::LiveServerTurn(turn_id)
                 | UsageUpdate::BufferedServerTurn(turn_id)
-                | UsageUpdate::AttachmentReplay(turn_id) => cycle
-                    .last_compaction
-                    .as_ref()
-                    .is_none_or(|last| match turn_order(turn_id, &last.turn_id) {
-                        Some(Ordering::Greater) => true,
-                        Some(Ordering::Less) => false,
-                        Some(Ordering::Equal) => {
-                            !matches!(update, UsageUpdate::AttachmentReplay(_))
-                        }
-                        None => false,
-                    }),
-                UsageUpdate::Uncorrelated => true,
+                | UsageUpdate::AttachmentReplay { turn_id, .. } = update
+                {
+                    if cycle.last_usage_turn_id.as_deref().is_some_and(|previous| {
+                        turn_order(turn_id, previous) == Some(Ordering::Less)
+                    }) {
+                        return;
+                    }
+                    cycle.last_usage_turn_id = Some(turn_id.to_string());
+                }
+                let is_post_compaction_usage = match update {
+                    UsageUpdate::LiveServerTurn(turn_id)
+                    | UsageUpdate::BufferedServerTurn(turn_id)
+                    | UsageUpdate::AttachmentReplay { turn_id, .. } => cycle
+                        .last_compaction
+                        .as_ref()
+                        .is_none_or(|last| match turn_order(turn_id, &last.turn_id) {
+                            Some(Ordering::Greater) => true,
+                            Some(Ordering::Less) => false,
+                            Some(Ordering::Equal) => match update {
+                                UsageUpdate::AttachmentReplay {
+                                    after_compaction_item_id,
+                                    ..
+                                } => after_compaction_item_id == Some(last.id.as_str()),
+                                UsageUpdate::LiveServerTurn(_)
+                                | UsageUpdate::BufferedServerTurn(_) => true,
+                                UsageUpdate::Uncorrelated => false,
+                            },
+                            None => false,
+                        }),
+                    UsageUpdate::Uncorrelated => true,
+                };
+                if cycle.waiting_for_lower_usage
+                    && is_post_compaction_usage
+                    && percent < HINT_THRESHOLD_PERCENT
+                {
+                    cycle.waiting_for_lower_usage = false;
+                    cycle.hint_shown = false;
+                }
+                if percent >= HINT_THRESHOLD_PERCENT
+                    && !cycle.hint_shown
+                    && !cycle.waiting_for_lower_usage
+                {
+                    cycle.hint_shown = true;
+                    cycle.hint_turn_id =
+                        live_turn_id.or_else(|| cycle.latest_replayed_turn_id.clone());
+                    cycle.hint_item = cycle.latest_seen_item.clone();
+                    cycle.hint_turn_running = hint_turn_running;
+                    true
+                } else {
+                    false
+                }
             };
-            if cycle.waiting_for_lower_usage
-                && is_post_compaction_usage
-                && percent < HINT_THRESHOLD_PERCENT
-            {
-                cycle.waiting_for_lower_usage = false;
-                cycle.hint_shown = false;
-            }
-            if percent >= HINT_THRESHOLD_PERCENT
-                && !cycle.hint_shown
-                && !cycle.waiting_for_lower_usage
-            {
-                cycle.hint_shown = true;
-                cycle.hint_turn_id = live_turn_id.or_else(|| cycle.latest_replayed_turn_id.clone());
-                cycle.hint_item = cycle.latest_seen_item.clone();
-                cycle.hint_turn_running = hint_turn_running;
-                true
-            } else {
-                false
-            }
-        };
         if show_hint {
             self.add_info_message(
                 "Context use has reached 70%.".to_string(),

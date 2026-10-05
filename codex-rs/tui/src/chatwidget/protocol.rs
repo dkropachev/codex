@@ -46,7 +46,12 @@ impl ChatWidget {
         match notification {
             ServerNotification::ThreadTokenUsageUpdated(notification) => {
                 let update = if self.token_usage_pending {
-                    context_pressure::UsageUpdate::AttachmentReplay(&notification.turn_id)
+                    context_pressure::UsageUpdate::AttachmentReplay {
+                        turn_id: &notification.turn_id,
+                        after_compaction_item_id: notification
+                            .usage_after_compaction_item_id
+                            .as_deref(),
+                    }
                 } else if replay_kind.is_some() {
                     context_pressure::UsageUpdate::BufferedServerTurn(&notification.turn_id)
                 } else {

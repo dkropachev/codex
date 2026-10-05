@@ -67,6 +67,7 @@ When the latest active context use first reaches 70% of the adjusted model windo
 - The threshold uses the latest active token usage and the adjusted window, not cumulative session usage or a rounded display percentage.
 - Each thread remembers its last observed compaction item ID across navigation and replay. Only a new item followed by active use below 70% can rearm the hint.
 - History reconstruction keeps the durable ID of modern compaction items; legacy events without an item retain their synthetic IDs.
+- Attachment usage replay identifies the completed compaction item whose start precedes the persisted token count, when one can be established.
 - The hint is informational and leaves explicit `/compact` and `/handoff` unchanged.
 
 ## Invariants
@@ -107,6 +108,7 @@ App-server coverage exercises defaults, response correlation, and idle-versus-bu
 - Idle-only turn start accepts idle work and rejects a busy request: codex-rs/app-server/tests/suite/v2/turn_start.rs:turn_start_if_idle_starts_idle_turn_and_rejects_busy_thread
 - Idle-only turn start preserves an empty user turn in Plan mode: codex-rs/app-server/tests/suite/v2/turn_start.rs:turn_start_with_empty_input_runs_model_request
 - Omission preserves start-or-steer behavior: codex-rs/app-server/tests/suite/v2/turn_start.rs:turn_start_defaults_to_start_or_steer_while_active
+- Restored token usage omits compaction correlation when no compaction preceded it: codex-rs/app-server/tests/suite/v2/thread_resume.rs:thread_resume_emits_restored_token_usage_before_next_turn
 
 ### cli (main CLI command behavior)
 

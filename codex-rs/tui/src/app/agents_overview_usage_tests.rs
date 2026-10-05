@@ -93,6 +93,7 @@ async fn selected_usage_is_cached_and_account_changes_discard_old_results() -> R
                 last: tokens.clone(),
                 model_context_window: None,
             },
+            usage_after_compaction_item_id: None,
         },
     ));
     app.apply_agents_overview_thread_refresh(

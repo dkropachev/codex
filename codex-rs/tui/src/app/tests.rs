@@ -7185,6 +7185,7 @@ fn token_usage_notification(
             },
             model_context_window,
         },
+        usage_after_compaction_item_id: None,
     })
 }
 

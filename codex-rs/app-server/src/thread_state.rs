@@ -35,11 +35,16 @@ use tracing::error;
 
 type PendingInterruptQueue = Vec<ConnectionRequestId>;
 
+pub(crate) struct RestoredTokenUsageAttribution {
+    pub(crate) turn_id: String,
+    pub(crate) after_compaction_item_id: Option<String>,
+}
+
 pub(crate) struct PendingThreadResumeRequest {
     pub(crate) request_id: ConnectionRequestId,
     pub(crate) history_items: Vec<RolloutItem>,
     /// Usage attribution already resolved while cold-loading a paginated child.
-    pub(crate) cold_resume_token_usage_turn_id: Option<String>,
+    pub(crate) cold_resume_token_usage_attribution: Option<RestoredTokenUsageAttribution>,
     pub(crate) config_snapshot: ThreadConfigSnapshot,
     pub(crate) instruction_sources: Vec<LegacyAppPathString>,
     pub(crate) thread_summary: codex_app_server_protocol::Thread,

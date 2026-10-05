@@ -673,10 +673,10 @@ pub(super) async fn handle_pending_thread_resume_request(
     } else {
         None
     };
-    let token_usage_turn_id = pending.cold_resume_token_usage_turn_id.or_else(|| {
-        pending
-            .include_turns
-            .then(|| restored_token_usage_turn_id(&pending.history_items, thread.turns.as_slice()))
+    let token_usage_attribution = pending.cold_resume_token_usage_attribution.or_else(|| {
+        pending.include_turns.then(|| {
+            restored_token_usage_attribution(&pending.history_items, thread.turns.as_slice())
+        })
     });
     if pending.initial_turns_page.is_none() {
         initial_turns_page = None;
@@ -782,7 +782,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         .await;
     // Warm metadata-only resumes skip history reconstruction. Cold paginated children can
     // replay usage using attribution captured before the listener was attached.
-    if let Some(token_usage_turn_id) = token_usage_turn_id {
+    if let Some(token_usage_attribution) = token_usage_attribution {
         // Rejoining a loaded thread has the same UI contract as a cold resume, but
         // uses the live conversation state instead of reconstructing a new session.
         send_thread_token_usage_update_to_connection(
@@ -790,7 +790,7 @@ pub(super) async fn handle_pending_thread_resume_request(
             connection_id,
             conversation_id,
             conversation.as_ref(),
-            token_usage_turn_id,
+            token_usage_attribution,
         )
         .await;
     }

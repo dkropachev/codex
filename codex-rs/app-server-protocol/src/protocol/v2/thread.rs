@@ -1879,6 +1879,8 @@ pub struct ThreadTokenUsageUpdatedNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub token_usage: ThreadTokenUsage,
+    /// Present on attachment replay when the persisted usage follows this completed item.
+    pub usage_after_compaction_item_id: Option<String>,
 }
 
 /// Internal-only notification containing the exact usage from one upstream

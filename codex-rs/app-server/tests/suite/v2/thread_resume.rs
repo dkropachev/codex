@@ -3892,6 +3892,7 @@ async fn thread_resume_emits_restored_token_usage_before_next_turn() -> Result<(
     assert_eq!(notification.token_usage.total.reasoning_output_tokens, 10);
     assert_eq!(notification.token_usage.last.total_tokens, 90);
     assert_eq!(notification.token_usage.model_context_window, Some(200_000));
+    assert_eq!(notification.usage_after_compaction_item_id, None);
 
     Ok(())
 }

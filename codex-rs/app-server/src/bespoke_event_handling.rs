@@ -1579,6 +1579,7 @@ async fn handle_token_count_event(
             thread_id: conversation_id.to_string(),
             turn_id,
             token_usage,
+            usage_after_compaction_item_id: None,
         };
         outgoing
             .send_server_notification(ServerNotification::ThreadTokenUsageUpdated(notification))

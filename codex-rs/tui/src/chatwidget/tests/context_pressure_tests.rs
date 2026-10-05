@@ -13,6 +13,34 @@ fn context_usage(total_tokens: i64) -> TokenUsageInfo {
     make_token_info(total_tokens, /*context_window*/ 13_000)
 }
 
+fn usage_update(
+    thread_id: ThreadId,
+    turn_id: &str,
+    total_tokens: i64,
+    after_compaction_item_id: Option<&str>,
+) -> ServerNotification {
+    let usage = codex_app_server_protocol::TokenUsageBreakdown {
+        total_tokens,
+        input_tokens: total_tokens,
+        cached_input_tokens: 0,
+        cache_write_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_output_tokens: 0,
+    };
+    ServerNotification::ThreadTokenUsageUpdated(
+        codex_app_server_protocol::ThreadTokenUsageUpdatedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+            token_usage: codex_app_server_protocol::ThreadTokenUsage {
+                total: usage.clone(),
+                last: usage,
+                model_context_window: Some(13_000),
+            },
+            usage_after_compaction_item_id: after_compaction_item_id.map(str::to_string),
+        },
+    )
+}
+
 fn compaction_completed(id: &str) -> ServerNotification {
     compaction_completed_on_turn(id, "turn-1")
 }
@@ -128,10 +156,27 @@ async fn first_compaction_seen_during_navigation_rearms_the_hint() {
     );
     history_text(&mut resumed_rx);
     resumed.turn_lifecycle.last_turn_id = Some(compact_turn_id.to_string());
-    handle_token_count(&mut resumed, Some(context_usage(/*total_tokens*/ 12_699)));
+    resumed.handle_server_notification(
+        usage_update(
+            thread_id,
+            compact_turn_id,
+            /*total_tokens*/ 12_699,
+            /*after_compaction_item_id*/ None,
+        ),
+        /*replay_kind*/ None,
+    );
     handle_token_count(&mut resumed, Some(context_usage(/*total_tokens*/ 12_700)));
     assert_eq!(history_text(&mut resumed_rx), "");
-    handle_token_count(&mut resumed, Some(context_usage(/*total_tokens*/ 12_699)));
+    resumed.set_token_info(/*info*/ None);
+    resumed.handle_server_notification(
+        usage_update(
+            thread_id,
+            compact_turn_id,
+            /*total_tokens*/ 12_699,
+            Some("compact-1"),
+        ),
+        /*replay_kind*/ None,
+    );
     handle_token_count(&mut resumed, Some(context_usage(/*total_tokens*/ 12_700)));
     assert!(history_text(&mut resumed_rx).contains("Context use has reached 70%."));
 }

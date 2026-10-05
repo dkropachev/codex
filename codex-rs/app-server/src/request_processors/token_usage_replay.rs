@@ -9,6 +9,7 @@
 //! the time the `TokenCount` was persisted so the notification still targets the
 //! corresponding rebuilt turn.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_app_server_protocol::ServerNotification;
@@ -19,11 +20,13 @@ use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::CodexThread;
 use codex_protocol::ThreadId;
+use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::EventMsg;
 use codex_rollout::RolloutItem;
 
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::thread_state::RestoredTokenUsageAttribution;
 
 /// Sends a restored token usage update to the connection that attached to a thread.
 ///
@@ -37,15 +40,16 @@ pub(super) async fn send_thread_token_usage_update_to_connection(
     connection_id: ConnectionId,
     thread_id: ThreadId,
     conversation: &CodexThread,
-    token_usage_turn_id: String,
+    attribution: RestoredTokenUsageAttribution,
 ) {
     let Some(info) = conversation.token_usage_info().await else {
         return;
     };
     let notification = ThreadTokenUsageUpdatedNotification {
         thread_id: thread_id.to_string(),
-        turn_id: token_usage_turn_id,
+        turn_id: attribution.turn_id,
         token_usage: ThreadTokenUsage::from(info),
+        usage_after_compaction_item_id: attribution.after_compaction_item_id,
     };
     outgoing
         .send_server_notification_to_connections(
@@ -55,12 +59,44 @@ pub(super) async fn send_thread_token_usage_update_to_connection(
         .await;
 }
 
-pub(super) fn restored_token_usage_turn_id(
+pub(super) fn restored_token_usage_attribution(
     rollout_items: &[RolloutItem],
     turns: &[Turn],
-) -> String {
-    latest_token_usage_turn_id_from_rollout_items(rollout_items, turns)
-        .unwrap_or_else(|| latest_token_usage_turn_id(turns))
+) -> RestoredTokenUsageAttribution {
+    RestoredTokenUsageAttribution {
+        turn_id: latest_token_usage_turn_id_from_rollout_items(rollout_items, turns)
+            .unwrap_or_else(|| latest_token_usage_turn_id(turns)),
+        after_compaction_item_id: latest_usage_after_completed_compaction(rollout_items),
+    }
+}
+
+fn latest_usage_after_completed_compaction(rollout_items: &[RolloutItem]) -> Option<String> {
+    let usage_index = rollout_items
+        .iter()
+        .rposition(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TokenCount(_))))?;
+    let mut started = HashMap::new();
+    let mut latest = None;
+    for (index, item) in rollout_items.iter().enumerate() {
+        match item {
+            RolloutItem::EventMsg(EventMsg::ItemStarted(payload))
+                if let TurnItem::ContextCompaction(compaction) = &payload.item =>
+            {
+                started.insert(compaction.id.as_str(), index);
+            }
+            RolloutItem::EventMsg(EventMsg::ItemCompleted(payload))
+                if let TurnItem::ContextCompaction(compaction) = &payload.item
+                    && let Some(&start_index) = started.get(compaction.id.as_str())
+                    && start_index < usage_index
+                    && latest
+                        .as_ref()
+                        .is_none_or(|(previous_index, _)| start_index > *previous_index) =>
+            {
+                latest = Some((start_index, compaction.id.clone()));
+            }
+            _ => {}
+        }
+    }
+    latest.map(|(_, id)| id)
 }
 
 /// Identifies the turn that was active when the latest `TokenCount` record appeared.
@@ -113,7 +149,10 @@ fn latest_token_usage_turn_id(turns: &[Turn]) -> String {
 mod tests {
     use super::*;
     use codex_app_server_protocol::build_turns_from_rollout_items;
+    use codex_protocol::items::ContextCompactionItem;
     use codex_protocol::protocol::AgentMessageEvent;
+    use codex_protocol::protocol::ItemCompletedEvent;
+    use codex_protocol::protocol::ItemStartedEvent;
     use codex_protocol::protocol::TokenCountEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use pretty_assertions::assert_eq;
@@ -160,6 +199,43 @@ mod tests {
         assert_eq!(
             latest_token_usage_turn_id_from_rollout_items(&rollout_items, turns.as_slice()),
             Some(turns[2].id.clone())
+        );
+    }
+
+    #[test]
+    fn replay_usage_correlates_only_a_completed_compaction_started_before_the_count() {
+        let thread_id = ThreadId::new();
+        let item = TurnItem::ContextCompaction(ContextCompactionItem {
+            id: "compact-1".to_string(),
+        });
+        let started = RolloutItem::EventMsg(EventMsg::ItemStarted(ItemStartedEvent {
+            thread_id,
+            turn_id: "turn-1".to_string(),
+            item: item.clone(),
+            started_at_ms: 1,
+        }));
+        let completed = RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id,
+            turn_id: "turn-1".to_string(),
+            item,
+            started_at_ms: Some(1),
+            completed_at_ms: 2,
+        }));
+        let count = RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
+            info: None,
+            rate_limits: None,
+        }));
+        assert_eq!(
+            latest_usage_after_completed_compaction(&[
+                count.clone(),
+                started.clone(),
+                completed.clone()
+            ]),
+            None,
+        );
+        assert_eq!(
+            latest_usage_after_completed_compaction(&[started, count, completed]),
+            Some("compact-1".to_string()),
         );
     }
 
