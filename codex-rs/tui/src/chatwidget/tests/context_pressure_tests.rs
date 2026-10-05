@@ -341,6 +341,7 @@ async fn same_turn_replay_uses_item_cursor_to_reject_old_and_accept_new_compacti
     let earlier_turn_id = "01900000-0000-7000-8000-000000000001";
     let turn_id = "01900000-0001-7000-8000-000000000001";
     let regenerated_old_turn_id = "01900000-0002-7000-8000-000000000001";
+    let new_compaction_id = "01900000-0003-7000-8000-000000000001";
     chat.thread_id = Some(thread_id);
     chat.handle_server_notification(
         compaction_completed_on_turn("item-1", earlier_turn_id),
@@ -355,7 +356,7 @@ async fn same_turn_replay_uses_item_cursor_to_reject_old_and_accept_new_compacti
     resumed.thread_id = Some(thread_id);
     resumed.inherit_context_pressure_state(&chat);
     for (id, replay_turn_id, should_hint) in [
-        ("item-11", turn_id, true),
+        (new_compaction_id, turn_id, true),
         ("item-5", regenerated_old_turn_id, false),
     ] {
         resumed.replay_thread_turns(

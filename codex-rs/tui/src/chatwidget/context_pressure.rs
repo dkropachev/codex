@@ -98,6 +98,14 @@ impl CompactionItemKey {
         {
             return Some(current.as_bytes().cmp(previous_id.as_bytes()));
         }
+        // Legacy-only compactions get synthetic IDs. After the persistence upgrade, newly
+        // completed compactions in that same thread carry their durable UUIDv7 IDs.
+        if previous.id.starts_with("item-") && item_v7_id(&self.id).is_some() {
+            return Some(Ordering::Greater);
+        }
+        if self.id.starts_with("item-") && item_v7_id(&previous.id).is_some() {
+            return Some(Ordering::Less);
+        }
         if let (Some((current_prefix, current_number)), Some((previous_prefix, previous_number))) =
             (self.id.rsplit_once('-'), previous.id.rsplit_once('-'))
             && current_prefix == previous_prefix
@@ -283,11 +291,17 @@ impl ChatWidget {
         };
         let had_previous = cycle.last_compaction.is_some();
         if let Some(last) = cycle.last_compaction.as_ref() {
-            if last.id == id
-                || (observation != CompactionObservation::OrderedReplay
-                    && item.order_after(last) != Some(Ordering::Greater))
-            {
+            if last.id == id {
                 return;
+            }
+            if observation != CompactionObservation::OrderedReplay {
+                let item_order = item.order_after(last);
+                if matches!(item_order, Some(Ordering::Less | Ordering::Equal))
+                    || (item_order.is_none()
+                        && turn_order(turn_id, &last.turn_id) == Some(Ordering::Less))
+                {
+                    return;
+                }
             }
         } else if !cycle.hint_shown && observation == CompactionObservation::BufferedReplay {
             cycle.last_compaction = Some(item);
