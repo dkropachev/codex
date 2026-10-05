@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/plan_handoff_commands.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+› /handoff  plan a safe continuation in a fresh thread
+
+› /han
+
+  GPT-5.6-Sol default · /tmp/project

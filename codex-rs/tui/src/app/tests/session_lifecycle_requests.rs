@@ -150,6 +150,11 @@ pub(super) enum HistoryCapabilities {
     ItemsAndSummaryTurnsFail,
     ThreadListFails,
     ThreadStartFails,
+    HandoffPlanPage,
+    HandoffConfigReadFails,
+    HandoffThreadStartFails,
+    HandoffSourceChangesAfterStart,
+    HandoffLatestTurnDiffers,
     ConfigReadUnsupported(i64),
     ConfigReadFails,
     ConfigReadUnknownVoice,
@@ -283,6 +288,7 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
         let mut websocket = accept_async(stream).await?;
         let mut inventories = usize::from(failed_thread_name == Some("background"));
         let mut reject_detach = false;
+        let mut handoff_started = false;
         let mut reject_thread_list = history_capabilities == HistoryCapabilities::ThreadListFails;
         loop {
             let frame = tokio::select! {
@@ -327,6 +333,15 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                         .await?;
                 }
                 JSONRPCMessage::Request(request) => {
+                    if history_capabilities == HistoryCapabilities::HandoffSourceChangesAfterStart
+                        && request.method == "thread/start"
+                        && request
+                            .params
+                            .as_ref()
+                            .is_some_and(|params| params["sessionStartSource"] == "clear")
+                    {
+                        handoff_started = true;
+                    }
                     request_sink
                         .lock()
                         .expect("request recorder lock")
@@ -415,8 +430,11 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                                 message: "unknown variant `config/read`".to_string(),
                             },
                         })
-                    } else if history_capabilities == HistoryCapabilities::ConfigReadFails
-                        && request.method == "config/read"
+                    } else if matches!(
+                        history_capabilities,
+                        HistoryCapabilities::ConfigReadFails
+                            | HistoryCapabilities::HandoffConfigReadFails
+                    ) && request.method == "config/read"
                     {
                         JSONRPCMessage::Error(JSONRPCError {
                             id: request_id,
@@ -437,8 +455,39 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                                 message: "method not found".to_string(),
                             },
                         })
-                    } else if history_capabilities == HistoryCapabilities::ThreadStartFails
-                        && request.method == "thread/start"
+                    } else if matches!(
+                        history_capabilities,
+                        HistoryCapabilities::HandoffPlanPage
+                            | HistoryCapabilities::HandoffConfigReadFails
+                            | HistoryCapabilities::HandoffThreadStartFails
+                            | HistoryCapabilities::HandoffSourceChangesAfterStart
+                            | HistoryCapabilities::HandoffLatestTurnDiffers
+                    ) && request.method == "thread/turns/list"
+                    {
+                        let turn_id = if history_capabilities
+                            == HistoryCapabilities::HandoffLatestTurnDiffers
+                            || (history_capabilities
+                                == HistoryCapabilities::HandoffSourceChangesAfterStart
+                                && handoff_started)
+                        {
+                            "newer-source-turn"
+                        } else {
+                            "planning-turn"
+                        };
+                        JSONRPCMessage::Response(JSONRPCResponse {
+                            id: request_id,
+                            result: serde_json::json!({
+                                "data": [test_turn(turn_id, TurnStatus::Completed, Vec::new())],
+                                "nextCursor": null,
+                                "backwardsCursor": null,
+                            }),
+                        })
+                    } else if request.method == "thread/start"
+                        && (history_capabilities == HistoryCapabilities::ThreadStartFails
+                            || (history_capabilities
+                                == HistoryCapabilities::HandoffThreadStartFails
+                                && params
+                                    .is_some_and(|params| params["sessionStartSource"] == "clear")))
                     {
                         JSONRPCMessage::Error(JSONRPCError {
                             id: request_id,

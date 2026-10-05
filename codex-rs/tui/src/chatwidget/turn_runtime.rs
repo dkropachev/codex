@@ -186,7 +186,12 @@ impl ChatWidget {
         let had_pending_steers = !self.input_queue.pending_steers.is_empty();
         self.refresh_pending_input_preview();
 
-        if !from_replay && !self.has_queued_follow_up_messages() && !had_pending_steers {
+        let handoff_handled = !from_replay && self.advance_manual_handoff_after_successful_turn();
+        if !from_replay
+            && !handoff_handled
+            && !self.has_queued_follow_up_messages()
+            && !had_pending_steers
+        {
             self.maybe_prompt_plan_implementation();
         }
         // Keep this flag for replayed completion events so a subsequent live TurnComplete can
@@ -362,6 +367,7 @@ impl ChatWidget {
     }
 
     pub(super) fn on_server_overloaded_error(&mut self, message: String) {
+        self.stop_handoff_after_turn_failure();
         self.input_queue.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
 
@@ -377,6 +383,7 @@ impl ChatWidget {
     }
 
     fn on_error(&mut self, message: String) {
+        self.stop_handoff_after_turn_failure();
         self.input_queue.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
         self.add_to_history(history_cell::new_error_event(message));

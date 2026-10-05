@@ -21,19 +21,19 @@ use crate::workflow_commands::build_hosted_workflow_invocation;
 use crate::workflow_commands::hosted_workflow_invocation_input;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SlashCommandDispatchSource {
+pub(super) enum SlashCommandDispatchSource {
     Live,
     Queued,
 }
 
-struct PreparedSlashCommandArgs {
-    args: String,
-    text_elements: Vec<TextElement>,
-    pending_pastes: Vec<(String, String)>,
-    local_images: Vec<LocalImageAttachment>,
-    remote_image_urls: Vec<String>,
-    mention_bindings: Vec<MentionBinding>,
-    source: SlashCommandDispatchSource,
+pub(super) struct PreparedSlashCommandArgs {
+    pub(super) args: String,
+    pub(super) text_elements: Vec<TextElement>,
+    pub(super) pending_pastes: Vec<(String, String)>,
+    pub(super) local_images: Vec<LocalImageAttachment>,
+    pub(super) remote_image_urls: Vec<String>,
+    pub(super) mention_bindings: Vec<MentionBinding>,
+    pub(super) source: SlashCommandDispatchSource,
 }
 
 const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
@@ -293,7 +293,7 @@ impl ChatWidget {
             );
             self.add_to_history(history_cell::new_error_event(message));
             // Retain attachments when the composer has deferred consuming the draft.
-            if self.bottom_pane.composer_text().is_empty() {
+            if cmd != SlashCommand::Handoff && self.bottom_pane.composer_text().is_empty() {
                 self.bottom_pane.drain_pending_submission_state();
             }
             self.request_redraw();
@@ -422,6 +422,20 @@ impl ChatWidget {
                 );
                 self.input_queue.user_turn_pending_start = true;
                 self.app_event_tx.compact();
+            }
+            SlashCommand::Handoff => {
+                self.dispatch_prepared_command_with_args(
+                    cmd,
+                    PreparedSlashCommandArgs {
+                        args: String::new(),
+                        text_elements: Vec::new(),
+                        pending_pastes: self.bottom_pane.composer_pending_pastes(),
+                        local_images: self.bottom_pane.composer_local_images(),
+                        remote_image_urls: self.bottom_pane.remote_image_urls(),
+                        mention_bindings: Vec::new(),
+                        source: SlashCommandDispatchSource::Live,
+                    },
+                );
             }
             SlashCommand::Recap => {
                 let Some(thread_id) = self.thread_id else {
@@ -779,6 +793,13 @@ impl ChatWidget {
             return;
         }
 
+        if cmd == SlashCommand::Handoff
+            && let Err(error) = crate::handoff::parse_handoff_args(&args)
+        {
+            self.add_error_message(error.to_string());
+            return;
+        }
+
         let Some((prepared_args, prepared_elements)) =
             self.prepare_live_inline_args(args, text_elements)
         else {
@@ -821,7 +842,7 @@ impl ChatWidget {
         }
     }
 
-    fn prepared_inline_user_message(
+    pub(super) fn prepared_inline_user_message(
         &mut self,
         args: String,
         text_elements: Vec<TextElement>,
@@ -851,6 +872,10 @@ impl ChatWidget {
         cmd: SlashCommand,
         prepared: PreparedSlashCommandArgs,
     ) {
+        if cmd == SlashCommand::Handoff {
+            self.dispatch_prepared_handoff(prepared);
+            return;
+        }
         if cmd != SlashCommand::Copy {
             self.transcript.last_status_copy_targets = None;
         }
@@ -1248,6 +1273,21 @@ impl ChatWidget {
 
         if rest.is_empty() {
             return match command {
+                SlashCommandItem::Builtin(SlashCommand::Handoff) => {
+                    self.dispatch_prepared_command_with_args(
+                        SlashCommand::Handoff,
+                        PreparedSlashCommandArgs {
+                            args: String::new(),
+                            text_elements: Vec::new(),
+                            pending_pastes,
+                            local_images,
+                            remote_image_urls,
+                            mention_bindings,
+                            source: SlashCommandDispatchSource::Queued,
+                        },
+                    );
+                    self.queued_command_drain_result(SlashCommand::Handoff)
+                }
                 SlashCommandItem::Builtin(cmd) => {
                     self.dispatch_command(cmd);
                     self.queued_command_drain_result(cmd)
@@ -1409,6 +1449,7 @@ impl ChatWidget {
             | SlashCommand::Compact
             | SlashCommand::Model
             | SlashCommand::Plan
+            | SlashCommand::Handoff
             | SlashCommand::Workflow
             | SlashCommand::Config
             | SlashCommand::Goal

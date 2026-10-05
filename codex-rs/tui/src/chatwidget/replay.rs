@@ -324,7 +324,7 @@ impl ChatWidget {
                     from_replay,
                 );
             }
-            ThreadItem::Plan { text, .. } => self.on_plan_item_completed(text),
+            ThreadItem::Plan { text, .. } => self.on_plan_item_completed(text, turn_id.clone()),
             ThreadItem::Reasoning {
                 id,
                 summary,

@@ -1,0 +1,6 @@
+---
+source: tui/src/app/tests/plan_handoff_transfer.rs
+assertion_line: 440
+expression: "message.expect(\"pause notice\")"
+---
+• Handoff transfer paused because the source Plan could not be verified. The source thread remains resumable. Review its latest input or use a server that can read the latest turn before retrying.

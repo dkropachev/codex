@@ -52,6 +52,8 @@ mod pagination_completion_tests;
 mod patch_approval_tests;
 #[path = "tests/permission_selection_tests.rs"]
 mod permission_selection_tests;
+#[path = "tests/plan_handoff_transfer.rs"]
+mod plan_handoff_transfer;
 #[path = "tests/unavailable_commands_tests.rs"]
 mod unavailable_commands;
 

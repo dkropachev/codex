@@ -331,7 +331,18 @@ if [[ "${RUNNER_OS:-}" == "macOS" && "${GITHUB_REPOSITORY:-}" != "openai/codex" 
   # macos-15-xlarge runners. The remote CI config's --jobs=800 can exhaust
   # those limits during analysis or local test execution. Keep remote build
   # throughput while bounding the test processes that execute on the runner.
-  post_config_bazel_args+=(--jobs=80 --local_test_jobs=4)
+  post_config_bazel_args+=(--jobs=80 --local_test_jobs=2)
+fi
+
+if [[ "${RUNNER_OS:-}" == "Linux" && "${GITHUB_REPOSITORY:-}" != "openai/codex" && "${bazel_args[0]}" == "test" ]]; then
+  # Fork RBE test actions have repeatedly stalled unrelated Core integration
+  # tests even with bounded remote concurrency. Keep remote builds, but run
+  # tests on the GitHub runner with bounded process and Rust case concurrency.
+  post_config_bazel_args+=(
+    --strategy=TestRunner=local
+    --local_test_jobs=2
+    --test_env=RUST_TEST_THREADS=1
+  )
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then

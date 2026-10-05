@@ -1,0 +1,17 @@
+---
+source: tui/src/chatwidget/tests/plan_handoff_state.rs
+expression: history
+---
+• Model changed to gpt-5.6-sol medium for Handoff mode.
+
+
+
+› Prepare a safe handoff plan for continuing the current task in a fresh
+  session. Ground it in the repository and conversation state, ask needed
+  clarifying questions as in Plan mode, and emit `<proposed_plan>` only when
+  the handoff is decision-complete. Do not perform more implementation. If the
+  work is complete, report completion without a proposed plan.
+
+
+
+■ The handoff plan was empty. Retry /handoff or copy a plan into a new session manually.

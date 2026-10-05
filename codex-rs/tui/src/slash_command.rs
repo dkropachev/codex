@@ -36,6 +36,7 @@ pub enum SlashCommand {
     App,
     Init,
     Compact,
+    Handoff,
     Recap,
     Plan,
     Workflow,
@@ -94,6 +95,7 @@ impl SlashCommand {
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
+            SlashCommand::Handoff => "plan a safe continuation in a fresh thread",
             SlashCommand::Recap => "summarize the current conversation now",
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
@@ -173,6 +175,7 @@ impl SlashCommand {
                 | SlashCommand::Clear
                 | SlashCommand::Fork
                 | SlashCommand::Plan
+                | SlashCommand::Handoff
                 | SlashCommand::Workflow
                 | SlashCommand::Config
                 | SlashCommand::Goal
@@ -252,6 +255,7 @@ impl SlashCommand {
             | SlashCommand::Memories
             | SlashCommand::Import
             | SlashCommand::Plan
+            | SlashCommand::Handoff
             | SlashCommand::Workflow
             | SlashCommand::Config
             | SlashCommand::Cd

@@ -83,7 +83,10 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
             flags.collaboration_modes_enabled
                 || !matches!(
                     *cmd,
-                    SlashCommand::Plan | SlashCommand::Workflow | SlashCommand::Config
+                    SlashCommand::Plan
+                        | SlashCommand::Handoff
+                        | SlashCommand::Workflow
+                        | SlashCommand::Config
                 )
         })
         .filter(|(_, cmd)| flags.connectors_enabled || *cmd != SlashCommand::Apps)

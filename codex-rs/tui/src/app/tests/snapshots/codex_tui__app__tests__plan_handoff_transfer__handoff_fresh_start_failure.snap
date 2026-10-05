@@ -1,0 +1,5 @@
+---
+source: tui/src/app/tests/plan_handoff_transfer.rs
+expression: "message.expect(\"failure notice\")"
+---
+■ Failed to prepare the fresh handoff thread: config/read failed in TUI. The source thread remains resumable.

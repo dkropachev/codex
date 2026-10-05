@@ -1,0 +1,5 @@
+---
+source: tui/src/app/tests/plan_handoff_transfer.rs
+expression: "message.expect(\"pause notice\")"
+---
+• Handoff transfer paused because the source thread is no longer safely idle. The source thread remains resumable. Finish the pending interaction and retry in Handoff mode.

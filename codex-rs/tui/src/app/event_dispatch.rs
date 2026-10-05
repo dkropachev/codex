@@ -49,6 +49,8 @@ impl App {
                     | AppEvent::BeginInitialHistoryReplayBuffer
                     | AppEvent::BeginThreadSwitchHistoryReplayBuffer
                     | AppEvent::EndInitialHistoryReplayBuffer
+                    | AppEvent::StartHandoffTransfer { .. }
+                    | AppEvent::StayInHandoff { .. }
                     | AppEvent::FatalExitRequest(_)
             )
         {
@@ -383,6 +385,34 @@ impl App {
                     /*new_thread_name*/ None,
                 )
                 .await;
+            }
+            AppEvent::StartHandoffTransfer {
+                source_thread_id,
+                plan_turn_id,
+                generation,
+                plan,
+            } => {
+                self.start_handoff_transfer(
+                    tui,
+                    app_server,
+                    source_thread_id,
+                    plan_turn_id,
+                    generation,
+                    plan,
+                )
+                .await?;
+            }
+            AppEvent::StayInHandoff {
+                source_thread_id,
+                generation,
+            } => {
+                if self.current_displayed_thread_id() == Some(source_thread_id)
+                    && self
+                        .chat_widget
+                        .is_current_handoff_transaction(source_thread_id, generation)
+                {
+                    self.chat_widget.stay_in_handoff(generation);
+                }
             }
             AppEvent::OpenResumePicker => {
                 self.pending_open_resume_picker = true;

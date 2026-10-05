@@ -95,6 +95,7 @@ pub(crate) struct FooterProps {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CollaborationModeIndicator {
     Plan,
+    Handoff,
     Config,
     Workflow,
 }
@@ -155,6 +156,7 @@ impl CollaborationModeIndicator {
         };
         match self {
             CollaborationModeIndicator::Plan => format!("Plan mode{suffix}"),
+            CollaborationModeIndicator::Handoff => format!("Handoff mode{suffix}"),
             CollaborationModeIndicator::Config => format!("Config mode{suffix}"),
             CollaborationModeIndicator::Workflow => format!("Workflow mode{suffix}"),
         }
@@ -163,9 +165,9 @@ impl CollaborationModeIndicator {
     fn styled_line(self, show_cycle_hint: bool) -> Line<'static> {
         let label = self.label(/*show_cycle_hint*/ false);
         let label = match self {
-            CollaborationModeIndicator::Plan | CollaborationModeIndicator::Config => {
-                Span::from(label).magenta()
-            }
+            CollaborationModeIndicator::Plan
+            | CollaborationModeIndicator::Handoff
+            | CollaborationModeIndicator::Config => Span::from(label).magenta(),
             CollaborationModeIndicator::Workflow => Span::from(label).green(),
         };
         let mut line = Line::from(label);
