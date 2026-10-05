@@ -45,6 +45,15 @@ fn compaction_completed(id: &str) -> ServerNotification {
     compaction_completed_on_turn(id, "turn-1")
 }
 
+fn compaction_started_on_turn(id: &str, turn_id: &str) -> ServerNotification {
+    ServerNotification::ItemStarted(ItemStartedNotification {
+        thread_id: "thread-1".to_string(),
+        turn_id: turn_id.to_string(),
+        started_at_ms: chrono::Utc::now().timestamp_millis(),
+        item: AppServerThreadItem::ContextCompaction { id: id.to_string() },
+    })
+}
+
 fn compaction_completed_on_turn(id: &str, turn_id: &str) -> ServerNotification {
     ServerNotification::ItemCompleted(ItemCompletedNotification {
         thread_id: "thread-1".to_string(),
@@ -126,6 +135,57 @@ async fn replayed_compaction_id_does_not_rearm_but_new_background_item_does() {
     fresh.inherit_context_pressure_state(&resumed);
     fresh.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
     assert!(history_text(&mut fresh_rx).contains("Context use has reached 70%."));
+}
+
+#[tokio::test]
+async fn only_completed_compaction_rearms_after_usage_falls_during_compaction() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
+    history_text(&mut rx);
+
+    chat.handle_server_notification(
+        compaction_started_on_turn("aborted", "turn-1"),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        usage_update(thread_id, "turn-1", /*total_tokens*/ 12_699, None),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        usage_update(thread_id, "turn-1", /*total_tokens*/ 12_700, None),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(
+        history_text(&mut rx)
+            .matches("Context use has reached 70%.")
+            .count(),
+        0
+    );
+
+    chat.handle_server_notification(
+        compaction_started_on_turn("completed", "turn-2"),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        usage_update(thread_id, "turn-2", /*total_tokens*/ 12_699, None),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        compaction_started_on_turn("completed", "turn-2"),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        compaction_completed_on_turn("completed", "turn-2"),
+        /*replay_kind*/ None,
+    );
+    history_text(&mut rx);
+    chat.handle_server_notification(
+        usage_update(thread_id, "turn-2", /*total_tokens*/ 12_700, None),
+        /*replay_kind*/ None,
+    );
+    assert!(history_text(&mut rx).contains("Context use has reached 70%."));
 }
 
 #[tokio::test]

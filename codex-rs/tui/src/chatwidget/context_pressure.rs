@@ -14,6 +14,8 @@ pub(super) struct ContextPressureState {
 #[derive(Default)]
 struct ContextPressureCycle {
     last_compaction: Option<CompactionItemKey>,
+    pending_compaction: Option<CompactionItemKey>,
+    pending_usage_below_threshold: bool,
     latest_seen_item: Option<CompactionItemKey>,
     latest_replayed_turn_id: Option<String>,
     last_usage_turn_id: Option<String>,
@@ -239,6 +241,18 @@ impl ChatWidget {
                         }),
                     UsageUpdate::Uncorrelated => true,
                 };
+                if let Some(pending) = cycle.pending_compaction.as_ref()
+                    && match update {
+                        UsageUpdate::LiveServerTurn(turn_id)
+                        | UsageUpdate::BufferedServerTurn(turn_id) => turn_id == pending.turn_id,
+                        UsageUpdate::Uncorrelated => {
+                            live_turn_id.as_deref() == Some(pending.turn_id.as_str())
+                        }
+                        UsageUpdate::AttachmentReplay { .. } => false,
+                    }
+                {
+                    cycle.pending_usage_below_threshold = percent < HINT_THRESHOLD_PERCENT;
+                }
                 if cycle.waiting_for_lower_usage
                     && is_post_compaction_usage
                     && percent < HINT_THRESHOLD_PERCENT
@@ -313,6 +327,64 @@ impl ChatWidget {
         }
         cycle.last_compaction = Some(item);
         cycle.waiting_for_lower_usage = cycle.hint_shown;
+    }
+
+    pub(super) fn note_started_context_compaction(&mut self, id: &str, turn_id: &str) {
+        let Some(thread_id) = self.thread_id else {
+            return;
+        };
+        let mut state = self
+            .context_pressure_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cycle = state.by_thread.entry(thread_id).or_default();
+        if cycle
+            .pending_compaction
+            .as_ref()
+            .is_some_and(|pending| pending.id == id && pending.turn_id == turn_id)
+        {
+            return;
+        }
+        cycle.pending_compaction = Some(CompactionItemKey {
+            id: id.to_string(),
+            turn_id: turn_id.to_string(),
+        });
+        cycle.pending_usage_below_threshold = false;
+    }
+
+    pub(super) fn observe_completed_context_compaction(
+        &mut self,
+        id: &str,
+        turn_id: &str,
+        observation: CompactionObservation,
+    ) {
+        self.observe_context_compaction(id, turn_id, observation);
+        let Some(thread_id) = self.thread_id else {
+            return;
+        };
+        let mut state = self
+            .context_pressure_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cycle = state.by_thread.entry(thread_id).or_default();
+        if cycle
+            .pending_compaction
+            .as_ref()
+            .is_some_and(|pending| pending.id == id && pending.turn_id == turn_id)
+        {
+            if cycle.pending_usage_below_threshold
+                && cycle
+                    .last_compaction
+                    .as_ref()
+                    .is_some_and(|last| last.id == id)
+                && cycle.waiting_for_lower_usage
+            {
+                cycle.waiting_for_lower_usage = false;
+                cycle.hint_shown = false;
+            }
+            cycle.pending_compaction = None;
+            cycle.pending_usage_below_threshold = false;
+        }
     }
 
     pub(super) fn reconcile_replayed_compactions(

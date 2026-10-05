@@ -566,12 +566,7 @@ impl ChatWidget {
             ThreadItem::ContextCompaction { id }
                 if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages)) =>
             {
-                let observation = if replay_kind.is_some() {
-                    context_pressure::CompactionObservation::BufferedReplay
-                } else {
-                    context_pressure::CompactionObservation::Live
-                };
-                self.observe_context_compaction(&id, &notification.turn_id, observation);
+                self.note_started_context_compaction(&id, &notification.turn_id);
                 // Buffered starts reconstruct an in-flight compaction when switching tasks.
                 let elapsed = if replay_kind == Some(ReplayKind::ThreadSnapshot) {
                     let elapsed_ms = chrono::Utc::now()
@@ -646,7 +641,7 @@ impl ChatWidget {
             } else {
                 context_pressure::CompactionObservation::Live
             };
-            self.observe_context_compaction(id, &notification.turn_id, observation);
+            self.observe_completed_context_compaction(id, &notification.turn_id, observation);
         }
         // Buffered live notifications can introduce questions; historical turn replay cannot.
         if replay_kind == Some(ReplayKind::ThreadSnapshot)
