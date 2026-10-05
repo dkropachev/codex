@@ -184,6 +184,7 @@ fn write_config(codex_home: &Path, workspace: &Path, server_uri: &str) -> Result
 model_provider = "mock_provider"
 model_context_window = 100000
 suppress_unstable_features_warning = true
+notice.model_migrations."gpt-5.6-terra" = "gpt-6-sol"
 
 [model_providers.mock_provider]
 name = "Mock provider for test"
