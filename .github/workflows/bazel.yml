@@ -22,7 +22,8 @@ jobs:
     # is available, the Windows-cross shards exercise the source-built V8 path.
     # Fork PRs map the upstream xlarge macOS label to a public runner, where the
     # full suite can exceed 30 minutes even while tests are making progress.
-    timeout-minutes: ${{ github.repository != 'openai/codex' && matrix.os == 'macos-15-xlarge' && 60 || 30 }}
+    # Fork Linux test shards need extra time when Rust cases run serially in each shard.
+    timeout-minutes: ${{ github.repository != 'openai/codex' && 60 || 30 }}
     strategy:
       fail-fast: false
       matrix:
