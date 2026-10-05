@@ -51,7 +51,7 @@ impl ContextPressureCycle {
         let order = self
             .hint_turn_id
             .as_deref()
-            .and_then(|hint_turn_id| v7_turn_order(&item.turn_id, hint_turn_id));
+            .and_then(|hint_turn_id| turn_order(&item.turn_id, hint_turn_id));
         match order {
             Some(Ordering::Greater) => true,
             Some(Ordering::Less) => false,
@@ -108,7 +108,7 @@ impl CompactionItemKey {
         if self.id.starts_with("item-") || previous.id.starts_with("item-") {
             return None;
         }
-        v7_turn_order(&self.turn_id, &previous.turn_id).filter(|order| *order != Ordering::Equal)
+        turn_order(&self.turn_id, &previous.turn_id).filter(|order| *order != Ordering::Equal)
     }
 }
 
@@ -119,7 +119,20 @@ fn item_v7_id(id: &str) -> Option<uuid::Uuid> {
         .filter(|id| id.get_version_num() == 7)
 }
 
-fn v7_turn_order(current: &str, previous: &str) -> Option<Ordering> {
+fn turn_order(current: &str, previous: &str) -> Option<Ordering> {
+    if current == previous {
+        return Some(Ordering::Equal);
+    }
+    if let (Some(current), Some(previous)) = (
+        current
+            .strip_prefix("rollout-")
+            .and_then(|id| id.parse::<u64>().ok()),
+        previous
+            .strip_prefix("rollout-")
+            .and_then(|id| id.parse::<u64>().ok()),
+    ) {
+        return Some(current.cmp(&previous));
+    }
     let (Ok(current), Ok(previous)) = (
         uuid::Uuid::parse_str(current),
         uuid::Uuid::parse_str(previous),
@@ -185,9 +198,11 @@ impl ChatWidget {
             | UsageUpdate::BufferedServerTurn(turn_id)
             | UsageUpdate::AttachmentReplay(turn_id) = update
             {
-                if cycle.last_usage_turn_id.as_deref().is_some_and(|previous| {
-                    v7_turn_order(turn_id, previous) == Some(Ordering::Less)
-                }) {
+                if cycle
+                    .last_usage_turn_id
+                    .as_deref()
+                    .is_some_and(|previous| turn_order(turn_id, previous) == Some(Ordering::Less))
+                {
                     return;
                 }
                 cycle.last_usage_turn_id = Some(turn_id.to_string());
@@ -198,7 +213,7 @@ impl ChatWidget {
                 | UsageUpdate::AttachmentReplay(turn_id) => cycle
                     .last_compaction
                     .as_ref()
-                    .is_none_or(|last| match v7_turn_order(turn_id, &last.turn_id) {
+                    .is_none_or(|last| match turn_order(turn_id, &last.turn_id) {
                         Some(Ordering::Greater) => true,
                         Some(Ordering::Less) => false,
                         Some(Ordering::Equal) => {
@@ -296,7 +311,7 @@ impl ChatWidget {
                     .latest_replayed_turn_id
                     .as_deref()
                     .is_none_or(|previous| {
-                        v7_turn_order(latest_turn_id, previous) == Some(Ordering::Greater)
+                        turn_order(latest_turn_id, previous) == Some(Ordering::Greater)
                     })
             {
                 cycle.latest_replayed_turn_id = Some(latest_turn_id.to_string());

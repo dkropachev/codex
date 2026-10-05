@@ -134,7 +134,7 @@ async fn first_compaction_seen_during_navigation_rearms_the_hint() {
 
 #[tokio::test]
 async fn bounded_replay_distinguishes_newer_compaction_from_older_page() {
-    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
     let previous_turn_id = "01900000-0000-7000-8000-000000000001";
     let newer_turn_id = "01900000-0001-7000-8000-000000000001";
@@ -143,12 +143,10 @@ async fn bounded_replay_distinguishes_newer_compaction_from_older_page() {
     chat.thread_id = Some(thread_id);
     chat.turn_lifecycle.last_turn_id = Some(hint_turn_id.to_string());
     chat.set_token_info(Some(make_token_info(12_700, 13_000)));
-    history_text(&mut rx);
     chat.handle_server_notification(
         compaction_completed_on_turn("item-1", previous_turn_id),
         /*replay_kind*/ None,
     );
-    history_text(&mut rx);
 
     let (mut resumed, mut resumed_rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     resumed.thread_id = Some(thread_id);
@@ -187,12 +185,11 @@ async fn bounded_replay_distinguishes_newer_compaction_from_older_page() {
 async fn cached_low_usage_before_compaction_does_not_rearm() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
-    let turn_id = "01900000-0000-7000-8000-000000000001";
-    let older_turn_id = "018f0000-0000-7000-8000-000000000001";
+    let turn_id = "rollout-2";
+    let older_turn_id = "rollout-1";
     chat.thread_id = Some(thread_id);
     chat.turn_lifecycle.last_turn_id = Some(turn_id.to_string());
     chat.set_token_info(Some(make_token_info(12_700, 13_000)));
-    history_text(&mut rx);
     chat.set_token_info(Some(make_token_info(12_699, 13_000)));
     chat.handle_server_notification(
         compaction_completed_on_turn("compact-1", turn_id),
@@ -220,7 +217,7 @@ async fn cached_low_usage_before_compaction_does_not_rearm() {
 
 #[tokio::test]
 async fn older_replay_page_without_previous_compaction_does_not_rearm() {
-    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
     let earlier_turn_id = "01900000-0000-7000-8000-000000000001";
     let hint_turn_id = "01900000-0001-7000-8000-000000000001";
@@ -235,9 +232,7 @@ async fn older_replay_page_without_previous_compaction_does_not_rearm() {
     );
     unloaded.items_view = codex_app_server_protocol::TurnItemsView::NotLoaded;
     chat.replay_thread_turns(vec![unloaded], ReplayKind::ResumeInitialMessages);
-    history_text(&mut rx);
     chat.set_token_info(Some(make_token_info(12_700, 13_000)));
-    history_text(&mut rx);
 
     let (mut resumed, mut resumed_rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     resumed.thread_id = Some(thread_id);
@@ -263,7 +258,7 @@ async fn older_replay_page_without_previous_compaction_does_not_rearm() {
 
 #[tokio::test]
 async fn compaction_before_last_hint_does_not_rearm_from_older_page() {
-    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
     let first_turn_id = "01900000-0000-7000-8000-000000000001";
     let second_turn_id = "01900000-0001-7000-8000-000000000001";
@@ -273,11 +268,9 @@ async fn compaction_before_last_hint_does_not_rearm_from_older_page() {
         compaction_completed_on_turn("compact-1", first_turn_id),
         /*replay_kind*/ None,
     );
-    history_text(&mut rx);
     chat.set_token_info(Some(make_token_info(12_699, 13_000)));
     chat.turn_lifecycle.last_turn_id = Some(hint_turn_id.to_string());
     chat.set_token_info(Some(make_token_info(12_700, 13_000)));
-    history_text(&mut rx);
 
     let (mut resumed, mut resumed_rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     resumed.thread_id = Some(thread_id);
@@ -294,7 +287,7 @@ async fn compaction_before_last_hint_does_not_rearm_from_older_page() {
 
 #[tokio::test]
 async fn same_turn_replay_uses_item_cursor_to_reject_old_and_accept_new_compaction() {
-    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
     let earlier_turn_id = "01900000-0000-7000-8000-000000000001";
     let turn_id = "01900000-0001-7000-8000-000000000001";
@@ -304,12 +297,10 @@ async fn same_turn_replay_uses_item_cursor_to_reject_old_and_accept_new_compacti
         compaction_completed_on_turn("item-1", earlier_turn_id),
         /*replay_kind*/ None,
     );
-    history_text(&mut rx);
     chat.turn_lifecycle.last_turn_id = Some(turn_id.to_string());
     chat.record_context_pressure_item("tool-call-10", turn_id);
     chat.turn_lifecycle.agent_turn_running = true;
     chat.set_token_info(Some(make_token_info(12_700, 13_000)));
-    history_text(&mut rx);
 
     let (mut resumed, mut resumed_rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     resumed.thread_id = Some(thread_id);
