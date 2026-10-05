@@ -390,6 +390,7 @@ fn write_config(
         r#"model = "gpt-5.6-terra"
 model_provider = "mock_provider"
 suppress_unstable_features_warning = true
+notice.model_migrations."gpt-5.6-terra" = "gpt-6-sol"
 approval_policy = "on-request"
 sandbox_mode = "danger-full-access"
 
