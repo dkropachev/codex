@@ -331,7 +331,7 @@ if [[ "${RUNNER_OS:-}" == "macOS" && "${GITHUB_REPOSITORY:-}" != "openai/codex" 
   # macos-15-xlarge runners. The remote CI config's --jobs=800 can exhaust
   # those limits during analysis or local test execution. Keep remote build
   # throughput while bounding the test processes that execute on the runner.
-  post_config_bazel_args+=(--jobs=80 --local_test_jobs=2)
+  post_config_bazel_args+=(--jobs=80 --local_test_jobs=4)
 fi
 
 if [[ "${RUNNER_OS:-}" == "Linux" && "${GITHUB_REPOSITORY:-}" != "openai/codex" && "${bazel_args[0]}" == "test" ]]; then
@@ -343,12 +343,6 @@ if [[ "${RUNNER_OS:-}" == "Linux" && "${GITHUB_REPOSITORY:-}" != "openai/codex" 
     --local_test_jobs=2
     --test_env=RUST_TEST_THREADS=1
   )
-fi
-
-if [[ "${RUNNER_OS:-}" == "Linux" && "${GITHUB_REPOSITORY:-}" != "openai/codex" && "${bazel_args[0]}" == "test" ]]; then
-  # Keep fork test execution on the GitHub runner. Remote executors have shown
-  # intermittent event timeouts in core integration tests that pass locally.
-  post_config_bazel_args+=(--jobs=80 --local_test_jobs=2 --strategy=TestRunner=local)
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
