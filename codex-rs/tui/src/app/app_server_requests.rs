@@ -81,6 +81,10 @@ pub(super) struct PendingAppServerRequests {
 }
 
 impl PendingAppServerRequests {
+    pub(super) fn has_pending_user_input(&self) -> bool {
+        self.user_inputs.values().any(|queue| !queue.is_empty())
+    }
+
     fn canonical_thread_id(thread_id: &str) -> String {
         codex_protocol::ThreadId::from_string(thread_id)
             .map(|thread_id| thread_id.to_string())

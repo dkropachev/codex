@@ -766,6 +766,8 @@ impl App {
                                 if self.active_thread_id == Some(thread_id)
                                     && self.chat_widget.thread_id() == Some(thread_id)
                                 {
+                                    self.chat_widget
+                                        .bind_handoff_turn_start(&steer_turn_id, items);
                                     crate::startup_recovery::acknowledged(client_user_message_id);
                                 }
                                 return Ok(true);
@@ -889,6 +891,8 @@ impl App {
                     if self.active_thread_id == Some(thread_id)
                         && self.chat_widget.thread_id() == Some(thread_id)
                     {
+                        self.chat_widget
+                            .bind_handoff_turn_start(&response.turn.id, items);
                         crate::startup_recovery::acknowledged(client_user_message_id);
                         self.chat_widget
                             .record_safety_buffering_turn(response.turn.id, op);

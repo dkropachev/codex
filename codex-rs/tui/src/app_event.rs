@@ -560,6 +560,20 @@ pub(crate) enum AppEvent {
         text: String,
     },
 
+    /// Transfer a completed, validated handoff plan into a fresh thread.
+    StartHandoffTransfer {
+        source_thread_id: ThreadId,
+        plan_turn_id: String,
+        generation: u64,
+        plan: String,
+    },
+
+    /// Keep planning in the source thread after dismissing the ask prompt.
+    StayInHandoff {
+        source_thread_id: ThreadId,
+        generation: u64,
+    },
+
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 

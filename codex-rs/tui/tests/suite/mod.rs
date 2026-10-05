@@ -2,6 +2,9 @@
 #[path = "account_pool__live.rs"]
 mod account_pool_live;
 #[cfg(unix)]
+#[path = "context_management__handoff_live.rs"]
+mod context_management_handoff_live;
+#[cfg(unix)]
 mod daemon_compatibility;
 #[cfg(unix)]
 mod directory_trust;

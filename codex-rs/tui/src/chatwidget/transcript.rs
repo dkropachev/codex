@@ -50,6 +50,10 @@ pub(super) struct TranscriptState {
     pub(super) last_completed_agent_message: Option<(String, String)>,
     /// Raw markdown of the most recently completed proposed plan.
     pub(super) latest_proposed_plan_markdown: Option<String>,
+    /// Exact latest completed Plan item and the turn that owns it. Display fallback must not
+    /// overwrite this source for fresh-thread handoff.
+    pub(super) latest_authoritative_plan_markdown: Option<String>,
+    pub(super) latest_authoritative_plan_turn_id: Option<String>,
     /// Whether this turn already produced a copyable response.
     pub(super) saw_copy_source_this_turn: bool,
     /// Whether the current turn emitted a plan update.
@@ -107,10 +111,16 @@ impl TranscriptState {
         self.saw_copy_source_this_turn = false;
         self.last_completed_agent_message = None;
         self.saw_plan_update_this_turn = false;
-        self.saw_plan_item_this_turn = false;
         self.latest_proposed_plan_markdown = None;
+        self.invalidate_plan_authority();
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
+    }
+
+    pub(super) fn invalidate_plan_authority(&mut self) {
+        self.saw_plan_item_this_turn = false;
+        self.latest_authoritative_plan_markdown = None;
+        self.latest_authoritative_plan_turn_id = None;
     }
 }
 
