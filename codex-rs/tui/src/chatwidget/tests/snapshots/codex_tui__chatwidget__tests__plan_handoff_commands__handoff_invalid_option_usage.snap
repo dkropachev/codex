@@ -1,6 +1,5 @@
 ---
 source: tui/src/chatwidget/tests/plan_handoff_commands.rs
-assertion_line: 91
 expression: history
 ---
-■ Unknown /handoff option `-x`. Usage: /handoff [--ask] [--] [guidance...]
+■ Unknown /handoff option `-x`. Usage: /handoff [--ask | --defer] [--] [guidance...]

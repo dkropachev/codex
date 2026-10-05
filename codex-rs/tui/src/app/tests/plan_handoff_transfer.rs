@@ -2,6 +2,7 @@ use pretty_assertions::assert_eq;
 
 use super::*;
 use crate::chatwidget::UserMessage;
+use crate::slash_command::SlashCommand;
 use codex_app_server_protocol::ItemCompletedNotification;
 
 struct PreparedHandoffApp {
@@ -19,6 +20,21 @@ async fn prepare_handoff_on_server(
     ops: &mut tokio::sync::mpsc::UnboundedReceiver<Op>,
     app_server: &mut AppServerSession,
 ) -> Result<(ThreadId, AppEvent)> {
+    let source_thread_id =
+        prepare_handoff_plan_on_server(app, events, ops, app_server, "/handoff").await?;
+    let transfer = std::iter::from_fn(|| events.try_recv().ok())
+        .find(|event| matches!(event, AppEvent::StartHandoffTransfer { .. }))
+        .expect("validated plan should request a fresh transfer");
+    Ok((source_thread_id, transfer))
+}
+
+async fn prepare_handoff_plan_on_server(
+    app: &mut App,
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    ops: &mut tokio::sync::mpsc::UnboundedReceiver<Op>,
+    app_server: &mut AppServerSession,
+    command: &str,
+) -> Result<ThreadId> {
     let started = app_server.start_thread(&app.config).await?;
     let source_thread_id = started.session.thread_id;
     app.enqueue_primary_thread_session(started.session, started.turns)
@@ -27,7 +43,7 @@ async fn prepare_handoff_on_server(
     app.chat_widget
         .set_reasoning_effort(Some(ReasoningEffortConfig::High));
     app.chat_widget
-        .restore_user_message_to_composer(UserMessage::from("/handoff"));
+        .restore_user_message_to_composer(UserMessage::from(command));
     app.chat_widget
         .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let AppCommand::UserTurn { items, .. } = next_user_turn_op(ops) else {
@@ -60,11 +76,25 @@ async fn prepare_handoff_on_server(
         .lock()
         .await
         .latest_turn_id = Some("planning-turn".to_string());
-    let transfer = std::iter::from_fn(|| events.try_recv().ok())
-        .find(|event| matches!(event, AppEvent::StartHandoffTransfer { .. }))
-        .expect("validated plan should request a fresh transfer");
-    Ok((source_thread_id, transfer))
+    Ok(source_thread_id)
 }
+
+fn submit_deferred_prompt(
+    app: &mut App,
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    prompt: UserMessage,
+) -> AppEvent {
+    while events.try_recv().is_ok() {}
+    app.chat_widget.restore_user_message_to_composer(prompt);
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    std::iter::from_fn(|| events.try_recv().ok())
+        .find(|event| matches!(event, AppEvent::StartDeferredHandoffTransfer { .. }))
+        .expect("next model-bound prompt should request deferred transfer")
+}
+
+#[path = "plan_handoff_deferred.rs"]
+mod deferred;
 
 #[tokio::test]
 async fn accepted_steer_notification_invalidates_earlier_handoff_plan() -> Result<()> {

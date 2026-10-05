@@ -3,11 +3,14 @@
 //! This module contains the exhaustive `AppEvent` dispatcher and exit-mode handling. Large domain
 //! actions are delegated to focused app submodules so the central match remains the routing layer.
 
+use super::handoff::HandoffTransferKind;
+use super::handoff::HandoffTransferRequest;
 use super::rate_limit_refresh::RateLimitReadStatus;
 use super::rate_limit_refresh::RateLimitRefreshOutcome;
 use super::resize_reflow::trailing_run_start;
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
+use crate::app_event::DeferredDiscardAction;
 use crate::app_event::RecapTrigger;
 use crate::app_event::ThreadTitleDestination;
 use crate::app_server_session::ForkGoalContinuation;
@@ -31,6 +34,9 @@ impl App {
         app_server: &mut AppServerSession,
         event: AppEvent,
     ) -> Result<AppRunControl> {
+        if self.confirm_deferred_discard_app_event(&event) {
+            return Ok(AppRunControl::Continue);
+        }
         if self.reconnect.offline
             && !matches!(
                 &event,
@@ -392,15 +398,69 @@ impl App {
                 generation,
                 plan,
             } => {
-                self.start_handoff_transfer(
+                Box::pin(self.start_handoff_transfer(
                     tui,
                     app_server,
-                    source_thread_id,
-                    plan_turn_id,
-                    generation,
-                    plan,
-                )
+                    HandoffTransferRequest {
+                        source_thread_id,
+                        plan_turn_id,
+                        generation,
+                        plan,
+                        kind: HandoffTransferKind::Proceed,
+                    },
+                ))
                 .await?;
+            }
+            AppEvent::StartDeferredHandoffTransfer {
+                source_thread_id,
+                plan_turn_id,
+                generation,
+                plan,
+                user_message,
+            } => {
+                Box::pin(self.start_handoff_transfer(
+                    tui,
+                    app_server,
+                    HandoffTransferRequest {
+                        source_thread_id,
+                        plan_turn_id,
+                        generation,
+                        plan,
+                        kind: HandoffTransferKind::Deferred { user_message },
+                    },
+                ))
+                .await?;
+            }
+            AppEvent::ConfirmDeferredHandoffDiscard {
+                source_thread_id,
+                generation,
+                action,
+            } => {
+                if self
+                    .chat_widget
+                    .discard_deferred_handoff(source_thread_id, generation)
+                {
+                    match action {
+                        DeferredDiscardAction::Command(command) => {
+                            self.chat_widget.dispatch_command(command);
+                        }
+                        DeferredDiscardAction::CommandWithArgs {
+                            command,
+                            args,
+                            text_elements,
+                        } => {
+                            self.chat_widget
+                                .dispatch_command_with_args(command, args, text_elements);
+                        }
+                    }
+                }
+            }
+            AppEvent::DiscardDeferredHandoff {
+                source_thread_id,
+                generation,
+            } => {
+                self.chat_widget
+                    .discard_deferred_handoff(source_thread_id, generation);
             }
             AppEvent::StayInHandoff {
                 source_thread_id,
@@ -455,7 +515,11 @@ impl App {
                 {
                     Ok(Some(target_session)) => {
                         return self
-                            .resume_target_session(tui, app_server, target_session)
+                            .apply_resume_picker_selection(
+                                tui,
+                                app_server,
+                                SessionSelection::Resume(target_session),
+                            )
                             .await;
                     }
                     Ok(None) => {

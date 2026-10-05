@@ -69,6 +69,7 @@ impl ChatWidget {
     // Raw reasoning uses the same flow as summarized reasoning
 
     pub(super) fn on_task_started(&mut self) {
+        self.clear_deferred_execution_prompt_after_turn_start();
         self.bottom_pane.dismiss_composer_sparkle();
         self.clear_context_compaction();
         self.input_queue.user_turn_pending_start = false;
@@ -402,6 +403,7 @@ impl ChatWidget {
             return false;
         }
         self.on_error(message);
+        self.restore_rejected_deferred_execution_prompt();
         true
     }
 

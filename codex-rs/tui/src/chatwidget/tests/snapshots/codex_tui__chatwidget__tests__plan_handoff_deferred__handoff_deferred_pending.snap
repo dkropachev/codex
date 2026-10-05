@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/plan_handoff_deferred.rs
+assertion_line: 39
+expression: pending_notice
+---
+
+• Handoff plan ready for the next prompt. Local commands stay in this thread. Your next model-bound prompt starts a fresh thread with the plan.

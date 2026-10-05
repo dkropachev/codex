@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/plan_handoff_deferred.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Discard the deferred handoff plan?
+  Running /archive will discard the plan waiting for your next prompt.
+
+
+› 1. Keep the handoff plan          Return to the current thread.
+  2. Discard plan and run /archive  Continue with the selected command.
+
+  enter select · esc back

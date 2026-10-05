@@ -225,6 +225,7 @@ mod exit_summary;
 mod experimental_features;
 mod file_change_approvals;
 mod handoff;
+mod handoff_deferred;
 mod history_pagination;
 mod history_ui;
 mod input;

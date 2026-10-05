@@ -10,7 +10,7 @@ use crate::collaboration_modes;
 use crate::model_catalog::ModelCatalog;
 
 pub(crate) const HANDOFF_MODE_NAME: &str = "Handoff";
-pub(crate) const HANDOFF_USAGE: &str = "Usage: /handoff [--ask] [--] [guidance...]";
+pub(crate) const HANDOFF_USAGE: &str = "Usage: /handoff [--ask | --defer] [--] [guidance...]";
 
 const MAX_CONTEXT_ITEM_TOKENS: usize = 10_000;
 const FRESH_EXECUTION_PREAMBLE: &str = "A previous session prepared the authoritative handoff plan below. Continue the task in this fresh session by implementing that plan. Treat it as the source of task intent, re-read repository files as needed, preserve completed work, and carry the remaining work through implementation and appropriate verification.";
@@ -27,6 +27,7 @@ const MANUAL_PLANNING_PROMPT: &str = "Prepare a safe handoff plan for continuing
 pub(crate) enum HandoffDisposition {
     Proceed,
     Ask,
+    Defer,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,6 +41,7 @@ pub(crate) struct ParsedHandoffCommand {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HandoffParseError {
     UnknownOption(String),
+    ConflictingOptions,
 }
 
 impl fmt::Display for HandoffParseError {
@@ -51,6 +53,10 @@ impl fmt::Display for HandoffParseError {
                     "Unknown /handoff option `{option}`. {HANDOFF_USAGE}"
                 )
             }
+            Self::ConflictingOptions => write!(
+                formatter,
+                "Choose either `--ask` or `--defer` for /handoff. {HANDOFF_USAGE}"
+            ),
         }
     }
 }
@@ -106,6 +112,21 @@ impl HandoffPlan {
         )
     }
 
+    pub(crate) fn execution_prompt_with_followup(
+        &self,
+        followup: &str,
+    ) -> Result<String, HandoffPlanValidationError> {
+        let prompt = format!(
+            "{}\n\n## Next user request\n\n{followup}",
+            self.execution_prompt()
+        );
+        let estimated_tokens = approx_token_count(&prompt);
+        if estimated_tokens > MAX_CONTEXT_ITEM_TOKENS {
+            return Err(HandoffPlanValidationError::ContextItemTooLarge { estimated_tokens });
+        }
+        Ok(prompt)
+    }
+
     pub(crate) fn into_text(self) -> String {
         self.text
     }
@@ -121,7 +142,18 @@ pub(crate) fn parse_handoff_args(args: &str) -> Result<ParsedHandoffCommand, Han
         let token_end = next_whitespace(args, cursor);
         let token = &args[cursor..token_end];
         match token {
-            "--ask" => disposition = HandoffDisposition::Ask,
+            "--ask" => {
+                if disposition == HandoffDisposition::Defer {
+                    return Err(HandoffParseError::ConflictingOptions);
+                }
+                disposition = HandoffDisposition::Ask;
+            }
+            "--defer" => {
+                if disposition == HandoffDisposition::Ask {
+                    return Err(HandoffParseError::ConflictingOptions);
+                }
+                disposition = HandoffDisposition::Defer;
+            }
             "--" => {
                 cursor = skip_whitespace(args, token_end);
                 break;

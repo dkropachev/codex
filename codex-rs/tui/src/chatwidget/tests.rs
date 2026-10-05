@@ -280,6 +280,8 @@ mod permissions;
 mod plan_handoff_authority;
 #[path = "tests/plan_handoff_commands.rs"]
 mod plan_handoff_commands;
+#[path = "tests/plan_handoff_deferred.rs"]
+mod plan_handoff_deferred;
 #[path = "tests/plan_handoff_state.rs"]
 mod plan_handoff_state;
 mod plan_mode;

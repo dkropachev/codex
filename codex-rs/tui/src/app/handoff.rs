@@ -3,7 +3,91 @@
 use super::session_lifecycle::FreshThreadTransition;
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
+use crate::chatwidget::UserMessage;
 use crate::handoff::HandoffPlan;
+
+pub(super) enum HandoffTransferKind {
+    Proceed,
+    Deferred { user_message: UserMessage },
+}
+
+pub(super) struct HandoffTransferRequest {
+    pub(super) source_thread_id: ThreadId,
+    pub(super) plan_turn_id: String,
+    pub(super) generation: u64,
+    pub(super) plan: String,
+    pub(super) kind: HandoffTransferKind,
+}
+
+impl HandoffTransferKind {
+    fn is_current_transaction(
+        &self,
+        chat_widget: &ChatWidget,
+        source_thread_id: ThreadId,
+        generation: u64,
+    ) -> bool {
+        match self {
+            Self::Proceed => {
+                chat_widget.is_current_handoff_transaction(source_thread_id, generation)
+            }
+            Self::Deferred { .. } => {
+                chat_widget.is_current_deferred_transaction(source_thread_id, generation)
+            }
+        }
+    }
+
+    fn is_locally_safe(
+        &self,
+        chat_widget: &ChatWidget,
+        source_thread_id: ThreadId,
+        generation: u64,
+        plan: &str,
+    ) -> bool {
+        match self {
+            Self::Proceed => {
+                chat_widget.handoff_transfer_is_locally_safe(source_thread_id, generation, plan)
+            }
+            Self::Deferred { user_message } => chat_widget.deferred_transfer_is_locally_safe(
+                source_thread_id,
+                generation,
+                plan,
+                user_message,
+            ),
+        }
+    }
+
+    fn rollback(&self, chat_widget: &mut ChatWidget, generation: u64) {
+        match self {
+            Self::Proceed => chat_widget.stay_in_handoff(generation),
+            Self::Deferred { .. } => chat_widget.rollback_deferred_handoff(generation),
+        }
+    }
+
+    fn initial_user_message(
+        &self,
+        plan: &HandoffPlan,
+    ) -> Result<UserMessage, crate::handoff::HandoffPlanValidationError> {
+        match self {
+            Self::Proceed => Ok(plan.execution_prompt().into()),
+            Self::Deferred { user_message } => {
+                let text = plan.execution_prompt_with_followup(&user_message.text)?;
+                let user_text_start = text.len() - user_message.text.len();
+                let mut merged = user_message.clone();
+                merged.text_elements = merged
+                    .text_elements
+                    .into_iter()
+                    .map(|element| {
+                        element.map_range(|range| {
+                            (user_text_start + range.start..user_text_start + range.end).into()
+                        })
+                    })
+                    .collect();
+                merged.text = text;
+                Ok(merged)
+            }
+        }
+    }
+}
 
 struct SourceRevision {
     metadata: codex_app_server_protocol::Thread,
@@ -68,33 +152,30 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
-        source_thread_id: ThreadId,
-        plan_turn_id: String,
-        generation: u64,
-        plan: String,
+        request: HandoffTransferRequest,
     ) -> Result<()> {
+        let HandoffTransferRequest {
+            source_thread_id,
+            plan_turn_id,
+            generation,
+            plan,
+            kind,
+        } = request;
         if self.current_displayed_thread_id() != Some(source_thread_id)
             || self.overlay.is_some()
             || self.agent_navigation.is_parent_owned(source_thread_id)
             || self.pending_app_server_requests.has_pending_user_input()
             || self.has_active_handoff_descendant(source_thread_id).await
-            || !self.chat_widget.handoff_transfer_is_locally_safe(
-                source_thread_id,
-                generation,
-                &plan,
-            )
+            || !kind.is_locally_safe(&self.chat_widget, source_thread_id, generation, &plan)
             || self.reject_pending_permission_root_switch()
         {
-            if self
-                .chat_widget
-                .is_current_handoff_transaction(source_thread_id, generation)
-            {
+            if kind.is_current_transaction(&self.chat_widget, source_thread_id, generation) {
                 self.chat_widget.add_info_message(
                     "Handoff transfer paused because the source thread is no longer safely idle."
                         .to_string(),
                     Some("The source thread remains resumable. Finish the pending interaction and retry in Handoff mode.".to_string()),
                 );
-                self.chat_widget.stay_in_handoff(generation);
+                kind.rollback(&mut self.chat_widget, generation);
             }
             return Ok(());
         }
@@ -102,10 +183,20 @@ impl App {
             Ok(plan) => plan,
             Err(error) => {
                 self.chat_widget.add_error_message(error.to_string());
-                self.chat_widget.stay_in_handoff(generation);
+                kind.rollback(&mut self.chat_widget, generation);
                 return Ok(());
             }
         };
+        let initial_user_message = match kind.initial_user_message(&plan) {
+            Ok(message) => message,
+            Err(error) => {
+                self.chat_widget.add_error_message(error.to_string());
+                kind.rollback(&mut self.chat_widget, generation);
+                return Ok(());
+            }
+        };
+        let recoverable_execution_prompt = matches!(&kind, HandoffTransferKind::Deferred { .. })
+            .then(|| initial_user_message.clone());
         let source_revision = match self
             .read_handoff_source_revision(app_server, source_thread_id)
             .await
@@ -117,7 +208,7 @@ impl App {
                         .to_string(),
                     Some("The source thread remains resumable. Review its latest input or use a server that can read the latest turn before retrying.".to_string()),
                 );
-                self.chat_widget.stay_in_handoff(generation);
+                kind.rollback(&mut self.chat_widget, generation);
                 return Ok(());
             }
         };
@@ -135,7 +226,7 @@ impl App {
                 self.chat_widget.add_error_message(format!(
                     "Failed to prepare the fresh handoff thread: {error}. The source thread remains resumable."
                 ));
-                self.chat_widget.stay_in_handoff(generation);
+                kind.rollback(&mut self.chat_widget, generation);
                 return Ok(());
             }
         };
@@ -169,7 +260,7 @@ impl App {
                 self.chat_widget.add_error_message(format!(
                     "Failed to start the fresh handoff thread: {error}. The source thread remains resumable."
                 ));
-                self.chat_widget.stay_in_handoff(generation);
+                kind.rollback(&mut self.chat_widget, generation);
                 return Ok(());
             }
         };
@@ -192,7 +283,7 @@ impl App {
                     .to_string(),
                 Some("The source thread remains resumable. Review its latest input or use a server that can read the latest turn before retrying.".to_string()),
             );
-            self.chat_widget.stay_in_handoff(generation);
+            kind.rollback(&mut self.chat_widget, generation);
             return Ok(());
         }
 
@@ -203,7 +294,7 @@ impl App {
                 FreshThreadTransition {
                     started,
                     config,
-                    initial_user_message: Some(plan.execution_prompt().into()),
+                    initial_user_message: Some(initial_user_message),
                     presentation: ThreadAttachPresentation::SessionLineage,
                     summary,
                 },
@@ -216,12 +307,16 @@ impl App {
                 self.chat_widget.add_error_message(format!(
                     "Failed to attach the fresh handoff thread: {error}. The source thread remains resumable."
                 ));
-                self.chat_widget.stay_in_handoff(generation);
+                kind.rollback(&mut self.chat_widget, generation);
                 return Ok(());
             }
             return Err(error).wrap_err(
                 "Failed to attach the fresh handoff thread after leaving the source; resume the source thread from its saved rollout",
             );
+        }
+        if let Some(user_message) = recoverable_execution_prompt {
+            self.chat_widget
+                .mark_deferred_execution_prompt(user_message);
         }
         tui.frame_requester().schedule_frame();
         Ok(())
