@@ -77,15 +77,6 @@ impl App {
                     }),
                 ))
             }
-            AppEvent::ResumeSessionByIdOrName(id_or_name) => {
-                let id_or_name = id_or_name.clone();
-                Some((
-                    "resume another session",
-                    Box::new(move |tx| {
-                        tx.send(AppEvent::ResumeSessionByIdOrName(id_or_name.clone()));
-                    }),
-                ))
-            }
             AppEvent::ArchiveCurrentThread => Some((
                 "archive this session",
                 Box::new(|tx| tx.send(AppEvent::ArchiveCurrentThread)),

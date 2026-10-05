@@ -133,7 +133,6 @@ impl ChatWidget {
         user_message: &UserMessage,
     ) -> bool {
         self.is_current_deferred_transaction(source_thread_id, generation)
-            && self.active_mode_kind() == ModeKind::Default
             && self.handoff_state.pending.as_ref().is_some_and(|pending| {
                 pending.plan_text == plan
                     && pending.in_flight.as_ref() == Some(user_message)
@@ -214,7 +213,6 @@ impl ChatWidget {
             command,
             SlashCommand::New
                 | SlashCommand::Clear
-                | SlashCommand::Resume
                 | SlashCommand::Fork
                 | SlashCommand::Worktree
                 | SlashCommand::Compact

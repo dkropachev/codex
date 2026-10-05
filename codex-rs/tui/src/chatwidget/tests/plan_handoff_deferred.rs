@@ -139,6 +139,56 @@ async fn local_status_command_preserves_deferred_handoff() {
 }
 
 #[tokio::test]
+async fn resume_picker_can_be_opened_without_discarding_deferred_handoff() {
+    let (mut chat, mut events, mut ops) = completed_deferred_plan().await;
+    while events.try_recv().is_ok() {}
+
+    chat.dispatch_command(SlashCommand::Resume);
+
+    assert!(chat.has_pending_deferred_handoff());
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::OpenResumePicker))
+    );
+    assert_no_submit_op(&mut ops);
+}
+
+#[tokio::test]
+async fn mode_change_does_not_strand_the_next_deferred_prompt() {
+    let (mut chat, mut events, mut ops) = completed_deferred_plan().await;
+    while events.try_recv().is_ok() {}
+
+    chat.dispatch_command(SlashCommand::Plan);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    chat.restore_user_message_to_composer(UserMessage::from("Continue after mode change"));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let transfer = std::iter::from_fn(|| events.try_recv().ok()).find_map(|event| {
+        if let AppEvent::StartDeferredHandoffTransfer {
+            source_thread_id,
+            generation,
+            plan,
+            user_message,
+            ..
+        } = event
+        {
+            Some((source_thread_id, generation, plan, user_message))
+        } else {
+            None
+        }
+    });
+    let (source_thread_id, generation, plan, user_message) =
+        transfer.expect("deferred transfer after mode change");
+    assert!(chat.deferred_transfer_is_locally_safe(
+        source_thread_id,
+        generation,
+        &plan,
+        &user_message,
+    ));
+    assert_no_submit_op(&mut ops);
+}
+
+#[tokio::test]
 async fn restored_deferred_transfer_keeps_prompt_in_recovered_queue() {
     let (mut chat, mut events, mut ops) = completed_deferred_plan().await;
     let source_thread_id = chat.thread_id.expect("source thread");
@@ -225,7 +275,6 @@ async fn destructive_commands_confirm_before_discarding_deferred_plan() {
         SlashCommand::Clear,
         SlashCommand::New,
         SlashCommand::Fork,
-        SlashCommand::Resume,
         SlashCommand::Worktree,
         SlashCommand::Compact,
         SlashCommand::Handoff,

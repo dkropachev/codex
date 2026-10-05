@@ -515,7 +515,11 @@ impl App {
                 {
                     Ok(Some(target_session)) => {
                         return self
-                            .resume_target_session(tui, app_server, target_session)
+                            .apply_resume_picker_selection(
+                                tui,
+                                app_server,
+                                SessionSelection::Resume(target_session),
+                            )
                             .await;
                     }
                     Ok(None) => {
