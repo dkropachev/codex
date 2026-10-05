@@ -55,6 +55,11 @@ async fn prepare_handoff_on_server(
         turn_completed_notification(source_thread_id, "planning-turn", TurnStatus::Completed),
         /*replay_kind*/ None,
     );
+    app.thread_event_channels[&source_thread_id]
+        .store
+        .lock()
+        .await
+        .latest_turn_id = Some("planning-turn".to_string());
     let transfer = std::iter::from_fn(|| events.try_recv().ok())
         .find(|event| matches!(event, AppEvent::StartHandoffTransfer { .. }))
         .expect("validated plan should request a fresh transfer");
@@ -128,7 +133,16 @@ async fn accepted_steer_notification_invalidates_earlier_handoff_plan() -> Resul
 async fn prepared_handoff_app() -> Result<PreparedHandoffApp> {
     let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
     let tui = crate::tui::test_support::make_test_tui()?;
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let (mut app_server, _requests, _proxy) =
+        session_lifecycle_requests::start_recording_app_server_with_history(
+            &app.config,
+            session_lifecycle_requests::HistoryCapabilities::HandoffPlanPage,
+            /*blocked_thread_list*/ None,
+            /*failed_thread_name*/ None,
+            crate::app_server_session::ThreadParamsMode::Embedded,
+            LoaderOverrides::default(),
+        )
+        .await?;
     let (source_thread_id, transfer) =
         prepare_handoff_on_server(&mut app, &mut events, &mut ops, &mut app_server).await?;
     Ok(PreparedHandoffApp {
@@ -275,7 +289,7 @@ async fn fresh_start_failure_keeps_the_source_thread_visible() -> Result<()> {
     let (mut app_server, _requests, proxy) =
         session_lifecycle_requests::start_recording_app_server_with_history(
             &app.config,
-            session_lifecycle_requests::HistoryCapabilities::ConfigReadFails,
+            session_lifecycle_requests::HistoryCapabilities::HandoffConfigReadFails,
             /*blocked_thread_list*/ None,
             /*failed_thread_name*/ None,
             crate::app_server_session::ThreadParamsMode::Embedded,
@@ -363,5 +377,70 @@ async fn source_revision_change_during_start_pauses_transfer() -> Result<()> {
             .any(|event| matches!(event, AppEvent::CodexOp(AppCommand::UserTurn { .. })))
     );
     proxy.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn newer_persisted_source_turn_pauses_transfer() -> Result<()> {
+    let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
+    let (mut app_server, _requests, proxy) =
+        session_lifecycle_requests::start_recording_app_server_with_history(
+            &app.config,
+            session_lifecycle_requests::HistoryCapabilities::HandoffLatestTurnDiffers,
+            /*blocked_thread_list*/ None,
+            /*failed_thread_name*/ None,
+            crate::app_server_session::ThreadParamsMode::Embedded,
+            LoaderOverrides::default(),
+        )
+        .await?;
+    let (source_thread_id, transfer) =
+        prepare_handoff_on_server(&mut app, &mut events, &mut ops, &mut app_server).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    app.handle_event(&mut tui, &mut app_server, transfer)
+        .await?;
+
+    assert_eq!(app.chat_widget.thread_id(), Some(source_thread_id));
+    assert_eq!(app.active_thread_id, Some(source_thread_id));
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::CodexOp(AppCommand::UserTurn { .. })))
+    );
+    proxy.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn unavailable_source_turn_page_pauses_transfer() -> Result<()> {
+    let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let (source_thread_id, transfer) =
+        prepare_handoff_on_server(&mut app, &mut events, &mut ops, &mut app_server).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    app.handle_event(&mut tui, &mut app_server, transfer)
+        .await?;
+
+    assert_eq!(app.chat_widget.thread_id(), Some(source_thread_id));
+    assert_eq!(app.active_thread_id, Some(source_thread_id));
+    let emitted: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+    assert!(
+        !emitted
+            .iter()
+            .any(|event| matches!(event, AppEvent::CodexOp(AppCommand::UserTurn { .. })))
+    );
+    let message = emitted.into_iter().find_map(|event| match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let text = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            text.contains("source Plan could not be verified")
+                .then_some(text)
+        }
+        _ => None,
+    });
+    insta::assert_snapshot!(
+        "handoff_unverifiable_source_plan",
+        message.expect("pause notice")
+    );
+    app_server.shutdown().await?;
     Ok(())
 }

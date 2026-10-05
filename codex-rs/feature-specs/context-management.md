@@ -37,6 +37,7 @@ Context management keeps long-running threads usable without allowing one client
 - A bare live or queued command retains local and remote attachments; unsupported images restore the original command.
 - A same-turn accepted steer or replayed user message invalidates an earlier Plan, while a revised completed Plan can become authoritative.
 - The app rechecks source ownership, generation, pending interactions, and active descendants before starting a fresh thread.
+- The app verifies the source's latest persisted turn before and after fresh-thread setup; unavailable turn history pauses transfer.
 - Failed validation or transfer leaves the source thread resumable; `--ask` can stay in Handoff mode without transferring.
 
 ## Invariants
@@ -107,11 +108,12 @@ Component coverage exercises parser, attachments, Plan authority, ask/stay decis
 #### Test cases
 
 - Leading option-like guidance is rejected while lone dash and `-- -x` remain literal: codex-rs/tui/src/handoff_tests.rs:parser_rejects_leading_option_like_guidance,parser_preserves_lone_dash_and_option_like_guidance_after_separator
+- The invalid-option error has a rendered usage snapshot: codex-rs/tui/src/chatwidget/tests/plan_handoff_commands.rs:leading_hyphen_guidance_is_rejected_before_submission
 - The generated execution prompt obeys the inherited context-item ceiling: codex-rs/tui/src/handoff_tests.rs:handoff_fragment_obeys_existing_model_context_item_ceiling
 - Live and queued bare commands preserve remote-only attachments, remote workspace image preparation retains handoff ownership, and unsupported images restore the command: codex-rs/tui/src/chatwidget/tests/plan_handoff_commands.rs:bare_live_handoff_keeps_remote_only_attachment,bare_queued_handoff_keeps_remote_only_attachment,remote_workspace_image_preparation_keeps_handoff_ownership,unsupported_handoff_image_restores_the_original_command
 - An accepted steer invalidates an earlier Plan in live and replayed flows: codex-rs/tui/src/chatwidget/tests/plan_handoff_authority.rs:accepted_user_input_invalidates_earlier_plan_in_live_and_replay_flows
 - Default and ask dispositions require an owned completed Plan; ask can stay without transferring: codex-rs/tui/src/chatwidget/tests/plan_handoff_state.rs:completed_default_handoff_emits_fresh_thread_transfer,ask_handoff_stay_keeps_source_mode_and_invalidates_old_transfer,accepted_same_turn_steer_prevents_transfer_of_earlier_plan
-- Fresh execution preserves source and selected settings, while an active descendant, accepted steer, source revision change, or failed start retains the source: codex-rs/tui/src/app/tests/plan_handoff_transfer.rs:manual_handoff_starts_fresh_execution_and_preserves_source,active_descendant_pauses_transfer_and_preserves_source,accepted_steer_notification_invalidates_earlier_handoff_plan,source_revision_change_during_start_pauses_transfer,fresh_start_failure_keeps_the_source_thread_visible,handoff_thread_start_failure_keeps_source_and_does_not_execute
+- Fresh execution preserves source and selected settings, while an active descendant, accepted steer, source revision change, newer persisted turn, unavailable turn page, or failed start retains the source: codex-rs/tui/src/app/tests/plan_handoff_transfer.rs:manual_handoff_starts_fresh_execution_and_preserves_source,active_descendant_pauses_transfer_and_preserves_source,accepted_steer_notification_invalidates_earlier_handoff_plan,source_revision_change_during_start_pauses_transfer,newer_persisted_source_turn_pauses_transfer,unavailable_source_turn_page_pauses_transfer,fresh_start_failure_keeps_the_source_thread_visible,handoff_thread_start_failure_keeps_source_and_does_not_execute
 
 ### login-auth (auth and login behavior)
 

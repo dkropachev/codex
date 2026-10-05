@@ -777,13 +777,13 @@ impl App {
         if tui.is_alt_screen_active() {
             tui.leave_alt_screen()?;
         }
-        self.reset_transcript_state_after_clear();
-        tui.clear_pending_history_lines();
         if tui.is_owned_screen() {
             tui.terminal.clear()?;
         } else {
             Self::clear_terminal_for_thread_switch(&mut tui.terminal)?;
         }
+        self.reset_transcript_state_after_clear();
+        tui.clear_pending_history_lines();
         Ok(())
     }
 
@@ -1045,6 +1045,9 @@ impl App {
             presentation,
             summary,
         } = transition;
+        // Terminal reset is the fallible first step. Keep the source subscribed until it
+        // succeeds so a failed clear leaves the current thread usable.
+        self.reset_for_thread_switch(tui)?;
         self.shutdown_current_thread(app_server).await;
         let tracked_thread_ids: Vec<ThreadId> =
             self.thread_event_channels.keys().copied().collect();
@@ -1056,7 +1059,7 @@ impl App {
         self.local_settings = self.local_settings.reloaded(&config);
         self.refresh_server_version_overview_notice(CODEX_CLI_VERSION);
         self.config = config;
-        self.replace_chat_widget_with_app_server_thread(
+        self.install_chat_widget_with_app_server_thread(
             tui,
             started,
             presentation,
@@ -1090,6 +1093,22 @@ impl App {
         // resume/fork flows pass `None` so they cannot replay old history and then auto-submit a new
         // user turn by accident.
         self.reset_for_thread_switch(tui)?;
+        self.install_chat_widget_with_app_server_thread(
+            tui,
+            started,
+            presentation,
+            initial_user_message,
+        )
+        .await
+    }
+
+    async fn install_chat_widget_with_app_server_thread(
+        &mut self,
+        tui: &mut tui::Tui,
+        started: AppServerStartedThread,
+        presentation: ThreadAttachPresentation,
+        initial_user_message: Option<crate::chatwidget::UserMessage>,
+    ) -> Result<()> {
         self.pending_thread_switch_resets += 1;
         self.app_event_tx
             .send(AppEvent::ResetTranscriptForThreadSwitch);

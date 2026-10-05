@@ -88,10 +88,7 @@ async fn leading_hyphen_guidance_is_rejected_before_submission() {
         .map(|lines| lines_to_single_string(&lines))
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(
-        history.contains("Unknown /handoff option `-x`"),
-        "{history}"
-    );
+    insta::assert_snapshot!("handoff_invalid_option_usage", history);
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
 }
 

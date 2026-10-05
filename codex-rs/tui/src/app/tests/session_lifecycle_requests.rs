@@ -150,8 +150,11 @@ pub(super) enum HistoryCapabilities {
     ItemsAndSummaryTurnsFail,
     ThreadListFails,
     ThreadStartFails,
+    HandoffPlanPage,
+    HandoffConfigReadFails,
     HandoffThreadStartFails,
     HandoffSourceChangesAfterStart,
+    HandoffLatestTurnDiffers,
     ConfigReadUnsupported(i64),
     ConfigReadFails,
     ConfigReadUnknownVoice,
@@ -427,8 +430,11 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                                 message: "unknown variant `config/read`".to_string(),
                             },
                         })
-                    } else if history_capabilities == HistoryCapabilities::ConfigReadFails
-                        && request.method == "config/read"
+                    } else if matches!(
+                        history_capabilities,
+                        HistoryCapabilities::ConfigReadFails
+                            | HistoryCapabilities::HandoffConfigReadFails
+                    ) && request.method == "config/read"
                     {
                         JSONRPCMessage::Error(JSONRPCError {
                             id: request_id,
@@ -448,6 +454,30 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                                 data: None,
                                 message: "method not found".to_string(),
                             },
+                        })
+                    } else if matches!(
+                        history_capabilities,
+                        HistoryCapabilities::HandoffPlanPage
+                            | HistoryCapabilities::HandoffConfigReadFails
+                            | HistoryCapabilities::HandoffThreadStartFails
+                            | HistoryCapabilities::HandoffSourceChangesAfterStart
+                            | HistoryCapabilities::HandoffLatestTurnDiffers
+                    ) && request.method == "thread/turns/list"
+                    {
+                        let turn_id = if history_capabilities
+                            == HistoryCapabilities::HandoffLatestTurnDiffers
+                        {
+                            "newer-source-turn"
+                        } else {
+                            "planning-turn"
+                        };
+                        JSONRPCMessage::Response(JSONRPCResponse {
+                            id: request_id,
+                            result: serde_json::json!({
+                                "data": [test_turn(turn_id, TurnStatus::Completed, Vec::new())],
+                                "nextCursor": null,
+                                "backwardsCursor": null,
+                            }),
                         })
                     } else if request.method == "thread/start"
                         && (history_capabilities == HistoryCapabilities::ThreadStartFails
