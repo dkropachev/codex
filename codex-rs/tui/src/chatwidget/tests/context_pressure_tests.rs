@@ -150,11 +150,17 @@ async fn only_completed_compaction_rearms_after_usage_falls_during_compaction() 
         /*replay_kind*/ None,
     );
     chat.handle_server_notification(
-        usage_update(thread_id, "turn-1", /*total_tokens*/ 12_699, None),
+        usage_update(
+            thread_id, "turn-1", /*total_tokens*/ 12_699,
+            /*after_compaction_item_id*/ None,
+        ),
         /*replay_kind*/ None,
     );
     chat.handle_server_notification(
-        usage_update(thread_id, "turn-1", /*total_tokens*/ 12_700, None),
+        usage_update(
+            thread_id, "turn-1", /*total_tokens*/ 12_700,
+            /*after_compaction_item_id*/ None,
+        ),
         /*replay_kind*/ None,
     );
     assert_eq!(
@@ -169,7 +175,10 @@ async fn only_completed_compaction_rearms_after_usage_falls_during_compaction() 
         /*replay_kind*/ None,
     );
     chat.handle_server_notification(
-        usage_update(thread_id, "turn-2", /*total_tokens*/ 12_699, None),
+        usage_update(
+            thread_id, "turn-2", /*total_tokens*/ 12_699,
+            /*after_compaction_item_id*/ None,
+        ),
         /*replay_kind*/ None,
     );
     chat.handle_server_notification(
@@ -182,7 +191,10 @@ async fn only_completed_compaction_rearms_after_usage_falls_during_compaction() 
     );
     history_text(&mut rx);
     chat.handle_server_notification(
-        usage_update(thread_id, "turn-2", /*total_tokens*/ 12_700, None),
+        usage_update(
+            thread_id, "turn-2", /*total_tokens*/ 12_700,
+            /*after_compaction_item_id*/ None,
+        ),
         /*replay_kind*/ None,
     );
     assert!(history_text(&mut rx).contains("Context use has reached 70%."));
@@ -192,7 +204,10 @@ async fn only_completed_compaction_rearms_after_usage_falls_during_compaction() 
         Some(ReplayKind::ThreadSnapshot),
     );
     chat.handle_server_notification(
-        usage_update(thread_id, "turn-2", /*total_tokens*/ 12_699, None),
+        usage_update(
+            thread_id, "turn-2", /*total_tokens*/ 12_699,
+            /*after_compaction_item_id*/ None,
+        ),
         /*replay_kind*/ None,
     );
     chat.handle_server_notification(
@@ -201,7 +216,10 @@ async fn only_completed_compaction_rearms_after_usage_falls_during_compaction() 
     );
     history_text(&mut rx);
     chat.handle_server_notification(
-        usage_update(thread_id, "turn-2", /*total_tokens*/ 12_700, None),
+        usage_update(
+            thread_id, "turn-2", /*total_tokens*/ 12_700,
+            /*after_compaction_item_id*/ None,
+        ),
         /*replay_kind*/ None,
     );
     assert_eq!(history_text(&mut rx), "");
