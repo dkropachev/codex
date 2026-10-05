@@ -1,6 +1,7 @@
 use pretty_assertions::assert_eq;
 
 use super::*;
+use crate::app_event::DeferredDiscardAction;
 
 async fn completed_deferred_plan() -> (
     ChatWidget,
@@ -308,7 +309,10 @@ async fn destructive_commands_confirm_before_discarding_deferred_plan() {
         chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let confirmed = std::iter::from_fn(|| events.try_recv().ok()).find_map(|event| {
             if let AppEvent::ConfirmDeferredHandoffDiscard { action, .. } = event {
-                Some(action.command())
+                Some(match action {
+                    DeferredDiscardAction::Command(command)
+                    | DeferredDiscardAction::CommandWithArgs { command, .. } => command,
+                })
             } else {
                 None
             }
@@ -417,14 +421,25 @@ async fn reconnect_restores_pending_plan_without_automatic_transfer() {
 
 #[tokio::test]
 async fn rejected_default_mode_update_cancels_deferred_plan() {
-    let (mut chat, mut events, _ops) = completed_deferred_plan().await;
+    let (mut chat, mut events, mut ops) = completed_deferred_plan().await;
     let source_thread_id = chat.thread_id.expect("source thread");
     let requested = chat.effective_collaboration_mode();
     while events.try_recv().is_ok() {}
+    chat.restore_user_message_to_composer(UserMessage::from("Keep this pending prompt"));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::StartDeferredHandoffTransfer { .. }))
+    );
+    assert_no_submit_op(&mut ops);
 
     chat.on_collaboration_mode_settings_update_failed(source_thread_id, &requested);
 
     assert!(!chat.has_pending_deferred_handoff());
+    assert_eq!(
+        chat.composer_text_with_pending(),
+        "Keep this pending prompt"
+    );
     assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Handoff ready"));
     let notice = drain_insert_history(&mut events)
         .into_iter()

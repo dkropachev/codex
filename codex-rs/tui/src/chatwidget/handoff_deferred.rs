@@ -13,7 +13,10 @@ impl ChatWidget {
     }
 
     pub(in crate::chatwidget) fn fail_deferred_mode_update(&mut self) {
-        if self.handoff_state.pending.take().is_some() {
+        if let Some(pending) = self.handoff_state.pending.take() {
+            if let Some(user_message) = pending.in_flight {
+                self.restore_user_message_to_composer(user_message);
+            }
             self.refresh_deferred_footer();
             self.add_error_message(
                 "Deferred handoff could not return to Default mode. Select Default mode and retry /handoff --defer."
@@ -212,7 +215,10 @@ impl ChatWidget {
         &mut self,
         action: DeferredDiscardAction,
     ) -> bool {
-        let command = action.command();
+        let command = match &action {
+            DeferredDiscardAction::Command(command)
+            | DeferredDiscardAction::CommandWithArgs { command, .. } => *command,
+        };
         if !matches!(
             command,
             SlashCommand::New

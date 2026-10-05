@@ -61,14 +61,6 @@ pub(crate) enum DeferredDiscardAction {
     },
 }
 
-impl DeferredDiscardAction {
-    pub(crate) fn command(&self) -> SlashCommand {
-        match self {
-            Self::Command(command) | Self::CommandWithArgs { command, .. } => *command,
-        }
-    }
-}
-
 use crate::app_command::AppCommand;
 use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
