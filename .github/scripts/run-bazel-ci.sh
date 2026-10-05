@@ -336,9 +336,10 @@ fi
 
 if [[ "${RUNNER_OS:-}" == "Linux" && "${GITHUB_REPOSITORY:-}" != "openai/codex" && "${bazel_args[0]}" == "test" ]]; then
   # Public fork runners have repeatedly timed out unrelated Core integration tests
-  # while each RBE shard runs many Rust cases concurrently. Keep the Bazel shards,
-  # but let each test process finish one case before starting another.
-  post_config_bazel_args+=(--test_env=RUST_TEST_THREADS=1)
+  # while many RBE test actions and their Rust cases run concurrently. Keep the
+  # full target set and shards, but bound active remote actions and run one case
+  # at a time in each test process.
+  post_config_bazel_args+=(--jobs=16 --test_env=RUST_TEST_THREADS=1)
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
