@@ -71,8 +71,27 @@ async fn deferred_plan_waits_for_next_prompt_in_default_mode() {
         render_bottom_popup(&chat, /*width*/ 80),
     );
 
+    chat.restore_user_message_to_composer(UserMessage::from("Do this after the handoff"));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        chat.composer_text_with_pending(),
+        "Do this after the handoff"
+    );
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::StartDeferredHandoffTransfer { .. }))
+    );
+    assert_no_submit_op(&mut ops);
+
     chat.rollback_deferred_handoff(generation);
-    assert_eq!(chat.composer_text_with_pending(), "Check the final test");
+    assert!(
+        chat.composer_text_with_pending()
+            .contains("Check the final test")
+    );
+    assert!(
+        chat.composer_text_with_pending()
+            .contains("Do this after the handoff")
+    );
     assert!(
         chat.handoff_state
             .pending
@@ -101,6 +120,20 @@ async fn shell_command_does_not_consume_deferred_handoff() {
     assert!(
         !emitted
             .iter()
+            .any(|event| matches!(event, AppEvent::StartDeferredHandoffTransfer { .. }))
+    );
+}
+
+#[tokio::test]
+async fn local_status_command_preserves_deferred_handoff() {
+    let (mut chat, mut events, mut ops) = completed_deferred_plan().await;
+    while events.try_recv().is_ok() {}
+
+    chat.dispatch_command(SlashCommand::Status);
+    assert!(chat.has_pending_deferred_handoff());
+    assert_no_submit_op(&mut ops);
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok())
             .any(|event| matches!(event, AppEvent::StartDeferredHandoffTransfer { .. }))
     );
 }
@@ -193,10 +226,14 @@ async fn destructive_commands_confirm_before_discarding_deferred_plan() {
         SlashCommand::New,
         SlashCommand::Fork,
         SlashCommand::Resume,
+        SlashCommand::Worktree,
         SlashCommand::Compact,
+        SlashCommand::Handoff,
         SlashCommand::Archive,
         SlashCommand::Delete,
         SlashCommand::Quit,
+        SlashCommand::Exit,
+        SlashCommand::Logout,
     ] {
         let (mut chat, mut events, _ops) = completed_deferred_plan().await;
         while events.try_recv().is_ok() {}

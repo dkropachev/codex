@@ -2,6 +2,7 @@ use pretty_assertions::assert_eq;
 
 use super::*;
 use crate::chatwidget::UserMessage;
+use crate::slash_command::SlashCommand;
 use codex_app_server_protocol::ItemCompletedNotification;
 
 struct PreparedHandoffApp {
@@ -128,6 +129,7 @@ async fn deferred_handoff_executes_plan_and_followup_in_fresh_thread() -> Result
         .await?;
 
     assert_ne!(app.chat_widget.thread_id(), Some(source_thread_id));
+    assert!(!app.chat_widget.has_pending_deferred_handoff());
     let execution = std::iter::from_fn(|| events.try_recv().ok()).find_map(|event| match event {
         AppEvent::CodexOp(AppCommand::UserTurn { items, .. }) => Some(items),
         _ => None,
@@ -138,6 +140,14 @@ async fn deferred_handoff_executes_plan_and_followup_in_fresh_thread() -> Result
     };
     assert!(text.contains("- Finish the focused work"));
     assert!(text.ends_with("## Next user request\n\nRun the final focused test"));
+    app.chat_widget
+        .restore_user_message_to_composer(UserMessage::from("A later prompt"));
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::StartDeferredHandoffTransfer { .. }))
+    );
     assert!(
         app_server
             .thread_read(source_thread_id, /*include_turns*/ false)
@@ -324,6 +334,59 @@ async fn new_session_event_confirms_before_discarding_deferred_plan() -> Result<
         app.handle_event(&mut tui, &mut app_server, action).await?;
     }
     assert_ne!(app.chat_widget.thread_id(), Some(source_thread_id));
+    proxy.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn confirmed_inline_handoff_discards_pending_plan_and_preserves_arguments() -> Result<()> {
+    let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
+    let (mut app_server, _requests, proxy) =
+        session_lifecycle_requests::start_recording_app_server_with_history(
+            &app.config,
+            session_lifecycle_requests::HistoryCapabilities::HandoffPlanPage,
+            /*blocked_thread_list*/ None,
+            /*failed_thread_name*/ None,
+            crate::app_server_session::ThreadParamsMode::Embedded,
+            LoaderOverrides::default(),
+        )
+        .await?;
+    prepare_handoff_plan_on_server(
+        &mut app,
+        &mut events,
+        &mut ops,
+        &mut app_server,
+        "/handoff --defer",
+    )
+    .await?;
+    while events.try_recv().is_ok() {}
+
+    app.chat_widget.dispatch_command_with_args(
+        SlashCommand::Handoff,
+        "--ask keep the final check".to_string(),
+        Vec::new(),
+    );
+    assert!(app.chat_widget.has_pending_deferred_handoff());
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let confirmation = std::iter::from_fn(|| events.try_recv().ok())
+        .find(|event| matches!(event, AppEvent::ConfirmDeferredHandoffDiscard { .. }))
+        .expect("inline handoff discard confirmation");
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.handle_event(&mut tui, &mut app_server, confirmation)
+        .await?;
+
+    assert!(!app.chat_widget.has_pending_deferred_handoff());
+    let AppCommand::UserTurn { items, .. } = next_user_turn_op(&mut ops) else {
+        panic!("confirmed inline handoff should submit a new Plan turn");
+    };
+    assert!(items.iter().any(|item| matches!(
+        item,
+        codex_app_server_protocol::UserInput::Text { text, .. }
+            if text.contains("keep the final check")
+    )));
     proxy.abort();
     Ok(())
 }
