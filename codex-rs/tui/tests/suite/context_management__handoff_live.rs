@@ -17,7 +17,7 @@ const SOURCE_PROMPT: &str = "source-only handoff context marker";
 const SOURCE_RESPONSE: &str = "source turn complete";
 const HANDOFF_PLAN: &str = "# Continue safely\n\n1. Execute the focused handoff test plan.\n2. Verify the fresh session result.";
 const EXECUTION_RESPONSE: &str = "fresh handoff execution sentinel";
-const SOURCE_THREAD_NAME: &str = "handoff-source";
+const SOURCE_THREAD_NAME: &str = "src";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plan_handoff_default_transfers_to_fresh_thread_and_source_remains_resumable() -> Result<()>
@@ -320,7 +320,8 @@ async fn rename_source_thread(
     .await?;
     writer.send(b"\r".to_vec()).await?;
     wait_for_screen(output_rx, screen, "source thread rename", |contents| {
-        contents.contains(&format!("· {SOURCE_THREAD_NAME}"))
+        // Long macOS temporary paths can truncate the final footer character.
+        contents.contains("· sr")
     })
     .await?;
     Ok(())
