@@ -74,9 +74,9 @@ fn latest_usage_after_completed_compaction(
     rollout_items: &[RolloutItem],
     turns: &[Turn],
 ) -> Option<String> {
-    rollout_items
+    let usage_index = rollout_items
         .iter()
-        .rfind(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TokenCount(_))))?;
+        .rposition(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TokenCount(_))))?;
     let latest_completed = rollout_items.iter().rev().find_map(|item| match item {
         RolloutItem::EventMsg(EventMsg::ItemCompleted(payload)) => {
             if let TurnItem::ContextCompaction(compaction) = &payload.item {
@@ -99,7 +99,12 @@ fn latest_usage_after_completed_compaction(
     if latest_completed.is_some_and(|completed_id| completed_id != last_item_id) {
         return None;
     }
-    Some(last_item_id.clone())
+    let start_index = rollout_items.iter().rposition(|item| {
+        matches!(item, RolloutItem::EventMsg(EventMsg::ItemStarted(payload))
+            if matches!(&payload.item, TurnItem::ContextCompaction(compaction)
+                if compaction.id.as_str() == last_item_id))
+    })?;
+    (start_index < usage_index).then(|| last_item_id.clone())
 }
 
 /// Identifies the turn that was active when the latest `TokenCount` record appeared.
@@ -254,6 +259,17 @@ mod tests {
             Some("compact-1".to_string()),
         );
         let mut repeated = completed.to_vec();
+        let second_item = TurnItem::ContextCompaction(ContextCompactionItem {
+            id: "compact-2".to_string(),
+        });
+        repeated.push(RolloutItem::EventMsg(EventMsg::ItemStarted(
+            ItemStartedEvent {
+                thread_id,
+                turn_id: "turn-1".to_string(),
+                item: second_item.clone(),
+                started_at_ms: 3,
+            },
+        )));
         repeated.push(RolloutItem::EventMsg(EventMsg::TokenCount(
             TokenCountEvent {
                 info: None,
@@ -264,9 +280,7 @@ mod tests {
             ItemCompletedEvent {
                 thread_id,
                 turn_id: "turn-1".to_string(),
-                item: TurnItem::ContextCompaction(ContextCompactionItem {
-                    id: "compact-2".to_string(),
-                }),
+                item: second_item,
                 started_at_ms: Some(3),
                 completed_at_ms: 4,
             },

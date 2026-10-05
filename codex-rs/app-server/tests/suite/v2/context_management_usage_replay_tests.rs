@@ -12,6 +12,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::ContextCompactedEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -58,6 +59,12 @@ async fn resume_replays_usage_with_its_completed_compaction_item_id() -> Result<
             started_at: None,
             model_context_window: None,
             collaboration_mode_kind: Default::default(),
+        }))?,
+        event_line(EventMsg::ItemStarted(ItemStartedEvent {
+            thread_id,
+            turn_id: turn_id.to_string(),
+            item: item.clone(),
+            started_at_ms: 1,
         }))?,
         token_count,
         event_line(EventMsg::ItemCompleted(ItemCompletedEvent {

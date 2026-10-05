@@ -72,6 +72,7 @@
       "type": "string"
     },
     "usageAfterCompactionItemId": {
+      "default": null,
       "description": "Present on attachment replay when the persisted usage follows this completed item.",
       "type": [
         "string",

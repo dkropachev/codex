@@ -1880,6 +1880,7 @@ pub struct ThreadTokenUsageUpdatedNotification {
     pub turn_id: String,
     pub token_usage: ThreadTokenUsage,
     /// Present on attachment replay when the persisted usage follows this completed item.
+    #[serde(default)]
     pub usage_after_compaction_item_id: Option<String>,
 }
 
