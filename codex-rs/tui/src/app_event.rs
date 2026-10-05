@@ -41,12 +41,33 @@ use codex_message_history::HistoryBatchCursor;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::user_input::TextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 use codex_workflows::CompletionRequest;
 use codex_workflows::CompletionResult;
 use strum_macros::IntoStaticStr;
 use uuid::Uuid;
+
+use crate::slash_command::SlashCommand;
+
+#[derive(Clone, Debug)]
+pub(crate) enum DeferredDiscardAction {
+    Command(SlashCommand),
+    CommandWithArgs {
+        command: SlashCommand,
+        args: String,
+        text_elements: Vec<TextElement>,
+    },
+}
+
+impl DeferredDiscardAction {
+    pub(crate) fn command(&self) -> SlashCommand {
+        match self {
+            Self::Command(command) | Self::CommandWithArgs { command, .. } => *command,
+        }
+    }
+}
 
 use crate::app_command::AppCommand;
 use crate::app_server_session::AppServerStartedThread;
@@ -566,6 +587,28 @@ pub(crate) enum AppEvent {
         plan_turn_id: String,
         generation: u64,
         plan: String,
+    },
+
+    /// Start a deferred handoff with the next model-bound user prompt.
+    StartDeferredHandoffTransfer {
+        source_thread_id: ThreadId,
+        plan_turn_id: String,
+        generation: u64,
+        plan: String,
+        user_message: UserMessage,
+    },
+
+    /// Continue a destructive slash command after explicitly discarding a deferred plan.
+    ConfirmDeferredHandoffDiscard {
+        source_thread_id: ThreadId,
+        generation: u64,
+        action: DeferredDiscardAction,
+    },
+
+    /// Discard a pending handoff before a confirmed App action is replayed.
+    DiscardDeferredHandoff {
+        source_thread_id: ThreadId,
+        generation: u64,
     },
 
     /// Keep planning in the source thread after dismissing the ask prompt.

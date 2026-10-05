@@ -153,6 +153,7 @@ pub(super) enum HistoryCapabilities {
     HandoffPlanPage,
     HandoffConfigReadFails,
     HandoffThreadStartFails,
+    HandoffTurnStartFails,
     HandoffSourceChangesAfterStart,
     HandoffLatestTurnDiffers,
     ConfigReadUnsupported(i64),
@@ -460,6 +461,7 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                         HistoryCapabilities::HandoffPlanPage
                             | HistoryCapabilities::HandoffConfigReadFails
                             | HistoryCapabilities::HandoffThreadStartFails
+                            | HistoryCapabilities::HandoffTurnStartFails
                             | HistoryCapabilities::HandoffSourceChangesAfterStart
                             | HistoryCapabilities::HandoffLatestTurnDiffers
                     ) && request.method == "thread/turns/list"
@@ -481,6 +483,17 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                                 "nextCursor": null,
                                 "backwardsCursor": null,
                             }),
+                        })
+                    } else if history_capabilities == HistoryCapabilities::HandoffTurnStartFails
+                        && request.method == "turn/start"
+                    {
+                        JSONRPCMessage::Error(JSONRPCError {
+                            id: request_id,
+                            error: JSONRPCErrorError {
+                                code: -32603,
+                                data: None,
+                                message: "handoff turn rejected".to_string(),
+                            },
                         })
                     } else if request.method == "thread/start"
                         && (history_capabilities == HistoryCapabilities::ThreadStartFails

@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests/plan_handoff_deferred.rs
+expression: notice
+---
+■ Deferred handoff could not return to Default mode. Select Default mode and retry /handoff --defer.

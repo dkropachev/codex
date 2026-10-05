@@ -411,6 +411,19 @@ impl ChatWidget {
             return (false, None);
         }
 
+        let submitted_message = UserMessage {
+            text: text.clone(),
+            local_images: local_images.clone(),
+            remote_image_urls,
+            text_elements,
+            mention_bindings: mention_bindings.clone(),
+        };
+        match self.route_deferred_handoff_prompt(submitted_message.clone(), source) {
+            super::handoff::DeferredSubmission::NotApplicable => {}
+            super::handoff::DeferredSubmission::Queued => return (true, None),
+            super::handoff::DeferredSubmission::Blocked => return (false, None),
+        }
+
         self.maybe_apply_ide_context(&mut items);
         crate::task_mentions::apply_task_references(&mut items, &mention_bindings, self.thread_id);
 
@@ -427,13 +440,7 @@ impl ChatWidget {
         crate::startup_recovery::bind_submission(&text, &client_user_message_id);
         let pending_steer = (!render_in_history).then(|| PendingSteer {
             client_id: client_user_message_id.clone(),
-            user_message: UserMessage {
-                text: text.clone(),
-                local_images: local_images.clone(),
-                remote_image_urls: remote_image_urls.clone(),
-                text_elements: text_elements.clone(),
-                mention_bindings: mention_bindings.clone(),
-            },
+            user_message: submitted_message.clone(),
             history_record: history_record.clone(),
             source,
             compare_key: Self::pending_steer_compare_key_from_items(&items),
@@ -462,14 +469,6 @@ impl ChatWidget {
             collaboration_mode,
             /*personality*/ None,
         );
-        let submitted_message = UserMessage {
-            text,
-            local_images,
-            remote_image_urls,
-            text_elements,
-            mention_bindings,
-        };
-
         // App-event submissions are handled serially, and turn/start can wait on remote work.
         // Queue the optimistic prompt first so the user's input is visible while that happens.
         // Direct submissions do not share that queue, so keep their existing failure behavior.

@@ -1,0 +1,19 @@
+---
+source: tui/src/app/tests/plan_handoff_transfer.rs
+expression: "render_bottom_popup(&app.chat_widget, 80)"
+---
+› A previous session prepared the authoritative handoff plan below. Continue
+  the task in this fresh session by implementing that plan. Treat it as the
+  source of task intent, re-read repository files as needed, preserve completed
+  work, and carry the remaining work through implementation and appropriate
+  verification.
+
+  ## Handoff plan
+
+  - Finish the focused work
+
+  ## Next user request
+
+  Keep this follow-up
+
+  GPT-5.6-Sol high · /tmp/project

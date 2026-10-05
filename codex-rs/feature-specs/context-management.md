@@ -10,7 +10,7 @@ Context management keeps long-running threads usable without allowing one client
 
 `turn/start` retains start-or-steer by default. With `startIfIdle: true`, it starts only on an idle thread and otherwise rejects without recording, queueing, or steering the input. Neither RPC retries a rejected or transport-uncertain submission.
 
-`/handoff` enters a Handoff presentation of Plan mode from an idle, resumable Default-mode thread. It accepts optional `--ask` and guidance. A completed Plan item owned by the planning turn is eligible only while no later accepted user input has superseded it. Default handoff starts a fresh Default-mode thread and submits only the validated plan as new context; `--ask` offers proceed or stay. The source remains resumable. The full generated prompt obeys the existing 10,000 estimated-token model-context item ceiling. Manual `/compact` retains its explicit compaction meaning.
+`/handoff` enters a Handoff presentation of Plan mode from an idle, resumable Default-mode thread. It accepts optional `--ask`, `--defer`, and guidance. A completed Plan item owned by the planning turn is eligible only while no later accepted user input has superseded it. Default handoff starts a fresh Default-mode thread and submits only the validated plan as new context; `--ask` offers proceed or stay. `--defer` returns to Default mode with a pending plan; the next model-bound prompt starts a fresh thread with the plan and prompt. Local and shell commands leave the plan pending. The source remains resumable. The full generated prompt obeys the existing 10,000 estimated-token model-context item ceiling. Manual `/compact` retains its explicit compaction meaning.
 
 ## Entry Points
 
@@ -39,6 +39,19 @@ Context management keeps long-running threads usable without allowing one client
 - The app rechecks source ownership, generation, pending interactions, and active descendants before starting a fresh thread.
 - The app verifies the source's latest persisted turn before and after fresh-thread creation; unavailable turn history pauses transfer. A concurrent external-client update after the final read is outside this TUI-side check.
 - Failed validation or transfer leaves the source thread resumable; `--ask` can stay in Handoff mode without transferring.
+
+### Deferred Handoff
+
+#### Entry Points
+
+- [codex-rs/tui/src/chatwidget/handoff_deferred.rs](../tui/src/chatwidget/handoff_deferred.rs)
+- [codex-rs/tui/src/app/handoff_deferred.rs](../tui/src/app/handoff_deferred.rs)
+
+#### Invariants
+
+- A deferred Plan remains pending through thread navigation, replay, and an in-process app-server reconnect. A later accepted source message invalidates it.
+- The next accepted model-bound prompt triggers one fresh-thread transfer. A failed start restores the prompt; a rejected first destination turn restores the combined prompt without resending it.
+- Commands that would discard a pending Plan require explicit confirmation, including direct App actions outside slash-command dispatch.
 
 ## Invariants
 
@@ -114,6 +127,9 @@ Component coverage exercises parser, attachments, Plan authority, ask/stay decis
 - An accepted steer invalidates an earlier Plan in live and replayed flows: codex-rs/tui/src/chatwidget/tests/plan_handoff_authority.rs:accepted_user_input_invalidates_earlier_plan_in_live_and_replay_flows
 - Default and ask dispositions require an owned completed Plan; ask can stay without transferring: codex-rs/tui/src/chatwidget/tests/plan_handoff_state.rs:completed_default_handoff_emits_fresh_thread_transfer,ask_handoff_stay_keeps_source_mode_and_invalidates_old_transfer,accepted_same_turn_steer_prevents_transfer_of_earlier_plan
 - Fresh execution preserves source and selected settings, while an active descendant, accepted steer, source revision change, newer persisted turn, unavailable turn page, or failed start retains the source: codex-rs/tui/src/app/tests/plan_handoff_transfer.rs:manual_handoff_starts_fresh_execution_and_preserves_source,active_descendant_pauses_transfer_and_preserves_source,accepted_steer_notification_invalidates_earlier_handoff_plan,source_revision_change_during_start_pauses_transfer,newer_persisted_source_turn_pauses_transfer,unavailable_source_turn_page_pauses_transfer,fresh_start_failure_keeps_the_source_thread_visible,handoff_thread_start_failure_keeps_source_and_does_not_execute
+- Deferred parsing accepts `--defer` and rejects conflicting dispositions: codex-rs/tui/src/handoff_tests.rs:parser_accepts_deferred_handoff_and_rejects_conflicting_dispositions
+- Deferred Plan state, pending and recovery displays, source-input invalidation, shell preservation, and destructive confirmations: codex-rs/tui/src/chatwidget/tests/plan_handoff_deferred.rs:deferred_plan_waits_for_next_prompt_in_default_mode,shell_command_does_not_consume_deferred_handoff,restored_deferred_transfer_keeps_prompt_in_recovered_queue,accepted_source_input_invalidates_pending_handoff_in_live_and_replay,destructive_commands_confirm_before_discarding_deferred_plan,app_new_session_action_uses_the_same_discard_confirmation,reconnect_restores_pending_plan_without_automatic_transfer,deferred_handoff_waits_for_remote_workspace_image_preparation
+- Deferred fresh transfer, attachment offsets, failure recovery, App discard confirmation, and navigation replay: codex-rs/tui/src/app/tests/plan_handoff_transfer.rs:deferred_handoff_executes_plan_and_followup_in_fresh_thread,deferred_handoff_preserves_followup_image_and_text_element,deferred_start_failure_restores_prompt_and_pending_plan,new_session_event_confirms_before_discarding_deferred_plan,deferred_plan_survives_thread_navigation_and_replay,rejected_deferred_execution_restores_combined_prompt_without_resend
 
 ### login-auth (auth and login behavior)
 

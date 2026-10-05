@@ -7,10 +7,30 @@ use crate::chatwidget::slash_dispatch::SlashCommandDispatchSource;
 use crate::handoff::HandoffDisposition;
 use crate::handoff::HandoffPlan;
 
+#[path = "handoff_deferred.rs"]
+mod deferred;
+
 #[derive(Default)]
 pub(super) struct HandoffState {
     active: Option<ManualHandoff>,
     next_generation: u64,
+    pub(super) pending: Option<DeferredHandoff>,
+    pub(super) recoverable_execution_prompt: Option<UserMessage>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct DeferredHandoff {
+    pub(super) source_thread_id: ThreadId,
+    pub(super) plan_turn_id: String,
+    pub(super) plan_text: String,
+    pub(super) generation: u64,
+    pub(super) in_flight: Option<UserMessage>,
+}
+
+pub(super) enum DeferredSubmission {
+    NotApplicable,
+    Queued,
+    Blocked,
 }
 
 struct ManualHandoff {
@@ -209,6 +229,7 @@ impl ChatWidget {
         if !self.is_session_configured()
             || self.active_mode_kind() != ModeKind::Default
             || self.handoff_state.active.is_some()
+            || self.handoff_state.pending.is_some()
         {
             self.add_error_message(
                 "/handoff is available only from an idle Default-mode session.".to_string(),
@@ -321,13 +342,18 @@ impl ChatWidget {
                 return true;
             }
         };
-        if let Some(active) = self.handoff_state.active.as_mut() {
-            active.ready_plan_turn_id = Some(plan_turn_id);
-            active.ready_plan_text = Some(plan_text);
+        if disposition != HandoffDisposition::Defer
+            && let Some(active) = self.handoff_state.active.as_mut()
+        {
+            active.ready_plan_turn_id = Some(plan_turn_id.clone());
+            active.ready_plan_text = Some(plan_text.clone());
         }
         match disposition {
             HandoffDisposition::Proceed => self.emit_handoff_transfer(generation, plan),
             HandoffDisposition::Ask => self.open_handoff_decision_prompt(generation, plan),
+            HandoffDisposition::Defer => {
+                self.defer_handoff(generation, plan_turn_id, plan_text);
+            }
         }
         true
     }

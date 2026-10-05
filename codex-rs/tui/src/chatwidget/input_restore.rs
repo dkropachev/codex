@@ -557,6 +557,7 @@ impl ChatWidget {
             pending_pastes: draft.pending_pastes,
         };
         Some(ThreadInputState {
+            deferred_handoff: self.handoff_state.pending.clone(),
             questions: self
                 .bottom_pane
                 .questions
@@ -595,7 +596,22 @@ impl ChatWidget {
         let preserve_in_flight_turn = restore_mode.preserve_in_flight_turn;
         let restored_task_running =
             preserve_in_flight_turn && input_state.as_ref().is_some_and(|state| state.task_running);
-        if let Some(input_state) = input_state {
+        if let Some(mut input_state) = input_state {
+            if let Some(pending) = input_state.deferred_handoff.as_mut()
+                && let Some(user_message) = pending.in_flight.take()
+            {
+                input_state
+                    .queued_user_messages
+                    .push_front(QueuedUserMessage::from(user_message));
+                input_state
+                    .queued_user_message_history_records
+                    .push_front(UserMessageHistoryRecord::UserMessageText);
+                input_state.recovered_queue = true;
+            }
+            self.handoff_state.pending = input_state.deferred_handoff;
+            if self.handoff_state.pending.is_some() {
+                self.refresh_deferred_footer();
+            }
             self.bottom_pane.restore_questions(input_state.questions);
             self.input_queue.recovered_queue = input_state.recovered_queue;
             self.current_collaboration_mode = input_state.current_collaboration_mode;
@@ -650,6 +666,7 @@ impl ChatWidget {
                 UserMessageHistoryRecord::UserMessageText,
             );
         } else {
+            self.handoff_state.pending = None;
             self.turn_lifecycle
                 .restore_running(/*running*/ false, Instant::now());
             self.safety_buffering_prompt = None;

@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::app::WindowsSandboxHost;
+use crate::app_event::DeferredDiscardAction;
 use crate::app_event::ManagedWorktreeMode;
 use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::prompt_args::parse_slash_name;
@@ -279,7 +280,7 @@ impl ChatWidget {
             || (cmd == SlashCommand::Export && self.input_queue.suppress_queue_autosend)
     }
 
-    pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
+    pub(crate) fn dispatch_command(&mut self, cmd: SlashCommand) {
         if cmd != SlashCommand::Copy {
             self.transcript.last_status_copy_targets = None;
         }
@@ -297,6 +298,9 @@ impl ChatWidget {
                 self.bottom_pane.drain_pending_submission_state();
             }
             self.request_redraw();
+            return;
+        }
+        if self.confirm_deferred_discard_if_needed(DeferredDiscardAction::Command(cmd)) {
             return;
         }
 
@@ -745,7 +749,7 @@ impl ChatWidget {
     /// Branches that prepare arguments should pass `record_history: false` to the composer because
     /// the staged slash-command entry is the recall record; using the normal submission-history
     /// path as well would make a single command appear twice during Up-arrow navigation.
-    pub(super) fn dispatch_command_with_args(
+    pub(crate) fn dispatch_command_with_args(
         &mut self,
         cmd: SlashCommand,
         args: String,
@@ -774,6 +778,15 @@ impl ChatWidget {
         let trimmed = args.trim();
         if trimmed.is_empty() {
             self.dispatch_command(cmd);
+            return;
+        }
+        if self.handoff_state.pending.is_some()
+            && self.confirm_deferred_discard_if_needed(DeferredDiscardAction::CommandWithArgs {
+                command: cmd,
+                args: args.clone(),
+                text_elements: text_elements.clone(),
+            })
+        {
             return;
         }
 

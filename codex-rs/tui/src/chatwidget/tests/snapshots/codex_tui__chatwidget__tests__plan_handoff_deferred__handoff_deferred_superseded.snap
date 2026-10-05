@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests/plan_handoff_deferred.rs
+expression: notice
+---
+• The deferred handoff plan was superseded by new source input. Run /handoff --defer again to prepare a current plan.

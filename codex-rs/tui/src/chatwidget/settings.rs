@@ -772,6 +772,7 @@ impl ChatWidget {
         self.pending_user_collaboration_mode = None;
         self.set_effective_collaboration_mode(previous_mode);
         self.fail_handoff_mode_update();
+        self.fail_deferred_mode_update();
     }
 
     /// Update the active collaboration mask.
