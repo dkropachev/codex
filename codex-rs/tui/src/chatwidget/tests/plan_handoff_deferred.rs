@@ -160,6 +160,10 @@ async fn mode_change_does_not_strand_the_next_deferred_prompt() {
 
     chat.dispatch_command(SlashCommand::Plan);
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    let source_thread_id = chat.thread_id.expect("source thread");
+    let requested_mode = chat.effective_collaboration_mode();
+    chat.on_collaboration_mode_settings_update_failed(source_thread_id, &requested_mode);
+    assert!(chat.has_pending_deferred_handoff());
     chat.restore_user_message_to_composer(UserMessage::from("Continue after mode change"));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 

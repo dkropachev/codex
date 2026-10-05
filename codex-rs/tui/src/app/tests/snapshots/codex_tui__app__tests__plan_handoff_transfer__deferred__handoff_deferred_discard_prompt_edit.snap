@@ -1,5 +1,5 @@
 ---
-source: tui/src/app/tests/plan_handoff_transfer.rs
+source: tui/src/app/tests/plan_handoff_deferred.rs
 expression: "render_bottom_popup(&app.chat_widget, 80)"
 ---
   Discard the deferred handoff plan?

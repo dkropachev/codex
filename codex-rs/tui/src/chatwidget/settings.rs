@@ -707,6 +707,9 @@ impl ChatWidget {
 
     pub(crate) fn set_collaboration_mask_from_user_action(&mut self, mask: CollaborationModeMask) {
         self.leave_handoff_for_user_mode_change(&mask);
+        if let Some(pending) = self.handoff_state.pending.as_mut() {
+            pending.awaiting_default_mode_update = false;
+        }
         let previous_mode = self
             .pending_user_collaboration_mode
             .as_ref()
@@ -741,6 +744,9 @@ impl ChatWidget {
         if pending.thread_id != Some(thread_id) || &pending.mode != requested_mode {
             return;
         }
+        if let Some(deferred) = self.handoff_state.pending.as_mut() {
+            deferred.awaiting_default_mode_update = false;
+        }
         pending.expires_at = Some(Instant::now() + COLLABORATION_MODE_ACK_TIMEOUT);
     }
 
@@ -753,6 +759,9 @@ impl ChatWidget {
             return;
         };
         if pending.thread_id == Some(thread_id) && &pending.mode == requested_mode {
+            if let Some(deferred) = self.handoff_state.pending.as_mut() {
+                deferred.awaiting_default_mode_update = false;
+            }
             pending.expires_at = Some(Instant::now() + COLLABORATION_MODE_ACK_TIMEOUT);
         }
     }
@@ -768,11 +777,18 @@ impl ChatWidget {
         if pending.thread_id != Some(thread_id) || &pending.mode != requested_mode {
             return;
         }
+        let deferred_default_mode_update_failed = self
+            .handoff_state
+            .pending
+            .as_ref()
+            .is_some_and(|deferred| deferred.awaiting_default_mode_update);
         let previous_mode = pending.previous_mode.clone();
         self.pending_user_collaboration_mode = None;
         self.set_effective_collaboration_mode(previous_mode);
         self.fail_handoff_mode_update();
-        self.fail_deferred_mode_update();
+        if deferred_default_mode_update_failed {
+            self.fail_deferred_mode_update();
+        }
     }
 
     /// Update the active collaboration mask.

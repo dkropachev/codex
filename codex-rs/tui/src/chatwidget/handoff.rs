@@ -25,6 +25,7 @@ pub(super) struct DeferredHandoff {
     pub(super) plan_text: String,
     pub(super) generation: u64,
     pub(super) in_flight: Option<UserMessage>,
+    pub(super) awaiting_default_mode_update: bool,
 }
 
 pub(super) enum DeferredSubmission {

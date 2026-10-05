@@ -60,9 +60,13 @@ impl ChatWidget {
             plan_text,
             generation,
             in_flight: None,
+            awaiting_default_mode_update: false,
         });
         self.handoff_state.active = None;
         self.set_collaboration_mask_from_user_action(default_mask);
+        if let Some(pending) = self.handoff_state.pending.as_mut() {
+            pending.awaiting_default_mode_update = true;
+        }
         self.refresh_deferred_footer();
         self.add_info_message(
             "Handoff plan ready for the next prompt.".to_string(),
