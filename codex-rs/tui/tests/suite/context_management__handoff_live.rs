@@ -66,6 +66,13 @@ async fn plan_handoff_default_transfers_to_fresh_thread_and_source_remains_resum
             contents.contains(SOURCE_RESPONSE)
         })
         .await?;
+        wait_for_screen(
+            &mut output_rx,
+            &mut screen,
+            "source turn idle",
+            |contents| contents.contains(SOURCE_RESPONSE) && !contents.contains("esc to interrupt"),
+        )
+        .await?;
 
         writer.send(b"/handoff".to_vec()).await?;
         wait_for_screen(
