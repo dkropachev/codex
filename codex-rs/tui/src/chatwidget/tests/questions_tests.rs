@@ -12,6 +12,31 @@ fn questions() -> Vec<AsyncUserInputQuestion> {
 }
 
 #[tokio::test]
+async fn async_questions_open_on_arrival_when_composer_is_idle() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+    chat.add_async_questions("message", &questions());
+
+    assert!(chat.bottom_pane.questions.as_ref().unwrap().expanded);
+    insta::assert_snapshot!(
+        "questions_open_on_arrival",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+}
+
+#[tokio::test]
+async fn async_questions_leave_an_existing_draft_in_focus() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+    chat.bottom_pane
+        .set_composer_text("unfinished draft".into(), Vec::new(), Vec::new());
+    chat.add_async_questions("message", &questions());
+
+    assert!(!chat.bottom_pane.questions.as_ref().unwrap().expanded);
+    assert_eq!(chat.bottom_pane.composer_text(), "unfinished draft");
+}
+
+#[tokio::test]
 async fn unavailable_send_keeps_answer_and_skip_remains_available() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.add_async_questions("message", &questions());
@@ -173,6 +198,7 @@ async fn queued_prompt_clears_questions_arriving_after_enqueue_when_it_starts() 
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
     chat.add_async_questions("old", &questions());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
     chat.bottom_pane
         .set_composer_text("New prompt".into(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Tab));
@@ -213,7 +239,6 @@ async fn recovered_question_answers_preserve_other_questions() {
         chat.thread_id = Some(ThreadId::new());
         chat.on_task_started();
         chat.add_async_questions("old", &questions());
-        chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
         chat.bottom_pane.handle_paste("answer".into());
         chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
         assert_answer(op_rx.try_recv().unwrap(), "> Which way?\n\nanswer");
