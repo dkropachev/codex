@@ -392,6 +392,86 @@ async fn confirmed_inline_handoff_discards_pending_plan_and_preserves_arguments(
 }
 
 #[tokio::test]
+async fn prompt_edit_requires_confirmation_before_discarding_deferred_plan() -> Result<()> {
+    let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
+    let (mut app_server, _requests, proxy) =
+        session_lifecycle_requests::start_recording_app_server_with_history(
+            &app.config,
+            session_lifecycle_requests::HistoryCapabilities::HandoffPlanPage,
+            /*blocked_thread_list*/ None,
+            /*failed_thread_name*/ None,
+            crate::app_server_session::ThreadParamsMode::Embedded,
+            LoaderOverrides::default(),
+        )
+        .await?;
+    let source_thread_id = prepare_handoff_plan_on_server(
+        &mut app,
+        &mut events,
+        &mut ops,
+        &mut app_server,
+        "/handoff --defer",
+    )
+    .await?;
+    let selected_cell: Arc<dyn HistoryCell> = Arc::new(history_cell::PlainHistoryCell::new(vec![
+        "Earlier prompt".into(),
+    ]));
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::RevertSessionForPromptEdit {
+            thread_id: source_thread_id,
+            selected_cell: Arc::clone(&selected_cell),
+            prompt: UserMessage::from("Earlier prompt"),
+        },
+    )
+    .await?;
+    assert!(app.chat_widget.has_pending_deferred_handoff());
+    insta::assert_snapshot!(
+        "handoff_deferred_discard_prompt_edit",
+        render_bottom_popup(&app.chat_widget, /*width*/ 80)
+    );
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.chat_widget.has_pending_deferred_handoff());
+
+    app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::RevertSessionForPromptEdit {
+            thread_id: source_thread_id,
+            selected_cell,
+            prompt: UserMessage::from("Earlier prompt"),
+        },
+    )
+    .await?;
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let actions: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter(|event| {
+            matches!(
+                event,
+                AppEvent::DiscardDeferredHandoff { .. }
+                    | AppEvent::RevertSessionForPromptEdit { .. }
+            )
+        })
+        .collect();
+    assert_eq!(actions.len(), 2);
+    for action in actions {
+        if matches!(action, AppEvent::RevertSessionForPromptEdit { .. }) {
+            break;
+        }
+        app.handle_event(&mut tui, &mut app_server, action).await?;
+    }
+    assert!(!app.chat_widget.has_pending_deferred_handoff());
+    proxy.abort();
+    Ok(())
+}
+
+#[tokio::test]
 async fn deferred_plan_survives_thread_navigation_and_replay() -> Result<()> {
     let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
     let (mut app_server, _requests, proxy) =

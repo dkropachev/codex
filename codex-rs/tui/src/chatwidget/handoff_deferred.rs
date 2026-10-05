@@ -233,36 +233,22 @@ impl ChatWidget {
         let source_thread_id = pending.source_thread_id;
         let generation = pending.generation;
         let command_name = command.command();
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Discard the deferred handoff plan?".to_string()),
-            subtitle: Some(format!(
-                "Running /{command_name} will discard the plan waiting for your next prompt."
-            )),
-            footer_hint: Some(standard_popup_hint_line()),
-            items: vec![
-                SelectionItem {
-                    name: "Keep the handoff plan".to_string(),
-                    description: Some("Return to the current thread.".to_string()),
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-                SelectionItem {
-                    name: format!("Discard plan and run /{command_name}"),
-                    description: Some("Continue with the selected command.".to_string()),
-                    actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::ConfirmDeferredHandoffDiscard {
-                            source_thread_id,
-                            generation,
-                            action: action.clone(),
-                        });
-                    })],
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-            ],
-            ..SelectionViewParams::picker()
-        });
-        self.request_redraw();
+        self.show_deferred_discard_confirmation(
+            format!("Running /{command_name}"),
+            SelectionItem {
+                name: format!("Discard plan and run /{command_name}"),
+                description: Some("Continue with the selected command.".to_string()),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::ConfirmDeferredHandoffDiscard {
+                        source_thread_id,
+                        generation,
+                        action: action.clone(),
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        );
         true
     }
 
@@ -298,10 +284,33 @@ impl ChatWidget {
         let source_thread_id = pending.source_thread_id;
         let generation = pending.generation;
         let action_label = action_label.to_string();
+        self.show_deferred_discard_confirmation(
+            format!("Continuing to {action_label}"),
+            SelectionItem {
+                name: format!("Discard plan and {action_label}"),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::DiscardDeferredHandoff {
+                        source_thread_id,
+                        generation,
+                    });
+                    action(tx);
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        );
+        true
+    }
+
+    fn show_deferred_discard_confirmation(
+        &mut self,
+        action_subject: String,
+        discard_item: SelectionItem,
+    ) {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Discard the deferred handoff plan?".to_string()),
             subtitle: Some(format!(
-                "{action_label} will discard the plan waiting for your next prompt."
+                "{action_subject} will discard the plan waiting for your next prompt."
             )),
             footer_hint: Some(standard_popup_hint_line()),
             items: vec![
@@ -311,22 +320,10 @@ impl ChatWidget {
                     dismiss_on_select: true,
                     ..Default::default()
                 },
-                SelectionItem {
-                    name: format!("Discard plan and {action_label}"),
-                    actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::DiscardDeferredHandoff {
-                            source_thread_id,
-                            generation,
-                        });
-                        action(tx);
-                    })],
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
+                discard_item,
             ],
             ..SelectionViewParams::picker()
         });
         self.request_redraw();
-        true
     }
 }
