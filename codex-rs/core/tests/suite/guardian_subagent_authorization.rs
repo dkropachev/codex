@@ -520,6 +520,13 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
         }))?);
     }
     test.codex.inject_response_items(root_history_items).await?;
+    if messaging_case {
+        // Verify the unanswered call before later turns can compact legacy history.
+        let history = test.codex.conversation_history_snapshot().await;
+        assert!(history.items().any(|item| {
+            matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == "unsent-question")
+        }));
+    }
 
     mount_sse_once_match(
         &server,
@@ -747,12 +754,6 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
             messages
         }
     };
-    if messaging_case {
-        let history = test.codex.conversation_history_snapshot().await;
-        assert!(history.items().any(|item| {
-            matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == "unsent-question")
-        }));
-    }
     let snapshot = worker_thread
         .guardian_root_snapshot()
         .await

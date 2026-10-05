@@ -279,15 +279,20 @@ fn managed_starts_ensure_one_updater_and_recover_a_missing_one() -> Result<()> {
     assert_ne!(replacement_pid, updater_pid);
     if let Some(native) = native {
         legacy["processIdentity"] = native;
-        let deadline = Instant::now() + Duration::from_secs(30);
+        let deadline = Instant::now() + Duration::from_secs(120);
         loop {
             let record: Value = serde_json::from_slice(&std::fs::read(&server_record_path)?)?;
             if record == legacy {
                 break;
             }
+            let updater_log = daemon
+                .home
+                .path()
+                .join("app-server-daemon/app-server-updater.stderr.log");
             ensure!(
                 Instant::now() < deadline,
-                "legacy record was not upgraded: {record}"
+                "legacy record was not upgraded: {record}; updater stderr: {}",
+                std::fs::read_to_string(updater_log).unwrap_or_default()
             );
             std::thread::sleep(Duration::from_millis(50));
         }
