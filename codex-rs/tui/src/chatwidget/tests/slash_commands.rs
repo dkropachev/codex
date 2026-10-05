@@ -1613,7 +1613,7 @@ async fn slash_copy_state_tracks_plan_item_completion() {
         ("just test  \r\n".to_string(), "sh code".to_string())
     );
     chat.transcript.plan_delta_buffer = "  ```sh\n  echo hi  \n  ```\n".to_string();
-    chat.on_plan_item_completed(String::new());
+    chat.on_plan_item_completed(String::new(), "test-turn".to_string());
     assert_eq!(
         chat.last_agent_markdown_text(),
         Some("```sh\n  echo hi  \n  ```")

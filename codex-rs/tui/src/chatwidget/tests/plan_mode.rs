@@ -95,7 +95,7 @@ async fn plan_draft_footer_narrow_snapshot() {
 #[tokio::test]
 async fn plan_implementation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string(), "test-turn".to_string());
     chat.open_plan_implementation_prompt();
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -108,7 +108,7 @@ async fn plan_implementation_popup_context_usage_snapshot() {
     chat.set_token_info(Some(make_token_info(
         /*total_tokens*/ 90_000, /*context_window*/ 100_000,
     )));
-    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string(), "test-turn".to_string());
     chat.open_plan_implementation_prompt();
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -118,7 +118,7 @@ async fn plan_implementation_popup_context_usage_snapshot() {
 #[tokio::test]
 async fn plan_implementation_popup_no_selected_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string(), "test-turn".to_string());
     chat.open_plan_implementation_prompt();
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
 
@@ -137,7 +137,7 @@ async fn config_implementation_popup_snapshot() {
         reasoning_effort: None,
         developer_instructions: None,
     });
-    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string(), "test-turn".to_string());
     chat.open_plan_implementation_prompt();
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -173,7 +173,7 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
 async fn plan_implementation_popup_clear_context_emits_clear_submit_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     let plan_markdown = "- Step 1\n- Step 2\n";
-    chat.on_plan_item_completed(plan_markdown.to_string());
+    chat.on_plan_item_completed(plan_markdown.to_string(), "test-turn".to_string());
     let _ = drain_insert_history(&mut rx);
     chat.open_plan_implementation_prompt();
 
@@ -882,7 +882,7 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
 
     chat.on_task_started();
     chat.on_plan_delta("- Step 1\n- Step 2\n".to_string());
-    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string(), "test-turn".to_string());
 
     chat.replay_thread_turns(
         vec![AppServerTurn {
@@ -1005,7 +1005,7 @@ async fn plan_implementation_popup_shows_after_proposed_plan_output() {
 
     chat.on_task_started();
     chat.on_plan_delta("- Step 1\n- Step 2\n".to_string());
-    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string(), "test-turn".to_string());
     chat.on_task_complete(
         /*last_agent_message*/ None, /*completion*/ None, /*from_replay*/ false,
     );
@@ -1032,6 +1032,7 @@ async fn plan_implementation_popup_skips_when_steer_follows_proposed_plan() {
 - Step 2
 "
         .to_string(),
+        "test-turn".to_string(),
     );
     chat.bottom_pane
         .set_composer_text("Please continue.".to_string(), Vec::new(), Vec::new());
@@ -1074,6 +1075,7 @@ async fn plan_implementation_popup_shows_after_new_plan_follows_steer() {
         "- Initial plan
 "
         .to_string(),
+        "test-turn".to_string(),
     );
     chat.bottom_pane
         .set_composer_text("Please revise.".to_string(), Vec::new(), Vec::new());
@@ -1095,6 +1097,7 @@ async fn plan_implementation_popup_shows_after_new_plan_follows_steer() {
         "- Revised plan
 "
         .to_string(),
+        "test-turn".to_string(),
     );
     chat.on_task_complete(
         /*last_agent_message*/ None, /*completion*/ None, /*from_replay*/ false,
@@ -1158,7 +1161,7 @@ async fn plan_completion_restores_status_indicator_after_streaming_plan_output()
     assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
     assert_eq!(chat.bottom_pane.is_task_running(), true);
 
-    chat.on_plan_item_completed("- Step 1\n".to_string());
+    chat.on_plan_item_completed("- Step 1\n".to_string(), "test-turn".to_string());
 
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
     assert_eq!(chat.bottom_pane.is_task_running(), true);

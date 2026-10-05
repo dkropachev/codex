@@ -1304,6 +1304,7 @@ impl ChatWidget {
         from_replay: bool,
         turn_id: &str,
     ) {
+        self.transcript.invalidate_plan_authority();
         if let Some(input) = realtime::realtime_delegation_input(items) {
             if !from_replay && self.should_hide_realtime_delegation(turn_id) {
                 return;

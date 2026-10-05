@@ -276,6 +276,8 @@ mod permission_picker_tests;
 #[path = "tests/permission_shortcuts_tests.rs"]
 mod permission_shortcuts_tests;
 mod permissions;
+#[path = "tests/plan_handoff_authority.rs"]
+mod plan_handoff_authority;
 mod plan_mode;
 #[path = "tests/plugin_catalog_tests.rs"]
 mod plugin_catalog;

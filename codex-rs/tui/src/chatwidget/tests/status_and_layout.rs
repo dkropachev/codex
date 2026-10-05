@@ -468,7 +468,7 @@ async fn completed_plan_table_tail_skips_provisional_history_insert() {
 
     while rx.try_recv().is_ok() {}
 
-    chat.on_plan_item_completed(String::new());
+    chat.on_plan_item_completed(String::new(), "test-turn".to_string());
 
     let mut saw_source_backed_plan = false;
     let mut saw_stream_plan = false;

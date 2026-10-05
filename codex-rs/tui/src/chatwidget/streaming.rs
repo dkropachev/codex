@@ -243,7 +243,9 @@ impl ChatWidget {
         }
     }
 
-    pub(super) fn on_plan_item_completed(&mut self, text: String) {
+    pub(super) fn on_plan_item_completed(&mut self, text: String, turn_id: String) {
+        self.transcript.latest_authoritative_plan_markdown = Some(text.clone());
+        self.transcript.latest_authoritative_plan_turn_id = Some(turn_id);
         let (plan_text, source) = if text.trim().is_empty() {
             (
                 self.transcript.plan_delta_buffer.trim().to_string(),
