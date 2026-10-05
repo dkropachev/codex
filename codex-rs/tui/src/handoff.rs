@@ -103,6 +103,10 @@ impl HandoffPlan {
             self.text
         )
     }
+
+    pub(crate) fn into_text(self) -> String {
+        self.text
+    }
 }
 
 pub(crate) fn parse_handoff_args(args: &str) -> Result<ParsedHandoffCommand, HandoffParseError> {

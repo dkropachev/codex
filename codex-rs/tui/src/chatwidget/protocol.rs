@@ -418,6 +418,7 @@ impl ChatWidget {
         self.thread_usage.replaying_turn_completion = replay_kind.is_some();
         match notification.turn.status {
             TurnStatus::Completed => {
+                self.note_handoff_turn_completed(&notification.turn.id);
                 let last_agent_message =
                     notification
                         .turn

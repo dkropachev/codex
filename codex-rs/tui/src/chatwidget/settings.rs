@@ -595,6 +595,11 @@ impl ChatWidget {
         if crate::config_mode::is_config_mask(self.active_collaboration_mask.as_ref()) {
             return Some(crate::config_mode::CONFIG_MODE_NAME);
         }
+        if self.handoff_mode_active()
+            || crate::handoff::is_handoff_mask(self.active_collaboration_mask.as_ref())
+        {
+            return Some(crate::handoff::HANDOFF_MODE_NAME);
+        }
         let active_mode = self.active_mode_kind();
         active_mode
             .is_tui_visible()
@@ -607,6 +612,11 @@ impl ChatWidget {
         }
         if crate::config_mode::is_config_mask(self.active_collaboration_mask.as_ref()) {
             return Some(CollaborationModeIndicator::Config);
+        }
+        if self.handoff_mode_active()
+            || crate::handoff::is_handoff_mask(self.active_collaboration_mask.as_ref())
+        {
+            return Some(CollaborationModeIndicator::Handoff);
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
@@ -696,6 +706,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_collaboration_mask_from_user_action(&mut self, mask: CollaborationModeMask) {
+        self.leave_handoff_for_user_mode_change(&mask);
         let previous_mode = self
             .pending_user_collaboration_mode
             .as_ref()
@@ -760,6 +771,7 @@ impl ChatWidget {
         let previous_mode = pending.previous_mode.clone();
         self.pending_user_collaboration_mode = None;
         self.set_effective_collaboration_mode(previous_mode);
+        self.fail_handoff_mode_update();
     }
 
     /// Update the active collaboration mask.
@@ -797,7 +809,13 @@ impl ChatWidget {
                 message.push_str(reasoning_label);
             }
             message.push_str(" for ");
-            message.push_str(next_mode.display_name());
+            message.push_str(
+                if crate::handoff::is_handoff_mask(self.active_collaboration_mask.as_ref()) {
+                    crate::handoff::HANDOFF_MODE_NAME
+                } else {
+                    next_mode.display_name()
+                },
+            );
             message.push_str(" mode.");
             self.add_info_message(message, /*hint*/ None);
         }

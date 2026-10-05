@@ -447,6 +447,7 @@ impl ChatWidget {
             self.config.cwd.to_path_buf()
         };
         let active_permission_profile = self.config.permissions.active_permission_profile();
+        let handoff_submission_items = self.handoff_tracks_submission().then(|| items.clone());
         let op = AppCommand::user_turn(
             client_user_message_id.clone(),
             items,
@@ -488,6 +489,9 @@ impl ChatWidget {
 
         if !self.submit_op(op.clone()) {
             return (false, None);
+        }
+        if let Some(items) = handoff_submission_items {
+            self.note_handoff_submission(items);
         }
         if source == UserMessageSource::Prompt {
             self.bottom_pane.clear_pending_questions();
