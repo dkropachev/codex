@@ -9,11 +9,11 @@
 //! the time the `TokenCount` was persisted so the notification still targets the
 //! corresponding rebuilt turn.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadHistoryBuilder;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
 use codex_app_server_protocol::Turn;
@@ -66,37 +66,40 @@ pub(super) fn restored_token_usage_attribution(
     RestoredTokenUsageAttribution {
         turn_id: latest_token_usage_turn_id_from_rollout_items(rollout_items, turns)
             .unwrap_or_else(|| latest_token_usage_turn_id(turns)),
-        after_compaction_item_id: latest_usage_after_completed_compaction(rollout_items),
+        after_compaction_item_id: latest_usage_after_completed_compaction(rollout_items, turns),
     }
 }
 
-fn latest_usage_after_completed_compaction(rollout_items: &[RolloutItem]) -> Option<String> {
-    let usage_index = rollout_items
+fn latest_usage_after_completed_compaction(
+    rollout_items: &[RolloutItem],
+    turns: &[Turn],
+) -> Option<String> {
+    rollout_items
         .iter()
-        .rposition(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TokenCount(_))))?;
-    let mut started = HashMap::new();
-    let mut latest = None;
-    for (index, item) in rollout_items.iter().enumerate() {
-        match item {
-            RolloutItem::EventMsg(EventMsg::ItemStarted(payload))
-                if let TurnItem::ContextCompaction(compaction) = &payload.item =>
-            {
-                started.insert(compaction.id.as_str(), index);
+        .rfind(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TokenCount(_))))?;
+    let latest_completed = rollout_items.iter().rev().find_map(|item| match item {
+        RolloutItem::EventMsg(EventMsg::ItemCompleted(payload)) => {
+            if let TurnItem::ContextCompaction(compaction) = &payload.item {
+                Some(Some(compaction.id.as_str()))
+            } else {
+                None
             }
-            RolloutItem::EventMsg(EventMsg::ItemCompleted(payload))
-                if let TurnItem::ContextCompaction(compaction) = &payload.item
-                    && let Some(&start_index) = started.get(compaction.id.as_str())
-                    && start_index < usage_index
-                    && latest
-                        .as_ref()
-                        .is_none_or(|(previous_index, _)| start_index > *previous_index) =>
-            {
-                latest = Some((start_index, compaction.id.clone()));
-            }
-            _ => {}
         }
+        RolloutItem::EventMsg(EventMsg::ContextCompacted(_)) => Some(None),
+        _ => None,
+    })?;
+    let last_item_id = turns
+        .iter()
+        .rev()
+        .flat_map(|turn| turn.items.iter().rev())
+        .find_map(|item| match item {
+            ThreadItem::ContextCompaction { id } => Some(id),
+            _ => None,
+        })?;
+    if latest_completed.is_some_and(|completed_id| completed_id != last_item_id) {
+        return None;
     }
-    latest.map(|(_, id)| id)
+    Some(last_item_id.clone())
 }
 
 /// Identifies the turn that was active when the latest `TokenCount` record appeared.
@@ -154,6 +157,7 @@ mod tests {
     use codex_protocol::protocol::ItemCompletedEvent;
     use codex_protocol::protocol::ItemStartedEvent;
     use codex_protocol::protocol::TokenCountEvent;
+    use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
     use pretty_assertions::assert_eq;
 
@@ -205,6 +209,14 @@ mod tests {
     #[test]
     fn replay_usage_correlates_only_a_completed_compaction_started_before_the_count() {
         let thread_id = ThreadId::new();
+        let turn_started = RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            root_turn_id: None,
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        }));
         let item = TurnItem::ContextCompaction(ContextCompactionItem {
             id: "compact-1".to_string(),
         });
@@ -225,17 +237,46 @@ mod tests {
             info: None,
             rate_limits: None,
         }));
+        let incomplete = [turn_started.clone(), count.clone(), started.clone()];
         assert_eq!(
-            latest_usage_after_completed_compaction(&[
-                count.clone(),
-                started.clone(),
-                completed.clone()
-            ]),
+            latest_usage_after_completed_compaction(
+                &incomplete,
+                &build_turns_from_rollout_items(&incomplete),
+            ),
             None,
         );
+        let completed = [turn_started, started, count, completed];
         assert_eq!(
-            latest_usage_after_completed_compaction(&[started, count, completed]),
+            latest_usage_after_completed_compaction(
+                &completed,
+                &build_turns_from_rollout_items(&completed),
+            ),
             Some("compact-1".to_string()),
+        );
+        let mut repeated = completed.to_vec();
+        repeated.push(RolloutItem::EventMsg(EventMsg::TokenCount(
+            TokenCountEvent {
+                info: None,
+                rate_limits: None,
+            },
+        )));
+        repeated.push(RolloutItem::EventMsg(EventMsg::ItemCompleted(
+            ItemCompletedEvent {
+                thread_id,
+                turn_id: "turn-1".to_string(),
+                item: TurnItem::ContextCompaction(ContextCompactionItem {
+                    id: "compact-2".to_string(),
+                }),
+                started_at_ms: Some(3),
+                completed_at_ms: 4,
+            },
+        )));
+        assert_eq!(
+            latest_usage_after_completed_compaction(
+                &repeated,
+                &build_turns_from_rollout_items(&repeated),
+            ),
+            Some("compact-2".to_string()),
         );
     }
 

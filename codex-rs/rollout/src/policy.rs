@@ -95,13 +95,14 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode) 
     match ev {
         EventMsg::ItemCompleted(event) => {
             // Paginated rollouts store TurnItems.
-            // Legacy rollouts keep only items with no lossless raw ResponseItem or legacy
-            // equivalent.
+            // Legacy rollouts keep items without a lossless raw/legacy equivalent, plus
+            // compactions whose legacy event omits the durable item ID.
             matches!(history_mode, ThreadHistoryMode::Paginated)
                 || matches!(
                     event.item,
                     TurnItem::FunctionCallOutput(_)
                         | TurnItem::Plan(_)
+                        | TurnItem::ContextCompaction(_)
                         | TurnItem::Extension(ExtensionItem::Sleep(_))
                 )
                 || matches!(

@@ -34,6 +34,8 @@ mod connection_handling_stdio;
 mod connection_handling_websocket;
 #[cfg(unix)]
 mod connection_handling_websocket_unix;
+#[path = "context_management_usage_replay_tests.rs"]
+mod context_management_usage_replay;
 #[cfg(unix)]
 mod curated_mcp_sync;
 mod current_time;

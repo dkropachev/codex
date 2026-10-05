@@ -67,7 +67,7 @@ When the latest active context use first reaches 70% of the adjusted model windo
 - The threshold uses the latest active token usage and the adjusted window, not cumulative session usage or a rounded display percentage.
 - Each thread remembers its last observed compaction item ID across navigation and replay. Only a new item followed by active use below 70% can rearm the hint.
 - History reconstruction keeps the durable ID of modern compaction items; legacy events without an item retain their synthetic IDs.
-- Attachment usage replay identifies the completed compaction item whose start precedes the persisted token count, when one can be established.
+- Attachment usage replay identifies the latest completed compaction item when Core's persisted token count is available; Core recomputes usage before completing each compaction item.
 - The hint is informational and leaves explicit `/compact` and `/handoff` unchanged.
 
 ## Invariants
