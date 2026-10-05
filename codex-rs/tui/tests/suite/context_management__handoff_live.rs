@@ -66,31 +66,39 @@ async fn plan_handoff_default_transfers_to_fresh_thread_and_source_remains_resum
             contents.contains(SOURCE_RESPONSE)
         })
         .await?;
-        wait_for_screen(
-            &mut output_rx,
-            &mut screen,
-            "source turn idle",
-            |contents| contents.contains(SOURCE_RESPONSE) && !contents.contains("esc to interrupt"),
-        )
-        .await?;
-
-        writer.send(b"/handoff".to_vec()).await?;
-        wait_for_screen(
-            &mut output_rx,
-            &mut screen,
-            "handoff command draft",
-            |contents| contents.contains("/handoff"),
-        )
-        .await?;
-        writer.send(b"\r".to_vec()).await?;
-
-        wait_for_screen(
-            &mut output_rx,
-            &mut screen,
-            "fresh handoff execution",
-            |contents| contents.contains(EXECUTION_RESPONSE),
-        )
-        .await?;
+        let busy_notice = "'/handoff' is disabled while a task is in progress.";
+        let handoff_deadline = tokio::time::Instant::now() + Duration::from_secs(/*secs*/ 10);
+        loop {
+            let prior_busy_notices = screen.screen().contents().matches(busy_notice).count();
+            writer.send(b"/handoff".to_vec()).await?;
+            wait_for_screen(
+                &mut output_rx,
+                &mut screen,
+                "handoff command draft",
+                |contents| contents.contains("› /handoff"),
+            )
+            .await?;
+            writer.send(b"\r".to_vec()).await?;
+            let contents = wait_for_screen(
+                &mut output_rx,
+                &mut screen,
+                "handoff execution or busy notice",
+                |contents| {
+                    contents.contains(EXECUTION_RESPONSE)
+                        || contents.matches(busy_notice).count() > prior_busy_notices
+                },
+            )
+            .await?;
+            if contents.contains(EXECUTION_RESPONSE) {
+                break;
+            }
+            anyhow::ensure!(
+                tokio::time::Instant::now() < handoff_deadline,
+                "handoff remained busy after source completion; screen:\n{}",
+                screen.screen().contents()
+            );
+            tokio::time::sleep(Duration::from_millis(/*millis*/ 250)).await;
+        }
 
         let requests = wait_for_request_count(&response_mock, /*expected*/ 4).await?;
         anyhow::ensure!(
