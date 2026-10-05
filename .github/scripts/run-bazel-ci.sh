@@ -306,7 +306,7 @@ if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUI
   # The Windows cross-compile config depends on authenticated remote
   # execution. When credentials are unavailable, keep the local build shape
   # and its lower concurrency cap.
-  post_config_bazel_args+=(--jobs=4)
+  post_config_bazel_args+=(--jobs=8)
 fi
 
 if [[ -n "${BAZEL_REPO_CONTENTS_CACHE:-}" ]]; then
@@ -337,7 +337,7 @@ fi
 if [[ "${RUNNER_OS:-}" == "Linux" && "${GITHUB_REPOSITORY:-}" != "openai/codex" && "${bazel_args[0]}" == "test" ]]; then
   # Fork Linux runners share limited remote test capacity. Keep Core's
   # integration shards concurrent without saturating that capacity.
-  post_config_bazel_args+=(--jobs=8)
+  post_config_bazel_args+=(--jobs=4)
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
