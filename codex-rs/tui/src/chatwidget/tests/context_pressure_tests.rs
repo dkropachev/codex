@@ -186,6 +186,25 @@ async fn only_completed_compaction_rearms_after_usage_falls_during_compaction() 
         /*replay_kind*/ None,
     );
     assert!(history_text(&mut rx).contains("Context use has reached 70%."));
+
+    chat.handle_server_notification(
+        compaction_started_on_turn("completed", "turn-2"),
+        Some(ReplayKind::ThreadSnapshot),
+    );
+    chat.handle_server_notification(
+        usage_update(thread_id, "turn-2", /*total_tokens*/ 12_699, None),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        compaction_completed_on_turn("completed", "turn-2"),
+        Some(ReplayKind::ThreadSnapshot),
+    );
+    history_text(&mut rx);
+    chat.handle_server_notification(
+        usage_update(thread_id, "turn-2", /*total_tokens*/ 12_700, None),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(history_text(&mut rx), "");
 }
 
 #[tokio::test]

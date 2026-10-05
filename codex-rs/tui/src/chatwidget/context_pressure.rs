@@ -290,9 +290,9 @@ impl ChatWidget {
         id: &str,
         turn_id: &str,
         observation: CompactionObservation,
-    ) {
+    ) -> bool {
         let Some(thread_id) = self.thread_id else {
-            return;
+            return false;
         };
         let mut state = self
             .context_pressure_state
@@ -306,7 +306,7 @@ impl ChatWidget {
         let had_previous = cycle.last_compaction.is_some();
         if let Some(last) = cycle.last_compaction.as_ref() {
             if last.id == id {
-                return;
+                return false;
             }
             if observation != CompactionObservation::OrderedReplay {
                 let item_order = item.order_after(last);
@@ -314,19 +314,20 @@ impl ChatWidget {
                     || (item_order.is_none()
                         && turn_order(turn_id, &last.turn_id) == Some(Ordering::Less))
                 {
-                    return;
+                    return false;
                 }
             }
         } else if !cycle.hint_shown && observation == CompactionObservation::BufferedReplay {
             cycle.last_compaction = Some(item);
-            return;
+            return true;
         }
         if !cycle.item_after_hint(&item, observation, had_previous) {
             cycle.last_compaction = Some(item);
-            return;
+            return true;
         }
         cycle.last_compaction = Some(item);
         cycle.waiting_for_lower_usage = cycle.hint_shown;
+        true
     }
 
     pub(super) fn note_started_context_compaction(&mut self, id: &str, turn_id: &str) {
@@ -358,7 +359,7 @@ impl ChatWidget {
         turn_id: &str,
         observation: CompactionObservation,
     ) {
-        self.observe_context_compaction(id, turn_id, observation);
+        let is_new_item = self.observe_context_compaction(id, turn_id, observation);
         let Some(thread_id) = self.thread_id else {
             return;
         };
@@ -372,7 +373,8 @@ impl ChatWidget {
             .as_ref()
             .is_some_and(|pending| pending.id == id && pending.turn_id == turn_id)
         {
-            if cycle.pending_usage_below_threshold
+            if is_new_item
+                && cycle.pending_usage_below_threshold
                 && cycle
                     .last_compaction
                     .as_ref()
