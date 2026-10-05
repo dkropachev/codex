@@ -613,6 +613,12 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_item_started(&mut self, payload: &ItemStartedEvent) {
+        if matches!(
+            &payload.item,
+            codex_protocol::items::TurnItem::ContextCompaction(_)
+        ) {
+            return;
+        }
         self.handle_materialized_item_lifecycle(&payload.turn_id, &payload.item);
     }
 
