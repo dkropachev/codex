@@ -247,6 +247,7 @@ pub struct ThreadHistoryBuilder {
     current_rollout_index: usize,
     next_rollout_index: usize,
     active_change_set: Option<ThreadHistoryChangeSet>,
+    pending_context_compaction_legacy_event: bool,
 }
 
 impl Default for ThreadHistoryBuilder {
@@ -264,6 +265,7 @@ impl ThreadHistoryBuilder {
             current_rollout_index: 0,
             next_rollout_index: 0,
             active_change_set: None,
+            pending_context_compaction_legacy_event: false,
         }
     }
 
@@ -616,6 +618,12 @@ impl ThreadHistoryBuilder {
 
     fn handle_item_completed(&mut self, payload: &ItemCompletedEvent) {
         self.handle_materialized_item_lifecycle(&payload.turn_id, &payload.item);
+        if matches!(
+            &payload.item,
+            codex_protocol::items::TurnItem::ContextCompaction(_)
+        ) {
+            self.pending_context_compaction_legacy_event = true;
+        }
     }
 
     fn handle_materialized_item_lifecycle(
@@ -631,6 +639,7 @@ impl ThreadHistoryBuilder {
             | codex_protocol::items::TurnItem::DynamicToolCall(_)
             | codex_protocol::items::TurnItem::CollabAgentToolCall(_)
             | codex_protocol::items::TurnItem::SubAgentActivity(_)
+            | codex_protocol::items::TurnItem::ContextCompaction(_)
             | codex_protocol::items::TurnItem::Extension(_) => true,
             codex_protocol::items::TurnItem::UserMessage(_)
             | codex_protocol::items::TurnItem::AgentMessage(_)
@@ -639,8 +648,7 @@ impl ThreadHistoryBuilder {
             | codex_protocol::items::TurnItem::ImageView(_)
             | codex_protocol::items::TurnItem::ImageGeneration(_)
             | codex_protocol::items::TurnItem::FileChange(_)
-            | codex_protocol::items::TurnItem::McpToolCall(_)
-            | codex_protocol::items::TurnItem::ContextCompaction(_) => false,
+            | codex_protocol::items::TurnItem::McpToolCall(_) => false,
         };
 
         if should_upsert {
@@ -1158,6 +1166,9 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_context_compacted(&mut self, _payload: &ContextCompactedEvent) {
+        if std::mem::take(&mut self.pending_context_compaction_legacy_event) {
+            return;
+        }
         let id = self.next_item_id();
         self.push_item_in_current_turn(ThreadItem::ContextCompaction { id });
     }
@@ -1330,6 +1341,7 @@ impl ThreadHistoryBuilder {
     }
 
     fn new_turn(&mut self, id: Option<String>) -> PendingTurn {
+        self.pending_context_compaction_legacy_event = false;
         let id = id.unwrap_or_else(|| {
             if self.next_rollout_index == 0 {
                 Uuid::now_v7().to_string()
@@ -1687,6 +1699,10 @@ impl From<&PendingTurn> for Turn {
         value.snapshot(TurnItemsView::Full)
     }
 }
+
+#[cfg(test)]
+#[path = "thread_history_compaction_tests.rs"]
+mod context_compaction_tests;
 
 #[cfg(test)]
 mod tests {
