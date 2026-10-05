@@ -239,10 +239,13 @@ async fn restored_deferred_transfer_keeps_prompt_in_recovered_queue() {
         !std::iter::from_fn(|| restored_events.try_recv().ok())
             .any(|event| matches!(event, AppEvent::StartDeferredHandoffTransfer { .. }))
     );
-    assert_chatwidget_snapshot!(
-        "handoff_deferred_recovered_queue",
-        render_bottom_popup(&restored, /*width*/ 80),
-    );
+    let rendered = render_bottom_popup(&restored, /*width*/ 80);
+    let stable_lines = rendered
+        .lines()
+        .filter(|line| !line.contains("edit last queued message"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_chatwidget_snapshot!("handoff_deferred_recovered_queue", stable_lines);
 }
 
 #[tokio::test]

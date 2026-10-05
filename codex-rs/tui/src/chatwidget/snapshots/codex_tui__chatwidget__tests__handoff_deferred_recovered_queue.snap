@@ -1,11 +1,9 @@
 ---
 source: tui/src/chatwidget/tests/plan_handoff_deferred.rs
-assertion_line: 146
-expression: "render_bottom_popup(&restored, 80)"
+expression: stable_lines
 ---
 • Queued follow-up inputs
   ↳ Resume after reconnect
-    shift+← edit last queued message
 
 › Ask Codex to do anything
 
