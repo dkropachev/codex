@@ -1,5 +1,6 @@
 //! Inline editing for asynchronous questions. Legacy request_user_input keeps its own overlay.
-//! Local submissions and committed desktop replies remove questions; arrival never steals focus.
+//! Local submissions and committed desktop replies remove questions. Arrival opens the editor
+//! during a running turn when the main composer is idle and no other view owns input.
 
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::CancellationEvent;

@@ -1,4 +1,4 @@
-//! Own question-editor creation, restoration, and the collapsed entry point.
+//! Own question-editor creation, restoration, and automatic or manual entry.
 
 use super::*;
 
@@ -8,7 +8,16 @@ impl BottomPane {
         message_id: &str,
         questions: &[codex_protocol::items::AsyncUserInputQuestion],
     ) {
+        let show_questions =
+            self.is_task_running && self.no_modal_or_popup_active() && self.composer.is_empty();
+        let previous_count = self.questions.as_ref().map_or(0, |q| q.unanswered_count());
         self.question_editor().append(message_id, questions);
+        if show_questions
+            && let Some(editor) = &mut self.questions
+            && editor.unanswered_count() > previous_count
+        {
+            editor.set_expanded(/*expanded*/ true);
+        }
         self.schedule_active_view_frame();
         self.request_redraw();
     }
