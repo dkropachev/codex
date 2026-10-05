@@ -102,10 +102,10 @@ fn real_encoder_produces_twenty_millisecond_opus_packets() {
                 generation: 2,
             };
             for (index, sample) in frame.samples.iter_mut().enumerate() {
-                *sample = (std::f32::consts::TAU * 440.0 * (block as usize * 256 + index) as f32
-                    / rate as f32)
-                    .sin()
-                    * 0.1;
+                let position = (block as usize * 256 + index) as f32 / rate as f32;
+                *sample = ((std::f32::consts::TAU * 440.0 * position).sin()
+                    + 0.4 * (std::f32::consts::TAU * 659.0 * position).sin())
+                    * 0.35;
             }
             packets.extend(processor.capture(&frame, || frame.at).unwrap());
         }
@@ -125,7 +125,7 @@ fn real_encoder_produces_twenty_millisecond_opus_packets() {
         }
         assert!(
             energy > 0.01,
-            "decoded capture must contain signal at {rate} Hz"
+            "decoded capture must contain signal at {rate} Hz; energy={energy}"
         );
     }
 }
