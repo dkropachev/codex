@@ -23,7 +23,7 @@ jobs:
     # Fork PRs map the upstream xlarge macOS label to a public runner, where the
     # full suite can exceed 30 minutes even while tests are making progress.
     # Fork test jobs need extra time when remote actions and Rust cases are throttled.
-    timeout-minutes: ${{ github.repository != 'openai/codex' && 90 || 30 }}
+    timeout-minutes: ${{ github.repository != 'openai/codex' && 120 || 30 }}
     strategy:
       fail-fast: false
       matrix:
@@ -99,6 +99,7 @@ jobs:
           bazel_test_args=(
             test
             --test_tag_filters=-argument-comment-lint
+            --test_env=RUST_TEST_THREADS=1
             --test_verbose_timeout_warnings
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
           )

@@ -477,12 +477,23 @@ async fn review_respects_complete_context_budget(
                         .len(),
                     1
                 );
+                let mut output =
+                    guardian_requests[1].custom_tool_call_output("reviewer-inspect")["output"]
+                        .clone();
+                let elapsed = output[0]["text"]
+                    .as_str()
+                    .and_then(|text| text.strip_prefix("Script completed\nWall time "))
+                    .and_then(|text| text.strip_suffix(" seconds\nOutput:\n"))
+                    .expect("expected command timing output");
+                assert!(elapsed.parse::<f64>().is_ok());
+                output[0]["text"] =
+                    json!("Script completed\nWall time <elapsed> seconds\nOutput:\n");
                 assert_eq!(
-                    guardian_requests[1].custom_tool_call_output("reviewer-inspect")["output"],
+                    output,
                     json!([
                         {
                             "type": "input_text",
-                            "text": "Script completed\nWall time 0.0 seconds\nOutput:\n",
+                            "text": "Script completed\nWall time <elapsed> seconds\nOutput:\n",
                         },
                         {
                             "type": "input_text",

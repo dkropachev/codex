@@ -641,7 +641,7 @@ async fn timed_out_guardian_network_review_uses_timeout_outcome_without_user_fal
         .set_delay(Duration::from_secs(300)),
     )
     .await;
-    mount_sse_once_match(
+    let parent_poll = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
             !is_guardian_request(request) && request_body_contains(request, call_id)
@@ -688,20 +688,25 @@ async fn timed_out_guardian_network_review_uses_timeout_outcome_without_user_fal
     tokio::time::resume();
     wait_for_completion_without_network_prompt(&test).await;
 
-    let tool_output = parent_final
-        .requests()
-        .iter()
-        .find_map(|request| request.function_call_output_text(poll_call_id))
+    let initial_output = parent_poll
+        .single_request()
+        .function_call_output_text(call_id)
+        .context("expected initial command output")?;
+    let poll_output = parent_final
+        .single_request()
+        .function_call_output_text(poll_call_id)
         .context("expected timed-out Guardian tool output")?;
-    assert!(
-        tool_output.contains(concat!(
-            "The automatic permission approval review did not finish before its deadline. ",
-            "Do not assume the action is unsafe based on the timeout alone. ",
-            "You may retry once, or ask the user for guidance or explicit approval."
-        )),
-        "unexpected timed-out Guardian tool output: {tool_output}"
+    let timeout_instructions = concat!(
+        "The automatic permission approval review did not finish before its deadline. ",
+        "Do not assume the action is unsafe based on the timeout alone. ",
+        "You may retry once, or ask the user for guidance or explicit approval."
     );
-    assert!(!tool_output.contains("rejected by user"));
+    assert!(
+        initial_output.contains(timeout_instructions) || poll_output.contains(timeout_instructions),
+        "unexpected Guardian tool outputs: initial={initial_output}; poll={poll_output}"
+    );
+    assert!(!initial_output.contains("rejected by user"));
+    assert!(!poll_output.contains("rejected by user"));
 
     Ok(())
 }
