@@ -9,6 +9,10 @@ fn history_text(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> Stri
     lines_to_single_string(&lines)
 }
 
+fn context_usage(total_tokens: i64) -> TokenUsageInfo {
+    make_token_info(total_tokens, /*context_window*/ 13_000)
+}
+
 fn compaction_completed(id: &str) -> ServerNotification {
     compaction_completed_on_turn(id, "turn-1")
 }
@@ -37,7 +41,7 @@ fn compacted_turn(turn_id: &str, id: &str) -> AppServerTurn {
 async fn context_pressure_hint_starts_at_seventy_percent_of_adjusted_active_usage() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
-    let mut info = make_token_info(12_690, 13_000);
+    let mut info = context_usage(/*total_tokens*/ 12_690);
     info.total_token_usage.total_tokens = 100_000;
     chat.set_token_info(Some(info.clone()));
     assert_eq!(history_text(&mut rx), "");
@@ -63,10 +67,10 @@ async fn replayed_compaction_id_does_not_rearm_but_new_background_item_does() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();
     chat.thread_id = Some(thread_id);
-    chat.set_token_info(Some(make_token_info(12_700, 13_000)));
+    chat.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
     chat.handle_server_notification(compaction_completed("compact-1"), /*replay_kind*/ None);
-    chat.set_token_info(Some(make_token_info(12_699, 13_000)));
-    chat.set_token_info(Some(make_token_info(12_700, 13_000)));
+    chat.set_token_info(Some(context_usage(/*total_tokens*/ 12_699)));
+    chat.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
 
     let (mut resumed, mut resumed_rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     resumed.thread_id = Some(thread_id);
@@ -76,8 +80,8 @@ async fn replayed_compaction_id_does_not_rearm_but_new_background_item_does() {
         ReplayKind::ResumeInitialMessages,
     );
     history_text(&mut resumed_rx);
-    resumed.set_token_info(Some(make_token_info(12_699, 13_000)));
-    resumed.set_token_info(Some(make_token_info(12_700, 13_000)));
+    resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_699)));
+    resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
     assert_eq!(history_text(&mut resumed_rx), "");
 
     resumed.handle_server_notification(
@@ -85,14 +89,14 @@ async fn replayed_compaction_id_does_not_rearm_but_new_background_item_does() {
         Some(ReplayKind::ThreadSnapshot),
     );
     history_text(&mut resumed_rx);
-    resumed.set_token_info(Some(make_token_info(12_699, 13_000)));
-    resumed.set_token_info(Some(make_token_info(12_700, 13_000)));
+    resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_699)));
+    resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
     assert!(history_text(&mut resumed_rx).contains("Context use has reached 70%."));
 
     let (mut fresh, mut fresh_rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     fresh.thread_id = Some(ThreadId::new());
     fresh.inherit_context_pressure_state(&resumed);
-    fresh.set_token_info(Some(make_token_info(12_700, 13_000)));
+    fresh.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
     assert!(history_text(&mut fresh_rx).contains("Context use has reached 70%."));
 }
 
@@ -112,7 +116,7 @@ async fn first_compaction_seen_during_navigation_rearms_the_hint() {
         )],
         ReplayKind::ResumeInitialMessages,
     );
-    chat.set_token_info(Some(make_token_info(12_700, 13_000)));
+    chat.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
 
     let (mut resumed, mut resumed_rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     resumed.thread_id = Some(thread_id);
@@ -124,11 +128,11 @@ async fn first_compaction_seen_during_navigation_rearms_the_hint() {
     );
     history_text(&mut resumed_rx);
     resumed.turn_lifecycle.last_turn_id = Some(compact_turn_id.to_string());
-    handle_token_count(&mut resumed, Some(make_token_info(12_699, 13_000)));
-    handle_token_count(&mut resumed, Some(make_token_info(12_700, 13_000)));
+    handle_token_count(&mut resumed, Some(context_usage(/*total_tokens*/ 12_699)));
+    handle_token_count(&mut resumed, Some(context_usage(/*total_tokens*/ 12_700)));
     assert_eq!(history_text(&mut resumed_rx), "");
-    handle_token_count(&mut resumed, Some(make_token_info(12_699, 13_000)));
-    handle_token_count(&mut resumed, Some(make_token_info(12_700, 13_000)));
+    handle_token_count(&mut resumed, Some(context_usage(/*total_tokens*/ 12_699)));
+    handle_token_count(&mut resumed, Some(context_usage(/*total_tokens*/ 12_700)));
     assert!(history_text(&mut resumed_rx).contains("Context use has reached 70%."));
 }
 
@@ -142,7 +146,7 @@ async fn bounded_replay_distinguishes_newer_compaction_from_older_page() {
     let regenerated_older_turn_id = "01900000-0002-7000-8000-000000000001";
     chat.thread_id = Some(thread_id);
     chat.turn_lifecycle.last_turn_id = Some(hint_turn_id.to_string());
-    chat.set_token_info(Some(make_token_info(12_700, 13_000)));
+    chat.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
     chat.handle_server_notification(
         compaction_completed_on_turn("item-1", previous_turn_id),
         /*replay_kind*/ None,
@@ -156,10 +160,10 @@ async fn bounded_replay_distinguishes_newer_compaction_from_older_page() {
         ReplayKind::ResumeInitialMessages,
     );
     history_text(&mut resumed_rx);
-    resumed.set_token_info(Some(make_token_info(12_800, 13_000)));
+    resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_800)));
     assert_eq!(history_text(&mut resumed_rx), "");
-    resumed.set_token_info(Some(make_token_info(12_699, 13_000)));
-    resumed.set_token_info(Some(make_token_info(12_700, 13_000)));
+    resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_699)));
+    resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
     assert!(history_text(&mut resumed_rx).contains("Context use has reached 70%."));
 
     resumed.replay_thread_turns(
@@ -167,8 +171,8 @@ async fn bounded_replay_distinguishes_newer_compaction_from_older_page() {
         ReplayKind::ThreadSnapshot,
     );
     history_text(&mut resumed_rx);
-    resumed.set_token_info(Some(make_token_info(12_699, 13_000)));
-    resumed.set_token_info(Some(make_token_info(12_700, 13_000)));
+    resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_699)));
+    resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
     assert_eq!(history_text(&mut resumed_rx), "");
 
     resumed.handle_server_notification(
@@ -176,8 +180,8 @@ async fn bounded_replay_distinguishes_newer_compaction_from_older_page() {
         Some(ReplayKind::ThreadSnapshot),
     );
     history_text(&mut resumed_rx);
-    resumed.set_token_info(Some(make_token_info(12_699, 13_000)));
-    resumed.set_token_info(Some(make_token_info(12_700, 13_000)));
+    resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_699)));
+    resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
     assert_eq!(history_text(&mut resumed_rx), "");
 }
 
@@ -189,29 +193,29 @@ async fn cached_low_usage_before_compaction_does_not_rearm() {
     let older_turn_id = "rollout-1";
     chat.thread_id = Some(thread_id);
     chat.turn_lifecycle.last_turn_id = Some(turn_id.to_string());
-    chat.set_token_info(Some(make_token_info(12_700, 13_000)));
-    chat.set_token_info(Some(make_token_info(12_699, 13_000)));
+    chat.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
+    chat.set_token_info(Some(context_usage(/*total_tokens*/ 12_699)));
     chat.handle_server_notification(
         compaction_completed_on_turn("compact-1", turn_id),
         /*replay_kind*/ None,
     );
     history_text(&mut rx);
     chat.turn_lifecycle.last_turn_id = Some(older_turn_id.to_string());
-    handle_token_count(&mut chat, Some(make_token_info(12_699, 13_000)));
+    handle_token_count(&mut chat, Some(context_usage(/*total_tokens*/ 12_699)));
     assert_eq!(history_text(&mut rx), "");
     chat.turn_lifecycle.last_turn_id = Some(turn_id.to_string());
-    handle_token_count(&mut chat, Some(make_token_info(12_700, 13_000)));
+    handle_token_count(&mut chat, Some(context_usage(/*total_tokens*/ 12_700)));
     assert_eq!(history_text(&mut rx), "");
-    handle_token_count(&mut chat, Some(make_token_info(12_699, 13_000)));
-    handle_token_count(&mut chat, Some(make_token_info(12_700, 13_000)));
+    handle_token_count(&mut chat, Some(context_usage(/*total_tokens*/ 12_699)));
+    handle_token_count(&mut chat, Some(context_usage(/*total_tokens*/ 12_700)));
     assert!(history_text(&mut rx).contains("Context use has reached 70%."));
     chat.handle_server_notification(
         compaction_completed_on_turn("compact-1", turn_id),
         /*replay_kind*/ None,
     );
     history_text(&mut rx);
-    handle_token_count(&mut chat, Some(make_token_info(12_699, 13_000)));
-    handle_token_count(&mut chat, Some(make_token_info(12_700, 13_000)));
+    handle_token_count(&mut chat, Some(context_usage(/*total_tokens*/ 12_699)));
+    handle_token_count(&mut chat, Some(context_usage(/*total_tokens*/ 12_700)));
     assert_eq!(history_text(&mut rx), "");
 }
 
@@ -232,7 +236,7 @@ async fn older_replay_page_without_previous_compaction_does_not_rearm() {
     );
     unloaded.items_view = codex_app_server_protocol::TurnItemsView::NotLoaded;
     chat.replay_thread_turns(vec![unloaded], ReplayKind::ResumeInitialMessages);
-    chat.set_token_info(Some(make_token_info(12_700, 13_000)));
+    chat.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
 
     let (mut resumed, mut resumed_rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     resumed.thread_id = Some(thread_id);
@@ -242,8 +246,8 @@ async fn older_replay_page_without_previous_compaction_does_not_rearm() {
         ReplayKind::ThreadSnapshot,
     );
     history_text(&mut resumed_rx);
-    resumed.set_token_info(Some(make_token_info(12_699, 13_000)));
-    resumed.set_token_info(Some(make_token_info(12_700, 13_000)));
+    resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_699)));
+    resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
     assert_eq!(history_text(&mut resumed_rx), "");
 
     resumed.replay_thread_turns(
@@ -251,8 +255,8 @@ async fn older_replay_page_without_previous_compaction_does_not_rearm() {
         ReplayKind::ThreadSnapshot,
     );
     history_text(&mut resumed_rx);
-    resumed.set_token_info(Some(make_token_info(12_699, 13_000)));
-    resumed.set_token_info(Some(make_token_info(12_700, 13_000)));
+    resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_699)));
+    resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
     assert!(history_text(&mut resumed_rx).contains("Context use has reached 70%."));
 }
 
@@ -268,9 +272,9 @@ async fn compaction_before_last_hint_does_not_rearm_from_older_page() {
         compaction_completed_on_turn("compact-1", first_turn_id),
         /*replay_kind*/ None,
     );
-    chat.set_token_info(Some(make_token_info(12_699, 13_000)));
+    chat.set_token_info(Some(context_usage(/*total_tokens*/ 12_699)));
     chat.turn_lifecycle.last_turn_id = Some(hint_turn_id.to_string());
-    chat.set_token_info(Some(make_token_info(12_700, 13_000)));
+    chat.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
 
     let (mut resumed, mut resumed_rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     resumed.thread_id = Some(thread_id);
@@ -280,8 +284,8 @@ async fn compaction_before_last_hint_does_not_rearm_from_older_page() {
         ReplayKind::ThreadSnapshot,
     );
     history_text(&mut resumed_rx);
-    resumed.set_token_info(Some(make_token_info(12_699, 13_000)));
-    resumed.set_token_info(Some(make_token_info(12_700, 13_000)));
+    resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_699)));
+    resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
     assert_eq!(history_text(&mut resumed_rx), "");
 }
 
@@ -300,7 +304,7 @@ async fn same_turn_replay_uses_item_cursor_to_reject_old_and_accept_new_compacti
     chat.turn_lifecycle.last_turn_id = Some(turn_id.to_string());
     chat.record_context_pressure_item("tool-call-10", turn_id);
     chat.turn_lifecycle.agent_turn_running = true;
-    chat.set_token_info(Some(make_token_info(12_700, 13_000)));
+    chat.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
 
     let (mut resumed, mut resumed_rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     resumed.thread_id = Some(thread_id);
@@ -314,8 +318,8 @@ async fn same_turn_replay_uses_item_cursor_to_reject_old_and_accept_new_compacti
             ReplayKind::ThreadSnapshot,
         );
         history_text(&mut resumed_rx);
-        resumed.set_token_info(Some(make_token_info(12_699, 13_000)));
-        resumed.set_token_info(Some(make_token_info(12_700, 13_000)));
+        resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_699)));
+        resumed.set_token_info(Some(context_usage(/*total_tokens*/ 12_700)));
         assert_eq!(
             history_text(&mut resumed_rx).contains("Context use has reached 70%."),
             should_hint,
