@@ -98,6 +98,7 @@ jobs:
           bazel_test_args=(
             test
             --test_tag_filters=-argument-comment-lint
+            --test_env=RUST_TEST_THREADS=1
             --test_verbose_timeout_warnings
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
           )
