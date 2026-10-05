@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import get_type_hints
 
 import pytest
 
 from openai_codex._runtime_requirements import CheckoutCapabilities
-from openai_codex.client import CodexClient, _params_dict
+from openai_codex.client import CodexClient, CodexConfig, _params_dict
 from openai_codex.errors import CodexError
 from openai_codex.generated.notification_registry import notification_turn_id
 from openai_codex.generated.v2_all import (
@@ -23,6 +25,7 @@ from openai_codex.generated.v2_all import (
     PlanType,
     ReasoningEffort,
     ReasoningEffortOption,
+    ThreadCompactStartResponse,
     ThreadForkParams,
     ThreadListParams,
     ThreadQueueChangedNotification,
@@ -37,6 +40,23 @@ from openai_codex.models import InitializeResponse, JsonObject, Notification, Un
 from openai_codex.types import ThreadSource
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class _ClosedProcess:
+    stdin = None
+
+    def __init__(self) -> None:
+        self.stdout = io.StringIO()
+        self.stderr = io.StringIO()
+
+    def terminate(self) -> None:
+        pass
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
+
+    def kill(self) -> None:
+        pass
 
 
 @pytest.mark.parametrize(
@@ -125,9 +145,9 @@ def test_new_options_accept_supported_runtime_metadata(
     assert requests == [("turn/start", params)]
 
 
-@pytest.mark.parametrize("supports_options", [True, False])
+@pytest.mark.parametrize("supports_context_contracts", [True, False])
 def test_unversioned_checkout_probes_and_caches_its_own_schema(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, supports_options: bool
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, supports_context_contracts: bool
 ) -> None:
     client, requests = _initialized_client(monkeypatch, {"userAgent": "codex-cli/0.0.0"})
     command = ("checkout-codex", "--config", "key=value", "app-server")
@@ -141,27 +161,42 @@ def test_unversioned_checkout_probes_and_caches_its_own_schema(
         output = Path(args[-1]) / "v2"
         output.mkdir()
         for name, fields in (
-            ("TurnStartParams", ["turnTrigger", "serviceTierForTurn"]),
+            (
+                "TurnStartParams",
+                [
+                    "turnTrigger",
+                    "serviceTierForTurn",
+                    *(["startIfIdle"] if supports_context_contracts else []),
+                ],
+            ),
             ("ThreadResumeParams", ["excludeTurns"]),
             ("ThreadForkParams", ["excludeTurns"]),
+            (
+                "ThreadCompactStartParams",
+                ["source"] if supports_context_contracts else [],
+            ),
         ):
             (output / f"{name}.json").write_text(
-                json.dumps(
-                    {"properties": {field: {} for field in fields} if supports_options else {}}
-                )
+                json.dumps({"properties": {field: {} for field in fields}})
             )
 
     monkeypatch.setattr("openai_codex._runtime_requirements.subprocess.run", generate_schema)
-    for method, params in (
-        ("turn/start", {"input": [], "turnTrigger": "automation"}),
-        ("thread/resume", {"threadId": "thread-1", "excludeTurns": False}),
+    for method, params, needs_context_contract in (
+        ("turn/start", {"input": [], "turnTrigger": "automation"}, False),
+        ("thread/resume", {"threadId": "thread-1", "excludeTurns": False}, False),
+        ("turn/start", {"input": [], "startIfIdle": True}, True),
+        (
+            "thread/compact/start",
+            {"threadId": "thread-1", "source": "automaticContextManagement"},
+            True,
+        ),
     ):
-        if supports_options:
+        if supports_context_contracts or not needs_context_contract:
             client.request(method, params, response_model=InitializeResponse)
         else:
             with pytest.raises(CodexError, match="checkout does not support"):
                 client.request(method, params, response_model=InitializeResponse)
-    assert len(requests) == (2 if supports_options else 0)
+    assert len(requests) == (4 if supports_context_contracts else 2)
     assert probes == [
         (
             [*command, "generate-json-schema", "--experimental", "--out"],
@@ -176,6 +211,114 @@ def test_unversioned_checkout_probes_and_caches_its_own_schema(
     ]
     client.close()
     assert client._checkout_capabilities is None
+
+
+@pytest.mark.parametrize("version", ["0.151.0", "0.155.0", "0.156.0", "unknown", ""])
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        ("turn/start", {"input": [], "startIfIdle": True}),
+        (
+            "thread/compact/start",
+            {"threadId": "thread-1", "source": "automaticContextManagement"},
+        ),
+    ],
+)
+def test_context_management_contracts_reject_older_runtimes(
+    monkeypatch: pytest.MonkeyPatch, version: str, method: str, params: JsonObject
+) -> None:
+    client, requests = _initialized_client(monkeypatch, {"userAgent": f"codex-cli/{version}"})
+    client._checkout_capabilities = SimpleNamespace(fields={method: frozenset()})
+
+    with pytest.raises(CodexError, match="checkout does not support"):
+        client.request(method, params, response_model=InitializeResponse)
+
+    assert requests == []
+
+
+def test_false_start_if_idle_preserves_older_runtime_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, requests = _initialized_client(monkeypatch, {"userAgent": "codex-cli/0.151.0"})
+    client._checkout_capabilities = None
+    params = {"input": [], "startIfIdle": False}
+
+    client.request("turn/start", params, response_model=InitializeResponse)
+
+    assert requests == [("turn/start", params)]
+
+
+def test_manual_compact_source_preserves_older_runtime_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, requests = _initialized_client(monkeypatch, {"userAgent": "codex-cli/0.151.0"})
+    client._checkout_capabilities = None
+    params = {"threadId": "thread-1", "source": "manual"}
+
+    client.request("thread/compact/start", params, response_model=InitializeResponse)
+
+    assert requests == [("thread/compact/start", params)]
+
+
+@pytest.mark.parametrize(
+    ("method", "params", "supported"),
+    [
+        ("turn/start", {"input": [], "startIfIdle": True}, {"startIfIdle"}),
+        (
+            "thread/compact/start",
+            {"threadId": "thread-1", "source": "automaticContextManagement"},
+            {"source"},
+        ),
+    ],
+)
+def test_context_management_contracts_use_schema_even_for_versioned_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    params: JsonObject,
+    supported: set[str],
+) -> None:
+    client, requests = _initialized_client(monkeypatch, {"userAgent": "codex-cli/0.156.0"})
+    client._checkout_capabilities = SimpleNamespace(fields={method: frozenset(supported)})
+
+    client.request(method, params, response_model=InitializeResponse)
+
+    assert requests == [(method, params)]
+
+
+def test_custom_launcher_uses_explicit_schema_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "openai_codex.client.subprocess.Popen", lambda *_args, **_kwargs: _ClosedProcess()
+    )
+    client = CodexClient(
+        CodexConfig(
+            launch_args_override=("standalone-app-server",),
+            schema_command_override=("codex", "app-server"),
+        )
+    )
+
+    client.start()
+
+    capabilities = client._checkout_capabilities
+    assert capabilities is not None
+    assert capabilities.command == ("codex", "app-server")
+    client.close()
+
+
+def test_compact_response_accepts_legacy_empty_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, requests = _initialized_client(monkeypatch, {"userAgent": "codex-cli/0.153.4"})
+
+    response = client.request(
+        "thread/compact/start",
+        {"threadId": "thread-1"},
+        response_model=ThreadCompactStartResponse,
+    )
+
+    assert response.turn_id is None
+    assert requests == [("thread/compact/start", {"threadId": "thread-1"})]
 
 
 def test_unversioned_custom_launch_requires_verifiable_capabilities(

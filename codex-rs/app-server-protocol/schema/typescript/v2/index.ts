@@ -483,6 +483,7 @@ export type { ThreadAttachmentUpdatedNotification } from "./ThreadAttachmentUpda
 export type { ThreadClosedNotification } from "./ThreadClosedNotification";
 export type { ThreadCompactStartParams } from "./ThreadCompactStartParams";
 export type { ThreadCompactStartResponse } from "./ThreadCompactStartResponse";
+export type { ThreadCompactStartSource } from "./ThreadCompactStartSource";
 export type { ThreadDeleteParams } from "./ThreadDeleteParams";
 export type { ThreadDeleteResponse } from "./ThreadDeleteResponse";
 export type { ThreadDeletedNotification } from "./ThreadDeletedNotification";

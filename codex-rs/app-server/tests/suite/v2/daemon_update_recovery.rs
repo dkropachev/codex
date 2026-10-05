@@ -543,6 +543,21 @@ async fn managed_shutdown_records_interrupted_turn(outcome: &str) -> Result<()> 
             .await?;
         }
         "compacting" => {
+            release.send(()).expect("original request is waiting");
+            timeout(DEFAULT_READ_TIMEOUT, async {
+                loop {
+                    let Message::Text(text) = client.next().await.context("socket closed")?? else {
+                        continue;
+                    };
+                    if let JSONRPCMessage::Notification(notification) = serde_json::from_str(&text)?
+                        && notification.method == "turn/completed"
+                    {
+                        break;
+                    }
+                }
+                Ok::<(), anyhow::Error>(())
+            })
+            .await??;
             request(
                 &mut client,
                 /*id*/ 4,

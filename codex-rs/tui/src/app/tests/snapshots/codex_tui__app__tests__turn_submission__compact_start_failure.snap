@@ -1,0 +1,5 @@
+---
+source: tui/src/app/tests/turn_submission.rs
+expression: message
+---
+■ Failed to compact context: thread/compact/start failed in TUI: thread/compact/start failed: thread not found: 123e4567-e89b-12d3-a456-426614174000 (code -32600)

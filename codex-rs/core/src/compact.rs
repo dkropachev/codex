@@ -147,6 +147,8 @@ pub(crate) async fn run_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
+    trigger: CompactionTrigger,
+    reason: CompactionReason,
 ) -> CodexResult<()> {
     sess.emit_turn_started(&turn_context).await;
     run_compact_task_inner(
@@ -154,8 +156,8 @@ pub(crate) async fn run_compact_task(
         turn_context,
         input,
         InitialContextInjection::DoNotInject,
-        CompactionTrigger::Manual,
-        CompactionReason::UserRequested,
+        trigger,
+        reason,
         CompactionPhase::StandaloneTurn,
     )
     .await?;

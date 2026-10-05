@@ -259,13 +259,10 @@ def test_compact_rpc_hits_mock_responses(tmp_path) -> None:
 
     assert {
         "turn_final_response": turn_result.final_response,
-        "compact_response": compact_response.model_dump(
-            by_alias=True,
-            mode="json",
-        ),
+        "compact_turn_id_present": bool(compact_response.turn_id),
         "request_kinds": [request_kind(request.path) for request in requests],
     } == {
         "turn_final_response": "history",
-        "compact_response": {},
+        "compact_turn_id_present": True,
         "request_kinds": ["responses", "responses"],
     }

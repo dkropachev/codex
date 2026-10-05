@@ -51,14 +51,19 @@ class CheckoutCapabilities:
                 result = {}
                 for method, name in (
                     ("turn/start", "TurnStartParams"),
+                    ("thread/compact/start", "ThreadCompactStartParams"),
                     ("thread/resume", "ThreadResumeParams"),
                     ("thread/fork", "ThreadForkParams"),
                 ):
-                    schema = json.loads((Path(directory) / "v2" / f"{name}.json").read_text())
-                    properties = schema.get("properties") if isinstance(schema, dict) else None
+                    schema_path = Path(directory) / "v2" / f"{name}.json"
+                    if not schema_path.exists():
+                        result[method] = frozenset()
+                        continue
+                    schema = json.loads(schema_path.read_text())
+                    properties = schema.get("properties", {}) if isinstance(schema, dict) else None
                     if not isinstance(properties, dict):
                         raise ValueError(f"Missing properties in {name} schema")
                     result[method] = frozenset(properties)
                 return result
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
-            raise ValueError("Could not inspect the unversioned CLI's experimental schema") from exc
+            raise ValueError("Could not inspect the CLI's experimental schema") from exc

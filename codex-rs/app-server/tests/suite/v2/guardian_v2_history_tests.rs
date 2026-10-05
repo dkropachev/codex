@@ -356,6 +356,7 @@ async fn guardians_retain_evidence_after_compaction_and_resume(
             let id = app_server
                 .send_thread_compact_start_request(ThreadCompactStartParams {
                     thread_id: thread_id.clone(),
+                    source: None,
                 })
                 .await?;
             let _: ThreadCompactStartResponse =

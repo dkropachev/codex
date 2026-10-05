@@ -4110,6 +4110,17 @@
     },
     "ThreadCompactStartParams": {
       "properties": {
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadCompactStartSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Identifies what initiated the compaction. Omission defaults to manual."
+        },
         "threadId": {
           "type": "string"
         }
@@ -4118,6 +4129,13 @@
         "threadId"
       ],
       "type": "object"
+    },
+    "ThreadCompactStartSource": {
+      "enum": [
+        "manual",
+        "automaticContextManagement"
+      ],
+      "type": "string"
     },
     "ThreadDeleteParams": {
       "properties": {
@@ -5465,6 +5483,10 @@
             "string",
             "null"
           ]
+        },
+        "startIfIdle": {
+          "description": "Start a new turn only if the thread is idle. When false or omitted, preserve the default start-or-steer behavior.",
+          "type": "boolean"
         },
         "summary": {
           "anyOf": [

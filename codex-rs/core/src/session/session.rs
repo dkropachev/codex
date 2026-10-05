@@ -61,6 +61,8 @@ pub(crate) struct Session {
     pub(super) tx_event: Sender<Event>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
     pub(super) state: Mutex<SessionState>,
+    /// Serializes all paths that can claim or replace the active-turn slot.
+    pub(crate) turn_start_lock: Semaphore,
     /// Orders accepted settings commits and their persisted events with compaction checkpoints.
     /// Keep this separate from `state` so storage I/O does not block runtime state access.
     pub(super) thread_settings_persistence: Semaphore,
@@ -638,6 +640,13 @@ async fn warm_plugins_and_skills_for_session_init(
 }
 
 impl Session {
+    pub(crate) async fn acquire_turn_start_lock(&self) -> tokio::sync::SemaphorePermit<'_> {
+        self.turn_start_lock
+            .acquire()
+            .await
+            .unwrap_or_else(|_| unreachable!("turn-start semaphore is never closed"))
+    }
+
     /// Returns the concrete identity for this thread.
     pub(crate) fn thread_id(&self) -> ThreadId {
         self.thread_id
@@ -1738,6 +1747,7 @@ impl Session {
                 tx_event: tx_event.clone(),
                 agent_status,
                 state: Mutex::new(state),
+                turn_start_lock: Semaphore::new(/*permits*/ 1),
                 thread_settings_persistence: Semaphore::new(/*permits*/ 1),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),

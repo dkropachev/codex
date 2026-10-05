@@ -49,7 +49,16 @@ pub struct TurnInputRequest {
     pub start: TurnStartOptions,
     pub additional_context: BTreeMap<String, AdditionalContextEntry>,
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
+    pub app_server_client_info: Option<AppServerClientInfo>,
     pub trace: Option<W3cTraceContext>,
+}
+
+/// App-server connection identity committed only with accepted turn input.
+#[derive(Clone, Debug)]
+pub struct AppServerClientInfo {
+    pub name: Option<String>,
+    pub version: Option<String>,
+    pub mcp_elicitations_auto_deny: bool,
 }
 
 /// Request to resume sampling for an interrupted regular turn.
@@ -74,6 +83,7 @@ impl TurnInputRequest {
             start: TurnStartOptions::default(),
             additional_context: BTreeMap::new(),
             responsesapi_client_metadata: None,
+            app_server_client_info: None,
             trace: None,
         }
     }
@@ -121,6 +131,15 @@ impl TurnInputRequest {
         self
     }
 
+    /// App-server connection identity applied only when Core accepts this input.
+    pub fn with_app_server_client_info(
+        mut self,
+        app_server_client_info: AppServerClientInfo,
+    ) -> Self {
+        self.app_server_client_info = Some(app_server_client_info);
+        self
+    }
+
     /// Trace context used when this request crosses the session loop.
     pub fn with_trace(mut self, trace: Option<W3cTraceContext>) -> Self {
         self.trace = trace;
@@ -133,11 +152,13 @@ impl TurnInputRequest {
 pub enum TurnInputMode {
     /// Start a regular turn when idle, otherwise steer the active regular turn.
     StartOrSteer,
-    /// Start only when the thread is idle.
+    /// Start inferred user or automatic work only when the thread is idle.
     StartIfIdle,
     /// Start an internal continuation when idle.
     /// Reject if another task has started since the expected previous turn.
     ContinueIfIdle { expected_previous_turn_id: String },
+    /// Start an explicitly user-owned turn only when the thread is idle.
+    StartUserIfIdle,
     /// Steer only if this exact turn is active.
     Steer { expected_turn_id: String },
 }
@@ -205,6 +226,23 @@ pub enum StartIfIdleSubmission {
     NotSubmitted { reason: NotSubmittedReason },
 }
 
+/// Identifies what requested a standalone compaction turn.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CompactionSource {
+    /// Compaction was explicitly requested by the user or client.
+    #[default]
+    Manual,
+    /// Compaction was requested by automatic context management.
+    Automatic,
+}
+
+/// Inputs for an idle-only standalone compaction submission.
+#[derive(Clone, Debug)]
+pub struct CompactionRequest {
+    pub source: CompactionSource,
+    pub trace: Option<W3cTraceContext>,
+}
+
 /// What Core did with input submitted only for steering.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SteerSubmission {
@@ -224,10 +262,10 @@ pub enum NotSubmittedReason {
     /// The host is draining and no longer permits new regular turns.
     ServerDraining,
 
-    /// `start_turn_if_idle` found an active turn.
+    /// An idle-only turn or compaction start found an active turn.
     NotIdle,
 
-    /// `start_turn_if_idle` yielded to higher-priority trigger-turn mailbox input.
+    /// An idle-only start yielded to higher-priority trigger-turn mailbox input.
     PendingTriggerTurn,
 
     /// `start_turn_if_idle` received automatic non-user input for a turn that

@@ -1978,6 +1978,80 @@ mod tests {
         assert!(matches!(event, AppServerEvent::Disconnected { .. }));
     }
 
+    #[tokio::test]
+    async fn remote_context_management_requests_are_not_retried_after_uncertain_disconnect() {
+        let requests = [
+            (
+                "thread/compact/start",
+                serde_json::json!({"threadId": "thread"}),
+            ),
+            (
+                "turn/start",
+                serde_json::json!({
+                    "threadId": "thread",
+                    "startIfIdle": true,
+                    "input": [],
+                }),
+            ),
+        ];
+
+        for (index, (method, params)) in requests.into_iter().enumerate() {
+            let (request_finished_tx, request_finished_rx) = oneshot::channel();
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("listener should bind");
+            let websocket_url =
+                format!("ws://{}", listener.local_addr().expect("listener address"));
+            let expected_method = method.to_string();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.expect("accept should succeed");
+                let mut websocket = accept_async(stream)
+                    .await
+                    .expect("websocket upgrade should succeed");
+                expect_remote_initialize(&mut websocket).await;
+                let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
+                else {
+                    panic!("expected context-management request");
+                };
+                assert_eq!(request.method, expected_method);
+                drop(websocket);
+
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        panic!("uncertain request must not reconnect or resend: {accepted:?}");
+                    }
+                    _ = request_finished_rx => {}
+                }
+            });
+            let client = RemoteAppServerClient::connect(test_remote_connect_args(websocket_url))
+                .await
+                .expect("remote client should connect");
+            let error = timeout(
+                Duration::from_secs(5),
+                client.request_handle().request_json_rpc(JSONRPCRequest {
+                    id: RequestId::Integer(index as i64 + 1),
+                    method: method.to_string(),
+                    params: Some(params),
+                    trace: None,
+                }),
+            )
+            .await
+            .expect("uncertain request should resolve without retry")
+            .expect_err("disconnect before response should be transport-uncertain");
+            assert!(matches!(
+                error.kind(),
+                ErrorKind::BrokenPipe
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::ConnectionReset
+                    | ErrorKind::InvalidData
+                    | ErrorKind::UnexpectedEof
+            ));
+            let _ = request_finished_tx.send(());
+            server.await.expect("mock server should finish");
+            client.shutdown().await.expect("shutdown should complete");
+        }
+    }
+
     #[test]
     fn typed_request_error_exposes_sources() {
         let transport = TypedRequestError::Transport {

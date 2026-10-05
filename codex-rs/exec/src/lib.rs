@@ -1123,6 +1123,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     request_id: request_ids.next(),
                     params: TurnStartParams {
                         disabled_plugin_ids: None,
+                        start_if_idle: false,
                         thread_id: primary_thread_id_for_span.clone(),
                         turn_trigger: Some("exec".to_string()),
                         client_user_message_id: None,

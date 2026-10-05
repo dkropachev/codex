@@ -435,6 +435,7 @@ impl TurnRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> Result<TurnStartResponse, JSONRPCErrorError> {
+        let start_if_idle = params.start_if_idle;
         let (thread_id, thread) =
             self.load_thread(&params.thread_id)
                 .await
@@ -486,15 +487,10 @@ impl TurnRequestProcessor {
             );
             return Err(error);
         }
-        Self::set_app_server_client_info(
-            thread.as_ref(),
-            app_server_client_name,
-            app_server_client_version,
-        )
-        .await
-        .inspect_err(|error| {
-            self.track_error_response(&request_id, error, /*error_type*/ None);
-        })?;
+        let mcp_elicitations_auto_deny = xcode_26_4_mcp_elicitations_auto_deny(
+            app_server_client_name.as_deref(),
+            app_server_client_version.as_deref(),
+        );
         let runtime_workspace_roots = params
             .runtime_workspace_roots
             .map(resolve_runtime_workspace_roots);
@@ -557,40 +553,34 @@ impl TurnRequestProcessor {
             )
             .await?;
 
-        let submission = thread
-            .start_or_steer_turn(
-                TurnInputRequest::new(input)
-                    .with_thread_settings(thread_settings)
-                    .on_start(TurnStartOptions {
-                        turn_trigger: params.turn_trigger,
-                        final_output_json_schema: params.output_schema,
-                        service_tier: params.service_tier_for_turn,
-                        cyber_access_program: params.cyber_access_program.map(Into::into),
-                        ..Default::default()
-                    })
-                    .with_additional_context(additional_context)
-                    .with_responses_metadata(params.responsesapi_client_metadata)
-                    .with_trace(self.request_trace_context(&request_id).await),
-            )
-            .await
-            .map_err(|err| {
-                let error = internal_error(format!("failed to submit turn input: {err}"));
-                self.track_error_response(&request_id, &error, /*error_type*/ None);
-                error
-            })?;
-        let (turn_id, started) = match submission {
-            TurnInputSubmission::Started { turn_id } => (turn_id, true),
-            TurnInputSubmission::Steered { turn_id } => (turn_id, false),
-            TurnInputSubmission::NotSubmitted { reason } => {
-                let error = if reason == NotSubmittedReason::ServerDraining {
-                    crate::error_code::server_draining_error()
-                } else {
-                    internal_error(format!("failed to submit turn input: {reason:?}"))
-                };
-                self.track_error_response(&request_id, &error, /*error_type*/ None);
-                return Err(error);
-            }
+        let turn_input_request = TurnInputRequest::new(input)
+            .with_thread_settings(thread_settings)
+            .on_start(TurnStartOptions {
+                turn_trigger: params.turn_trigger,
+                final_output_json_schema: params.output_schema,
+                service_tier: params.service_tier_for_turn,
+                cyber_access_program: params.cyber_access_program.map(Into::into),
+                ..Default::default()
+            })
+            .with_additional_context(additional_context)
+            .with_responses_metadata(params.responsesapi_client_metadata)
+            .with_app_server_client_info(codex_core::AppServerClientInfo {
+                name: app_server_client_name,
+                version: app_server_client_version,
+                mcp_elicitations_auto_deny,
+            })
+            .with_trace(self.request_trace_context(&request_id).await);
+        let admission = if start_if_idle {
+            context_management::TurnAdmission::StartIfIdle
+        } else {
+            context_management::TurnAdmission::StartOrSteer
         };
+        let context_management::AcceptedTurnInput { turn_id, started } =
+            context_management::submit_turn(thread.as_ref(), turn_input_request, admission)
+                .await
+                .inspect_err(|error| {
+                    self.track_error_response(&request_id, error, /*error_type*/ None);
+                })?;
 
         if turn_has_input && started {
             let config_snapshot = thread.config_snapshot().await;
@@ -906,25 +896,6 @@ impl TurnRequestProcessor {
                 _ => internal_error(format!("failed to inject response items: {err}")),
             })?;
         Ok(ThreadInjectItemsResponse {})
-    }
-
-    async fn set_app_server_client_info(
-        thread: &CodexThread,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
-    ) -> Result<(), JSONRPCErrorError> {
-        let mcp_elicitations_auto_deny = xcode_26_4_mcp_elicitations_auto_deny(
-            app_server_client_name.as_deref(),
-            app_server_client_version.as_deref(),
-        );
-        thread
-            .set_app_server_client_info(
-                app_server_client_name,
-                app_server_client_version,
-                mcp_elicitations_auto_deny,
-            )
-            .await
-            .map_err(|err| internal_error(format!("failed to set app server client info: {err}")))
     }
 
     async fn turn_steer_inner(

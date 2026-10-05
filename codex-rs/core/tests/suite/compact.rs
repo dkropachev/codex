@@ -1,5 +1,9 @@
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_core::CompactionRequest;
+use codex_core::CompactionSource;
+use codex_core::NotSubmittedReason;
+use codex_core::StartIfIdleSubmission;
 use codex_core::TurnInputRequest;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
@@ -10,6 +14,7 @@ use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::AgentPath;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -26,10 +31,12 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -63,6 +70,8 @@ use core_test_support::responses::sse;
 use core_test_support::responses::sse_failed;
 use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -70,6 +79,10 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
+use tokio::sync::Barrier;
+use tokio::sync::oneshot;
+use tokio::time::Duration;
+use tokio::time::timeout;
 use wiremock::MockServer;
 // --- Test helpers -----------------------------------------------------------
 
@@ -1300,6 +1313,162 @@ async fn manual_compact_emits_context_compaction_items() {
     let completed_item = completed_item.expect("context compaction item completed");
     assert_eq!(started_item.id, completed_item.id);
     assert!(legacy_event);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_only_compaction_is_atomic_and_reports_its_exact_turn_id() -> Result<()> {
+    let (release, gate) = oneshot::channel();
+    let (server, _) = start_streaming_sse_server(vec![vec![StreamingSseChunk {
+        gate: Some(gate),
+        body: sse(vec![
+            ev_assistant_message("summary", SUMMARY_TEXT),
+            ev_completed("compact-response"),
+        ]),
+    }]])
+    .await;
+    let test = test_codex()
+        .with_config(|config| config.model_provider.name = "Local compaction test".to_string())
+        .build_with_streaming_server_auto_env(&server)
+        .await?;
+    let barrier = Arc::new(Barrier::new(3));
+    let submit = |codex: Arc<codex_core::CodexThread>, barrier: Arc<Barrier>| {
+        tokio::spawn(async move {
+            barrier.wait().await;
+            codex
+                .compact_if_idle(CompactionRequest {
+                    source: CompactionSource::Automatic,
+                    trace: None,
+                })
+                .await
+        })
+    };
+    let first = submit(Arc::clone(&test.codex), Arc::clone(&barrier));
+    let second = submit(Arc::clone(&test.codex), Arc::clone(&barrier));
+    barrier.wait().await;
+    let submissions = timeout(Duration::from_secs(5), async {
+        let (first, second) = tokio::join!(first, second);
+        Ok::<_, anyhow::Error>((first??, second??))
+    })
+    .await??;
+    let turn_id = match submissions {
+        (
+            StartIfIdleSubmission::Started { turn_id },
+            StartIfIdleSubmission::NotSubmitted {
+                reason: NotSubmittedReason::NotIdle,
+            },
+        )
+        | (
+            StartIfIdleSubmission::NotSubmitted {
+                reason: NotSubmittedReason::NotIdle,
+            },
+            StartIfIdleSubmission::Started { turn_id },
+        ) => turn_id,
+        other => panic!("expected one started and one rejected compaction: {other:?}"),
+    };
+    let started = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(started, turn_id);
+    release
+        .send(())
+        .expect("compaction request should be waiting");
+    let completed = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnAborted(event) => panic!("compaction was replaced: {event:?}"),
+        EventMsg::TurnComplete(event) => Some(event.turn_id.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(completed, turn_id);
+    let request: Value = serde_json::from_slice(&server.requests().await[0])?;
+    let metadata: Value = serde_json::from_str(
+        request["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .expect("compaction metadata"),
+    )?;
+    assert_eq!(metadata["compaction"]["trigger"], "auto");
+    assert_eq!(metadata["compaction"]["reason"], "context_limit");
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn idle_only_compaction_preserves_trigger_mail_for_followup_turn() -> Result<()> {
+    let (release, gate) = oneshot::channel();
+    let (server, _) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: Some(gate),
+            body: sse(vec![
+                ev_assistant_message("summary", SUMMARY_TEXT),
+                ev_completed("compact-response"),
+            ]),
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_assistant_message("reply", "I received the mail"),
+                ev_completed("mail-response"),
+            ]),
+        }],
+    ])
+    .await;
+    let test = test_codex()
+        .with_config(|config| config.model_provider.name = "Local compaction test".to_string())
+        .build_with_streaming_server_auto_env(&server)
+        .await?;
+    let StartIfIdleSubmission::Started { turn_id } = test
+        .codex
+        .compact_if_idle(CompactionRequest {
+            source: CompactionSource::Automatic,
+            trace: None,
+        })
+        .await?
+    else {
+        panic!("compaction should start on an idle thread");
+    };
+    timeout(
+        Duration::from_secs(5),
+        server.wait_for_request_count(/*count*/ 1),
+    )
+    .await?;
+    test.codex
+        .submit(Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                AgentPath::try_from("/root/worker").expect("valid agent path"),
+                AgentPath::root(),
+                Vec::new(),
+                "mail during compaction".to_string(),
+                /*trigger_turn*/ true,
+            ),
+            start_options: Default::default(),
+        })
+        .await?;
+    // A reply from the same submission queue proves Core has enqueued the
+    // mail while compaction is still waiting on its model response.
+    let (reply, outcome) = oneshot::channel();
+    test.codex
+        .submit(Op::TurnSettings {
+            turn_id,
+            update: TurnSettingsUpdate::default(),
+            reply,
+        })
+        .await?;
+    timeout(Duration::from_secs(5), outcome).await??;
+    release
+        .send(())
+        .expect("compaction response gate remains open");
+    for _ in 0..2 {
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 2);
+    assert!(String::from_utf8_lossy(&requests[1]).contains("mail during compaction"));
+    server.shutdown().await;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

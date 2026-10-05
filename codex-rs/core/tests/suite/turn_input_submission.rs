@@ -1,3 +1,5 @@
+use codex_core::CompactionRequest;
+use codex_core::CompactionSource;
 use codex_core::NotSubmittedReason;
 use codex_core::RecoverTurnRequest;
 use codex_core::StartIfIdleSubmission;
@@ -93,6 +95,17 @@ async fn host_drain_rejects_turn_start_paths_without_recording_input() -> anyhow
             },
         );
     }
+    assert_eq!(
+        test.codex
+            .compact_if_idle(CompactionRequest {
+                source: CompactionSource::Automatic,
+                trace: None,
+            })
+            .await?,
+        StartIfIdleSubmission::NotSubmitted {
+            reason: NotSubmittedReason::ServerDraining,
+        }
+    );
     assert!(response.requests().is_empty());
     admission.0.store(false, Ordering::SeqCst);
     test.codex
@@ -613,7 +626,7 @@ async fn turn_input_submission_reports_started_and_steered_for_concurrent_submis
     .await;
     let test = test_codex()
         .with_model("gpt-5.4")
-        .build_with_streaming_server(&server)
+        .build_with_streaming_server_auto_env(&server)
         .await
         .expect("build turn-input submission session");
     let codex = Arc::clone(&test.codex);
@@ -690,6 +703,91 @@ async fn turn_input_submission_reports_started_and_steered_for_concurrent_submis
     assert!(request_bodies[1].to_string().contains("first message"));
     assert!(request_bodies[1].to_string().contains("second message"));
 
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_idle_start_is_atomic_for_concurrent_submissions() {
+    let (release_response, response_gate) = oneshot::channel();
+    let (server, _completions) = start_streaming_sse_server(vec![vec![
+        StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![ev_response_created("resp-1")]),
+        },
+        StreamingSseChunk {
+            gate: Some(response_gate),
+            body: responses::sse(vec![ev_completed("resp-1")]),
+        },
+    ]])
+    .await;
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .build_with_streaming_server_auto_env(&server)
+        .await
+        .expect("build idle-only turn submission session");
+    let barrier = Arc::new(Barrier::new(3));
+    let submit =
+        |codex: Arc<codex_core::CodexThread>, barrier: Arc<Barrier>, text: &'static str| {
+            tokio::spawn(async move {
+                barrier.wait().await;
+                codex
+                    .start_user_turn_if_idle(user_message_request(text))
+                    .await
+            })
+        };
+    let first = submit(
+        Arc::clone(&test.codex),
+        Arc::clone(&barrier),
+        "first candidate",
+    );
+    let second = submit(
+        Arc::clone(&test.codex),
+        Arc::clone(&barrier),
+        "second candidate",
+    );
+    barrier.wait().await;
+
+    let submissions = timeout(Duration::from_secs(5), async {
+        let (first, second) = tokio::join!(first, second);
+        Ok::<_, anyhow::Error>((first??, second??))
+    })
+    .await
+    .expect("both concurrent idle-only submissions should resolve")
+    .expect("submission tasks should succeed");
+    let turn_id = match submissions {
+        (
+            StartIfIdleSubmission::Started { turn_id },
+            StartIfIdleSubmission::NotSubmitted {
+                reason: NotSubmittedReason::NotIdle,
+            },
+        )
+        | (
+            StartIfIdleSubmission::NotSubmitted {
+                reason: NotSubmittedReason::NotIdle,
+            },
+            StartIfIdleSubmission::Started { turn_id },
+        ) => turn_id,
+        other => panic!("expected one started and one rejected user turn: {other:?}"),
+    };
+
+    timeout(
+        Duration::from_secs(5),
+        server.wait_for_request_count(/*count*/ 1),
+    )
+    .await
+    .expect("winning turn should reach model exactly once");
+    release_response
+        .send(())
+        .expect("response gate should remain open");
+    let completed = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let EventMsg::TurnComplete(completed) = completed else {
+        unreachable!("wait_for_event returned unexpected event");
+    };
+    assert_eq!(completed.turn_id, turn_id);
+    assert_eq!(server.requests().await.len(), 1);
     server.shutdown().await;
 }
 

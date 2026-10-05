@@ -312,7 +312,10 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
-        let (pending_items, _) = self.input_queue.drain_mailbox_input_items().await;
+        let pending_items = match task_kind {
+            TaskKind::Regular => self.input_queue.drain_mailbox_input_items().await.0,
+            TaskKind::Compact => Vec::new(),
+        };
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             self.record_started_turn(&turn_context.sub_id).await;
@@ -453,6 +456,7 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
+        let turn_start_guard = self.acquire_turn_start_lock().await;
         if !self.input_queue.has_pending_mailbox_items().await
             || (!self.input_queue.has_trigger_turn_mailbox_items().await
                 && !self.has_outstanding_durable_sleep())
@@ -468,11 +472,13 @@ impl Session {
             let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
             Arc::clone(&active_turn.turn_state)
         };
+        drop(turn_start_guard);
 
         self.services
             .models_manager
             .refresh_after_auth_change(self.get_config().await.http_client_factory())
             .await;
+        let _turn_start_guard = self.acquire_turn_start_lock().await;
         // A completion-triggered wakeup can be interrupted while discovery waits.
         if self
             .active_turn
@@ -534,7 +540,7 @@ impl Session {
             .await;
     }
 
-    pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
+    pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) -> bool {
         let mut aborted_turn = false;
         let mut active_turn_to_clear = None;
         let mut turn_context = None;
@@ -560,9 +566,7 @@ impl Session {
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             self.input_queue.clear_pending(&active_turn).await;
         }
-        if reason == TurnAbortReason::Interrupted && aborted_turn {
-            self.maybe_start_turn_for_pending_work().await;
-        }
+        aborted_turn
     }
 
     pub(crate) async fn abort_turn_if_active(

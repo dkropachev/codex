@@ -18,6 +18,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ResponseUsageMetadata;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
+use codex_app_server_protocol::ThreadCompactStartSource;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -28,15 +29,24 @@ use codex_app_server_protocol::TokenUsageBreakdown;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_utils_absolute_path::test_support::PathExt;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
+use serde_json::json;
 use tempfile::TempDir;
 use test_case::test_case;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
+
+use super::analytics::mount_analytics_capture;
+use super::analytics::wait_for_matching_analytics_event;
 
 // macOS and Windows Bazel CI can spend tens of seconds starting app-server
 // subprocesses or processing test RPCs under load.
@@ -47,6 +57,10 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const AUTO_COMPACT_LIMIT: i64 = 1_000;
 const COMPACT_PROMPT: &str = "Summarize the conversation.";
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+
+fn parse_json_header(value: &str) -> Value {
+    serde_json::from_str(value).expect("turn metadata header should be valid JSON")
+}
 
 #[derive(Clone, Copy)]
 enum CompactionRoute {
@@ -156,8 +170,12 @@ async fn auto_compaction_emits_started_and_completed_items(route: CompactionRout
     Ok(())
 }
 
+#[test_case(false; "omitted_source")]
+#[test_case(true; "explicit_null_source")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -> Result<()> {
+async fn thread_compact_start_triggers_compaction_and_returns_exact_turn_id(
+    explicit_null_source: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -177,7 +195,7 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
         responses::ev_assistant_message("followup", "FINAL_REPLY"),
         responses::ev_completed_with_tokens("followup", /*total_tokens*/ 120),
     ]);
-    let _responses = responses::mount_sse_sequence(&server, vec![seed, sse, followup]).await;
+    let responses_log = responses::mount_sse_sequence(&server, vec![seed, sse, followup]).await;
 
     let codex_home = TempDir::new()?;
     let initial_cwd = TempDir::new()?;
@@ -221,12 +239,16 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
     .await??;
     mcp.clear_message_buffer();
 
+    // Send raw JSON so the test covers omitted and explicit-null defaults independently.
+    let params = if explicit_null_source {
+        serde_json::json!({ "threadId": thread_id.clone(), "source": null })
+    } else {
+        serde_json::json!({ "threadId": thread_id.clone() })
+    };
     let compact_id = mcp
-        .send_thread_compact_start_request(ThreadCompactStartParams {
-            thread_id: thread_id.clone(),
-        })
+        .send_request("thread/compact/start", Some(params))
         .await?;
-    let _: ThreadCompactStartResponse =
+    let compact_response: ThreadCompactStartResponse =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(compact_id)).await??;
 
     let started = wait_for_context_compaction_started(&mut mcp).await?;
@@ -248,6 +270,13 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
     assert_eq!(started.thread_id, thread_id);
     assert_eq!(completed.thread_id, thread_id);
     assert_eq!(started_id, completed_id);
+    assert_eq!(
+        (started.turn_id.clone(), completed.turn_id),
+        (
+            compact_response.turn_id.clone(),
+            compact_response.turn_id.clone()
+        )
+    );
     assert_eq!(
         raw_completed,
         RawResponseCompletedNotification {
@@ -273,6 +302,14 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
     // resume resends settings, so restoring the updated cwd and roots depends on the
     // checkpoint; startup metadata does not contain the extra root.
     send_turn_and_wait(&mut mcp, &thread_id, "continue").await?;
+    let requests = responses_log.requests();
+    let metadata = requests[1]
+        .header("x-codex-turn-metadata")
+        .as_deref()
+        .map(parse_json_header)
+        .expect("compact request should include turn metadata");
+    assert_eq!(metadata["compaction"]["trigger"], "manual");
+    assert_eq!(metadata["turn_id"], compact_response.turn_id);
     timeout(DEFAULT_READ_TIMEOUT, mcp.shutdown_gracefully()).await??;
 
     let mut mcp = TestAppServer::builder()
@@ -301,6 +338,158 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_compact_start_automatic_source_uses_auto_env_and_exact_turn_id() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let compact_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("automatic", "AUTOMATIC_COMPACT_SUMMARY"),
+            responses::ev_completed_with_tokens("automatic", /*total_tokens*/ 120),
+        ]),
+    )
+    .await;
+    let codex_home = TempDir::new()?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
+    compaction_config(&server.uri(), /*auto_compact_limit*/ 1_000_000)
+        .with_root_config(&format!("chatgpt_base_url = {:?}", server.uri()))
+        .write(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let thread_id = start_thread(&mut mcp).await?;
+    let request_id = mcp
+        .send_thread_compact_start_request(ThreadCompactStartParams {
+            thread_id,
+            source: Some(ThreadCompactStartSource::AutomaticContextManagement),
+        })
+        .await?;
+    let response: ThreadCompactStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    let started = wait_for_context_compaction_started(&mut mcp).await?;
+    let item_completed = wait_for_context_compaction_completed(&mut mcp).await?;
+    let completed = wait_for_turn_completed(&mut mcp, &response.turn_id).await?;
+    assert_eq!(
+        (
+            started.turn_id,
+            item_completed.turn_id,
+            completed.turn.id,
+            completed.turn.status,
+        ),
+        (
+            response.turn_id.clone(),
+            response.turn_id.clone(),
+            response.turn_id.clone(),
+            TurnStatus::Completed,
+        )
+    );
+
+    let request = compact_mock.single_request();
+    let metadata = request
+        .header("x-codex-turn-metadata")
+        .as_deref()
+        .map(parse_json_header)
+        .expect("compact request should include turn metadata");
+    assert_eq!(metadata["compaction"]["trigger"], "auto");
+    assert_eq!(metadata["compaction"]["reason"], "context_limit");
+    assert_eq!(metadata["turn_id"], response.turn_id);
+    let event = wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
+        event["event_type"] == "codex_compaction_event"
+            && event["event_params"]["turn_id"] == response.turn_id
+    })
+    .await?;
+    assert_eq!(
+        (
+            &event["event_params"]["trigger"],
+            &event["event_params"]["reason"],
+            &event["event_params"]["implementation"],
+            &event["event_params"]["phase"],
+            &event["event_params"]["status"],
+        ),
+        (
+            &json!("auto"),
+            &json!("context_limit"),
+            &json!("responses"),
+            &json!("standalone_turn"),
+            &json!("completed"),
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_compact_start_rejects_busy_thread_without_interrupting_active_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (release_response, response_gate) = oneshot::channel();
+    let (server, _completions) = start_streaming_sse_server(vec![vec![
+        StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![responses::ev_response_created("resp-1")]),
+        },
+        StreamingSseChunk {
+            gate: Some(response_gate),
+            body: responses::sse(vec![responses::ev_completed("resp-1")]),
+        },
+    ]])
+    .await;
+    let codex_home = TempDir::new()?;
+    compaction_config(server.uri(), /*auto_compact_limit*/ 1_000_000).write(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let thread_id = start_thread(&mut mcp).await?;
+    let turn_request_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "keep running".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let TurnStartResponse { turn: active_turn } =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_request_id)).await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_notification::<codex_app_server_protocol::TurnStartedNotification>("turn/started"),
+    )
+    .await??;
+
+    let compact_request_id = mcp
+        .send_thread_compact_start_request(ThreadCompactStartParams {
+            thread_id,
+            source: None,
+        })
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(compact_request_id)),
+    )
+    .await??;
+    assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert_eq!(
+        error.error.message,
+        "thread already has an active or pending turn"
+    );
+
+    release_response
+        .send(())
+        .expect("active response gate should remain open");
+    let completed = wait_for_turn_completed(&mut mcp, &active_turn.id).await?;
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
+    assert_eq!(server.requests().await.len(), 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn thread_compact_start_rejects_invalid_thread_id() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -316,6 +505,7 @@ async fn thread_compact_start_rejects_invalid_thread_id() -> Result<()> {
     let request_id = mcp
         .send_thread_compact_start_request(ThreadCompactStartParams {
             thread_id: "not-a-thread-id".to_string(),
+            source: None,
         })
         .await?;
     let error: JSONRPCError = timeout(
@@ -346,6 +536,7 @@ async fn thread_compact_start_rejects_unknown_thread_id() -> Result<()> {
     let request_id = mcp
         .send_thread_compact_start_request(ThreadCompactStartParams {
             thread_id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+            source: None,
         })
         .await?;
     let error: JSONRPCError = timeout(
@@ -394,7 +585,10 @@ async fn send_turn_and_wait(
     Ok(turn.id)
 }
 
-async fn wait_for_turn_completed(mcp: &mut TestAppServer, turn_id: &str) -> Result<()> {
+async fn wait_for_turn_completed(
+    mcp: &mut TestAppServer,
+    turn_id: &str,
+) -> Result<TurnCompletedNotification> {
     loop {
         let completed: TurnCompletedNotification = timeout(
             DEFAULT_READ_TIMEOUT,
@@ -402,7 +596,7 @@ async fn wait_for_turn_completed(mcp: &mut TestAppServer, turn_id: &str) -> Resu
         )
         .await??;
         if completed.turn.id == turn_id {
-            return Ok(());
+            return Ok(completed);
         }
     }
 }

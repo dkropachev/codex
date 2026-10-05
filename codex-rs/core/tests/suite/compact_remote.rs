@@ -4,8 +4,12 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_core::CompactionRequest;
+use codex_core::CompactionSource;
+use codex_core::StartIfIdleSubmission;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_history::CodexHarnessMetadata;
 use codex_history::InitialHistory;
@@ -28,6 +32,7 @@ use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::user_input::UserInput;
+use core_test_support::ThreadIdle;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
@@ -47,6 +52,7 @@ use std::hash::DefaultHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::path::Path;
+use std::sync::Arc;
 use test_case::test_case;
 use tokio::time::Duration;
 use wiremock::ResponseTemplate;
@@ -1825,5 +1831,85 @@ async fn remote_mid_turn_compact_v2_sends_turn_state_over_websocket() -> Result<
     );
 
     server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn standalone_automatic_compaction_preserves_remote_provenance() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+    let harness = TestCodexHarness::with_auto_env_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_extensions(Arc::new(extensions.build())),
+    )
+    .await?;
+    let response_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![responses::ev_completed("seed-history")]),
+            sse(vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "AUTOMATIC_V2_COMPACTION_SUMMARY",
+                    },
+                }),
+                responses::ev_completed("automatic-v2-compact"),
+            ]),
+        ],
+    )
+    .await;
+    harness
+        .test()
+        .submit_turn("seed compaction history")
+        .await?;
+    ThreadIdle::wait(&harness.test().codex).await;
+
+    let submission = harness
+        .test()
+        .codex
+        .compact_if_idle(CompactionRequest {
+            source: CompactionSource::Automatic,
+            trace: None,
+        })
+        .await?;
+    let StartIfIdleSubmission::Started { turn_id } = submission else {
+        panic!("idle automatic compaction should start: {submission:?}");
+    };
+    let completed = wait_for_event_with_timeout(
+        &harness.test().codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        REMOTE_COMPACT_TURN_COMPLETE_TIMEOUT,
+    )
+    .await;
+    let EventMsg::TurnComplete(completed) = completed else {
+        unreachable!("wait_for_event_with_timeout returned unexpected event");
+    };
+    let completed_turn_id = completed.turn_id;
+    assert_eq!(completed_turn_id, turn_id);
+
+    let request = response_mock
+        .last_request()
+        .expect("compact request should be captured");
+    let metadata: Value = serde_json::from_str(
+        &request
+            .header("x-codex-turn-metadata")
+            .expect("compact request should include turn metadata"),
+    )?;
+    assert_eq!(
+        metadata["compaction"],
+        json!({
+            "trigger": "auto",
+            "reason": "context_limit",
+            "implementation": "responses_compaction_v2",
+            "phase": "standalone_turn",
+            "strategy": "memento",
+        })
+    );
+    assert_eq!(metadata["turn_id"], turn_id);
     Ok(())
 }
