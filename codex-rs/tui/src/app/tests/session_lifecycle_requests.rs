@@ -466,6 +466,9 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                     {
                         let turn_id = if history_capabilities
                             == HistoryCapabilities::HandoffLatestTurnDiffers
+                            || (history_capabilities
+                                == HistoryCapabilities::HandoffSourceChangesAfterStart
+                                && handoff_started)
                         {
                             "newer-source-turn"
                         } else {
@@ -604,10 +607,6 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                                     &request,
                                     ClientRequest::ThreadRealtimeListVoices { .. }
                                 );
-                            let changed_source_read = handoff_started
-                                && history_capabilities
-                                    == HistoryCapabilities::HandoffSourceChangesAfterStart
-                                && matches!(&request, ClientRequest::ThreadRead { .. });
                             let mut result = embedded.request(request).await?;
                             if unknown_voice && let Ok(value) = &mut result {
                                 value["config"]["realtime"]["voice"] =
@@ -617,12 +616,6 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                                 value["voices"]["v1"] =
                                     serde_json::json!(["maple", "cove", "juniper"]);
                                 value["voices"]["defaultV1"] = serde_json::json!("maple");
-                            }
-                            if changed_source_read
-                                && let Ok(value) = &mut result
-                                && let Some(updated_at) = value["thread"]["updatedAt"].as_i64()
-                            {
-                                value["thread"]["updatedAt"] = serde_json::json!(updated_at + 1);
                             }
                             if background {
                                 let terminal = r#"{"data":[{"itemId":"x","processId":"x","command":"x","cwd":"/"}],"nextCursor":null}"#;

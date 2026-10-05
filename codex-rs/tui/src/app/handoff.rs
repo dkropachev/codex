@@ -176,12 +176,13 @@ impl App {
 
         // The source may have received input through another client while the two app-server
         // requests above were pending. Check its latest persisted turn before leaving it.
+        // The server does not expose an atomic cross-thread handoff; another client can still
+        // change the source after this read, so this remains a best-effort transfer gate.
         let source_is_current = self
             .read_handoff_source_revision(app_server, source_thread_id)
             .await
             .is_ok_and(|revision| {
                 revision.matches_plan_turn(&plan_turn_id)
-                    && revision.metadata == source_revision.metadata
                     && revision.latest_turn == source_revision.latest_turn
                     && revision.event_latest_turn_id == source_revision.event_latest_turn_id
             });

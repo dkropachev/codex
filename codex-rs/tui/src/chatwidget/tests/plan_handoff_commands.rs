@@ -212,6 +212,59 @@ async fn remote_workspace_image_preparation_keeps_handoff_ownership() {
 }
 
 #[tokio::test]
+async fn protected_source_states_reject_handoff_and_restore_the_command() {
+    for state in ["owned", "ephemeral", "queued", "pending", "modal", "goal"] {
+        let (mut chat, _events, mut ops) = configured_chat().await;
+        let image_url = format!("https://example.com/{state}.png");
+        chat.set_remote_image_urls(vec![image_url.clone()]);
+        match state {
+            "owned" => chat.set_parent_owned_thread(),
+            "ephemeral" => chat.config.ephemeral = true,
+            "queued" => chat
+                .input_queue
+                .queued_user_messages
+                .push_back(UserMessage::from("queued work").into()),
+            "pending" => chat.input_queue.user_turn_pending_start = true,
+            "modal" => chat
+                .bottom_pane
+                .show_selection_view(SelectionViewParams::picker()),
+            "goal" => {
+                let thread_id = chat.thread_id.expect("source thread");
+                chat.current_goal_status = Some(GoalStatusState::new(
+                    codex_app_server_protocol::ThreadGoal {
+                        thread_id: thread_id.to_string(),
+                        objective: "Finish existing work".to_string(),
+                        status: codex_app_server_protocol::ThreadGoalStatus::Active,
+                        token_budget: None,
+                        tokens_used: 0,
+                        time_used_seconds: 0,
+                        created_at: 0,
+                        updated_at: 0,
+                    },
+                    std::time::Instant::now(),
+                ));
+            }
+            _ => unreachable!(),
+        }
+
+        chat.dispatch_command_with_args(
+            SlashCommand::Handoff,
+            "inspect this".to_string(),
+            Vec::new(),
+        );
+
+        assert_no_submit_op(&mut ops);
+        assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+        assert_eq!(
+            chat.composer_text_with_pending(),
+            "/handoff inspect this",
+            "{state}"
+        );
+        assert_eq!(chat.remote_image_urls(), vec![image_url], "{state}");
+    }
+}
+
+#[tokio::test]
 async fn unsupported_handoff_image_restores_the_original_command() {
     let (mut chat, _events, mut ops) = configured_chat().await;
     let current_model = chat.current_model().to_string();
