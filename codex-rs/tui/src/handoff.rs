@@ -90,6 +90,8 @@ impl HandoffPlan {
             return Err(HandoffPlanValidationError::Empty);
         }
         let plan = Self { text };
+        // This becomes the fresh thread's initial UserTurn, rather than a Core-injected context
+        // fragment. Bound the complete prompt, including its instruction preamble.
         let estimated_tokens = approx_token_count(&plan.execution_prompt());
         if estimated_tokens > MAX_CONTEXT_ITEM_TOKENS {
             return Err(HandoffPlanValidationError::ContextItemTooLarge { estimated_tokens });

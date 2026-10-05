@@ -23,6 +23,14 @@ pub(super) enum ThreadAttachPresentation {
     SessionLineage,
 }
 
+pub(super) struct FreshThreadTransition {
+    pub(super) started: AppServerStartedThread,
+    pub(super) config: Config,
+    pub(super) initial_user_message: Option<crate::chatwidget::UserMessage>,
+    pub(super) presentation: ThreadAttachPresentation,
+    pub(super) summary: Option<SessionSummary>,
+}
+
 /// Reports whether a loaded-thread backfill completed and which descendants already had their
 /// liveness metadata refreshed, allowing the picker to skip duplicate `thread/read` requests.
 #[derive(Default)]
@@ -975,18 +983,6 @@ impl App {
             .await
         {
             Ok(mut started) => {
-                self.shutdown_current_thread(app_server).await;
-                let tracked_thread_ids: Vec<ThreadId> =
-                    self.thread_event_channels.keys().copied().collect();
-                for thread_id in tracked_thread_ids {
-                    if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
-                        tracing::warn!("failed to unsubscribe tracked thread {thread_id}: {err}");
-                    }
-                }
-                self.local_settings = self.local_settings.reloaded(&config);
-                self.refresh_server_version_overview_notice(CODEX_CLI_VERSION);
-                self.config = config;
-
                 let name_error = if let Some(name) = new_thread_name {
                     match app_server
                         .thread_set_name(started.session.thread_id, name.clone())
@@ -1002,11 +998,16 @@ impl App {
                     None
                 };
                 if let Err(err) = self
-                    .replace_chat_widget_with_app_server_thread(
+                    .finish_fresh_thread_transition(
                         tui,
-                        started,
-                        ThreadAttachPresentation::Fresh,
-                        initial_user_message,
+                        app_server,
+                        FreshThreadTransition {
+                            started,
+                            config,
+                            initial_user_message,
+                            presentation: ThreadAttachPresentation::Fresh,
+                            summary,
+                        },
                     )
                     .await
                 {
@@ -1016,21 +1017,6 @@ impl App {
                 } else {
                     if let Some(err) = name_error {
                         self.chat_widget.add_error_message(err);
-                    }
-                    if let Some(summary) = summary {
-                        let mut lines: Vec<Line<'static>> = Vec::new();
-                        if let Some(usage_line) = summary.usage_line {
-                            lines.push(usage_line.into());
-                        }
-                        if let Some(command) = summary.resume_hint {
-                            let spans =
-                                vec!["To continue this session, run ".into(), command.cyan()];
-                            lines.push(spans.into());
-                        }
-                        self.chat_widget
-                            .add_to_history(history_cell::SessionNoticeCell(
-                                history_cell::PlainHistoryCell::new(lines),
-                            ));
                     }
                 }
             }
@@ -1044,6 +1030,53 @@ impl App {
             }
         }
         tui.frame_requester().schedule_frame();
+    }
+
+    pub(super) async fn finish_fresh_thread_transition(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        transition: FreshThreadTransition,
+    ) -> Result<()> {
+        let FreshThreadTransition {
+            started,
+            config,
+            initial_user_message,
+            presentation,
+            summary,
+        } = transition;
+        self.shutdown_current_thread(app_server).await;
+        let tracked_thread_ids: Vec<ThreadId> =
+            self.thread_event_channels.keys().copied().collect();
+        for thread_id in tracked_thread_ids {
+            if let Err(error) = app_server.thread_unsubscribe(thread_id).await {
+                tracing::warn!("failed to unsubscribe tracked thread {thread_id}: {error}");
+            }
+        }
+        self.local_settings = self.local_settings.reloaded(&config);
+        self.refresh_server_version_overview_notice(CODEX_CLI_VERSION);
+        self.config = config;
+        self.replace_chat_widget_with_app_server_thread(
+            tui,
+            started,
+            presentation,
+            initial_user_message,
+        )
+        .await?;
+        if let Some(summary) = summary {
+            let mut lines: Vec<Line<'static>> = Vec::new();
+            if let Some(usage_line) = summary.usage_line {
+                lines.push(usage_line.into());
+            }
+            if let Some(command) = summary.resume_hint {
+                lines.push(vec!["To continue this session, run ".into(), command.cyan()].into());
+            }
+            self.chat_widget
+                .add_to_history(history_cell::SessionNoticeCell(
+                    history_cell::PlainHistoryCell::new(lines),
+                ));
+        }
+        Ok(())
     }
 
     pub(super) async fn replace_chat_widget_with_app_server_thread(

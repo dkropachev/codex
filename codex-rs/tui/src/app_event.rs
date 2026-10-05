@@ -563,6 +563,7 @@ pub(crate) enum AppEvent {
     /// Transfer a completed, validated handoff plan into a fresh thread.
     StartHandoffTransfer {
         source_thread_id: ThreadId,
+        plan_turn_id: String,
         generation: u64,
         plan: String,
     },

@@ -45,6 +45,7 @@ Context management keeps long-running threads usable without allowing one client
 - Returned IDs match lifecycle events, omitted provenance is manual, and every strategy exposes automatic provenance through its supported observability surfaces.
 - App-server and exec-server may run on different supported operating systems.
 - A handoff destination receives the bounded plan prompt without copying source transcript history, and preserves the selected model, Default-mode reasoning effort, working directory, permissions, and service tier.
+- The handoff plan is sent as the fresh thread's initial user turn, with a 10,000 estimated-token cap on the complete prompt. It is not inserted as a Core context fragment.
 
 ## Test Places
 
@@ -107,10 +108,10 @@ Component coverage exercises parser, attachments, Plan authority, ask/stay decis
 
 - Leading option-like guidance is rejected while lone dash and `-- -x` remain literal: codex-rs/tui/src/handoff_tests.rs:parser_rejects_leading_option_like_guidance,parser_preserves_lone_dash_and_option_like_guidance_after_separator
 - The generated execution prompt obeys the inherited context-item ceiling: codex-rs/tui/src/handoff_tests.rs:handoff_fragment_obeys_existing_model_context_item_ceiling
-- Live and queued bare commands preserve remote-only attachments, and unsupported images restore the command: codex-rs/tui/src/chatwidget/tests/plan_handoff_commands.rs:bare_live_handoff_keeps_remote_only_attachment,bare_queued_handoff_keeps_remote_only_attachment,unsupported_handoff_image_restores_the_original_command
+- Live and queued bare commands preserve remote-only attachments, remote workspace image preparation retains handoff ownership, and unsupported images restore the command: codex-rs/tui/src/chatwidget/tests/plan_handoff_commands.rs:bare_live_handoff_keeps_remote_only_attachment,bare_queued_handoff_keeps_remote_only_attachment,remote_workspace_image_preparation_keeps_handoff_ownership,unsupported_handoff_image_restores_the_original_command
 - An accepted steer invalidates an earlier Plan in live and replayed flows: codex-rs/tui/src/chatwidget/tests/plan_handoff_authority.rs:accepted_user_input_invalidates_earlier_plan_in_live_and_replay_flows
 - Default and ask dispositions require an owned completed Plan; ask can stay without transferring: codex-rs/tui/src/chatwidget/tests/plan_handoff_state.rs:completed_default_handoff_emits_fresh_thread_transfer,ask_handoff_stay_keeps_source_mode_and_invalidates_old_transfer,accepted_same_turn_steer_prevents_transfer_of_earlier_plan
-- Fresh execution preserves source and selected settings, while an active descendant or failed start retains the source: codex-rs/tui/src/app/tests/plan_handoff_transfer.rs:manual_handoff_starts_fresh_execution_and_preserves_source,active_descendant_pauses_transfer_and_preserves_source,fresh_start_failure_keeps_the_source_thread_visible
+- Fresh execution preserves source and selected settings, while an active descendant, accepted steer, source revision change, or failed start retains the source: codex-rs/tui/src/app/tests/plan_handoff_transfer.rs:manual_handoff_starts_fresh_execution_and_preserves_source,active_descendant_pauses_transfer_and_preserves_source,accepted_steer_notification_invalidates_earlier_handoff_plan,source_revision_change_during_start_pauses_transfer,fresh_start_failure_keeps_the_source_thread_visible,handoff_thread_start_failure_keeps_source_and_does_not_execute
 
 ### login-auth (auth and login behavior)
 

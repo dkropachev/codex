@@ -185,6 +185,36 @@ async fn handoff_guidance_keeps_local_image_and_text_element() {
 }
 
 #[tokio::test]
+async fn remote_workspace_image_preparation_keeps_handoff_ownership() {
+    let (mut chat, mut events, mut ops) = configured_chat().await;
+    chat.snapshot_local_images = true;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("handoff.png");
+    image::RgbImage::new(/*width*/ 2, /*height*/ 2)
+        .save(&path)
+        .unwrap();
+    chat.bottom_pane
+        .set_composer_text("/handoff".to_string(), Vec::new(), vec![path]);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(chat.handoff_mode_active());
+    assert_no_submit_op(&mut ops);
+    let image_id = loop {
+        if let AppEvent::ImagesPrepared(id) = events.recv().await.unwrap() {
+            break id;
+        }
+    };
+    chat.on_images_prepared(image_id);
+
+    let Op::UserTurn { items, .. } = next_submit_op(&mut ops) else {
+        panic!("expected image-backed handoff planning turn");
+    };
+    assert!(matches!(items.first(), Some(UserInput::Image { .. })));
+    assert!(chat.handoff_mode_active());
+    assert_no_submit_op(&mut ops);
+}
+
+#[tokio::test]
 async fn unsupported_handoff_image_restores_the_original_command() {
     let (mut chat, _events, mut ops) = configured_chat().await;
     let current_model = chat.current_model().to_string();

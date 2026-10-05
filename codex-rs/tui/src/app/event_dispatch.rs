@@ -388,6 +388,7 @@ impl App {
             }
             AppEvent::StartHandoffTransfer {
                 source_thread_id,
+                plan_turn_id,
                 generation,
                 plan,
             } => {
@@ -395,6 +396,7 @@ impl App {
                     tui,
                     app_server,
                     source_thread_id,
+                    plan_turn_id,
                     generation,
                     plan,
                 )

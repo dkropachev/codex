@@ -61,6 +61,70 @@ async fn prepare_handoff_on_server(
     Ok((source_thread_id, transfer))
 }
 
+#[tokio::test]
+async fn accepted_steer_notification_invalidates_earlier_handoff_plan() -> Result<()> {
+    let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let started = app_server.start_thread(&app.config).await?;
+    let source_thread_id = started.session.thread_id;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+    while events.try_recv().is_ok() {}
+    app.chat_widget
+        .restore_user_message_to_composer(UserMessage::from("/handoff"));
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let AppCommand::UserTurn { items, .. } = next_user_turn_op(&mut ops) else {
+        panic!("expected a handoff planning turn");
+    };
+    app.chat_widget
+        .bind_handoff_turn_start("planning-turn", &items);
+    app.chat_widget.handle_server_notification(
+        turn_started_notification(source_thread_id, "planning-turn"),
+        /*replay_kind*/ None,
+    );
+    app.chat_widget.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: source_thread_id.to_string(),
+            turn_id: "planning-turn".to_string(),
+            completed_at_ms: 0,
+            item: ThreadItem::Plan {
+                id: "plan-before-steer".to_string(),
+                text: "- Stale plan".to_string(),
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+    app.chat_widget.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: source_thread_id.to_string(),
+            turn_id: "planning-turn".to_string(),
+            completed_at_ms: 0,
+            item: ThreadItem::UserMessage {
+                id: "accepted-steer".to_string(),
+                client_id: None,
+                content: vec![codex_app_server_protocol::UserInput::Text {
+                    text: "Revise this first".to_string(),
+                    text_elements: Vec::new(),
+                }],
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+    app.chat_widget.handle_server_notification(
+        turn_completed_notification(source_thread_id, "planning-turn", TurnStatus::Completed),
+        /*replay_kind*/ None,
+    );
+
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::StartHandoffTransfer { .. }))
+    );
+    assert_eq!(app.chat_widget.thread_id(), Some(source_thread_id));
+    app_server.shutdown().await?;
+    Ok(())
+}
+
 async fn prepared_handoff_app() -> Result<PreparedHandoffApp> {
     let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
     let tui = crate::tui::test_support::make_test_tui()?;
@@ -209,18 +273,18 @@ async fn active_descendant_pauses_transfer_and_preserves_source() -> Result<()> 
 async fn fresh_start_failure_keeps_the_source_thread_visible() -> Result<()> {
     let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
     let (mut app_server, _requests, proxy) =
-        session_lifecycle_requests::start_recording_app_server(
+        session_lifecycle_requests::start_recording_app_server_with_history(
             &app.config,
+            session_lifecycle_requests::HistoryCapabilities::ConfigReadFails,
             /*blocked_thread_list*/ None,
             /*failed_thread_name*/ None,
+            crate::app_server_session::ThreadParamsMode::Embedded,
+            codex_config::LoaderOverrides::default(),
         )
         .await?;
     let (source_thread_id, transfer) =
         prepare_handoff_on_server(&mut app, &mut events, &mut ops, &mut app_server).await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
-    proxy.abort();
-    assert!(proxy.await.expect_err("proxy was cancelled").is_cancelled());
-
     app.handle_event(&mut tui, &mut app_server, transfer)
         .await?;
 
@@ -238,5 +302,66 @@ async fn fresh_start_failure_keeps_the_source_thread_visible() -> Result<()> {
         "handoff_fresh_start_failure",
         message.expect("failure notice")
     );
+    proxy.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn handoff_thread_start_failure_keeps_source_and_does_not_execute() -> Result<()> {
+    let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
+    let (mut app_server, _requests, proxy) =
+        session_lifecycle_requests::start_recording_app_server_with_history(
+            &app.config,
+            session_lifecycle_requests::HistoryCapabilities::HandoffThreadStartFails,
+            /*blocked_thread_list*/ None,
+            /*failed_thread_name*/ None,
+            crate::app_server_session::ThreadParamsMode::Embedded,
+            LoaderOverrides::default(),
+        )
+        .await?;
+    let (source_thread_id, transfer) =
+        prepare_handoff_on_server(&mut app, &mut events, &mut ops, &mut app_server).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    app.handle_event(&mut tui, &mut app_server, transfer)
+        .await?;
+
+    assert_eq!(app.chat_widget.thread_id(), Some(source_thread_id));
+    assert_eq!(app.active_thread_id, Some(source_thread_id));
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::CodexOp(AppCommand::UserTurn { .. })))
+    );
+    proxy.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn source_revision_change_during_start_pauses_transfer() -> Result<()> {
+    let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
+    let (mut app_server, _requests, proxy) =
+        session_lifecycle_requests::start_recording_app_server_with_history(
+            &app.config,
+            session_lifecycle_requests::HistoryCapabilities::HandoffSourceChangesAfterStart,
+            /*blocked_thread_list*/ None,
+            /*failed_thread_name*/ None,
+            crate::app_server_session::ThreadParamsMode::Embedded,
+            LoaderOverrides::default(),
+        )
+        .await?;
+    let (source_thread_id, transfer) =
+        prepare_handoff_on_server(&mut app, &mut events, &mut ops, &mut app_server).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    app.handle_event(&mut tui, &mut app_server, transfer)
+        .await?;
+
+    assert_eq!(app.chat_widget.thread_id(), Some(source_thread_id));
+    assert_eq!(app.active_thread_id, Some(source_thread_id));
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::CodexOp(AppCommand::UserTurn { .. })))
+    );
+    proxy.abort();
     Ok(())
 }

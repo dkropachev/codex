@@ -1,8 +1,43 @@
 //! Fresh-thread transfer and app-owned safety gates for manual handoff.
 
+use super::session_lifecycle::FreshThreadTransition;
 use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::handoff::HandoffPlan;
+
+struct SourceRevision {
+    metadata: codex_app_server_protocol::Thread,
+    latest_turn: Option<Turn>,
+}
+
+impl SourceRevision {
+    async fn read(app_server: &mut AppServerSession, thread_id: ThreadId) -> Result<Self> {
+        let metadata = app_server
+            .thread_read(thread_id, /*include_turns*/ false)
+            .await?;
+        // Older servers cannot serve a turn page. Metadata still gives us a server-backed
+        // revision check on those connections.
+        let latest_turn = app_server
+            .thread_turns_page(thread_id, /*cursor*/ None, /*limit*/ 1)
+            .await
+            .ok()
+            .and_then(|page| page.data.into_iter().next());
+        Ok(Self {
+            metadata,
+            latest_turn,
+        })
+    }
+
+    fn matches_plan_turn(&self, plan_turn_id: &str) -> bool {
+        matches!(
+            self.metadata.status,
+            codex_app_server_protocol::ThreadStatus::Idle
+        ) && self
+            .latest_turn
+            .as_ref()
+            .is_none_or(|turn| turn.id == plan_turn_id && turn.status == TurnStatus::Completed)
+    }
+}
 
 struct PreservedHandoffSettings {
     model: String,
@@ -16,6 +51,7 @@ impl App {
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         source_thread_id: ThreadId,
+        plan_turn_id: String,
         generation: u64,
         plan: String,
     ) -> Result<()> {
@@ -48,6 +84,18 @@ impl App {
             Ok(plan) => plan,
             Err(error) => {
                 self.chat_widget.add_error_message(error.to_string());
+                self.chat_widget.stay_in_handoff(generation);
+                return Ok(());
+            }
+        };
+        let source_revision = match SourceRevision::read(app_server, source_thread_id).await {
+            Ok(revision) if revision.matches_plan_turn(&plan_turn_id) => revision,
+            _ => {
+                self.chat_widget.add_info_message(
+                    "Handoff transfer paused because the source thread changed."
+                        .to_string(),
+                    Some("The source thread remains resumable. Review its latest input before retrying in Handoff mode.".to_string()),
+                );
                 self.chat_widget.stay_in_handoff(generation);
                 return Ok(());
             }
@@ -105,24 +153,36 @@ impl App {
             }
         };
 
-        self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
-        self.reset_app_ui_state_after_clear();
-        self.shutdown_current_thread(app_server).await;
-        let tracked_thread_ids: Vec<ThreadId> =
-            self.thread_event_channels.keys().copied().collect();
-        for thread_id in tracked_thread_ids {
-            if let Err(error) = app_server.thread_unsubscribe(thread_id).await {
-                tracing::warn!("failed to unsubscribe tracked thread {thread_id}: {error}");
-            }
+        // The source may have received input through another client while the two app-server
+        // requests above were pending. Check its latest persisted turn before leaving it.
+        let source_is_current = SourceRevision::read(app_server, source_thread_id)
+            .await
+            .is_ok_and(|revision| {
+                revision.matches_plan_turn(&plan_turn_id)
+                    && revision.metadata == source_revision.metadata
+                    && revision.latest_turn == source_revision.latest_turn
+            });
+        if !source_is_current {
+            self.chat_widget.add_info_message(
+                "Handoff transfer paused because the source thread changed during preparation."
+                    .to_string(),
+                Some("The source thread remains resumable. Review its latest input before retrying in Handoff mode.".to_string()),
+            );
+            self.chat_widget.stay_in_handoff(generation);
+            return Ok(());
         }
-        self.local_settings = self.local_settings.reloaded(&config);
-        self.config = config;
+
         if let Err(error) = self
-            .replace_chat_widget_with_app_server_thread(
+            .finish_fresh_thread_transition(
                 tui,
-                started,
-                ThreadAttachPresentation::SessionLineage,
-                Some(plan.execution_prompt().into()),
+                app_server,
+                FreshThreadTransition {
+                    started,
+                    config,
+                    initial_user_message: Some(plan.execution_prompt().into()),
+                    presentation: ThreadAttachPresentation::SessionLineage,
+                    summary,
+                },
             )
             .await
         {
@@ -130,16 +190,6 @@ impl App {
                 "Failed to attach the fresh handoff thread: {error}. The source thread remains resumable."
             ));
             return Ok(());
-        }
-        if let Some(summary) = summary {
-            let mut lines: Vec<Line<'static>> = Vec::new();
-            if let Some(usage_line) = summary.usage_line {
-                lines.push(usage_line.into());
-            }
-            if let Some(command) = summary.resume_hint {
-                lines.push(vec!["To continue this session, run ".into(), command.cyan()].into());
-            }
-            self.chat_widget.add_plain_history_lines(lines);
         }
         tui.frame_requester().schedule_frame();
         Ok(())

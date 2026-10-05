@@ -235,9 +235,12 @@ impl ChatWidget {
             ready_plan_text: None,
         });
         self.set_collaboration_mask_from_user_action(mask);
-        let submitted = self
-            .submit_user_message_with_shell_escape_policy(user_message, ShellEscapePolicy::Disallow)
-            .is_some();
+        let (submitted, _) = self.submit_user_message_with_history_and_shell_escape_policy(
+            user_message,
+            UserMessageHistoryRecord::UserMessageText,
+            ShellEscapePolicy::Disallow,
+            UserMessageSource::Prompt,
+        );
         if !submitted {
             self.handoff_state.active = None;
             self.add_error_message(
@@ -330,9 +333,16 @@ impl ChatWidget {
     }
 
     fn emit_handoff_transfer(&self, generation: u64, plan: HandoffPlan) {
-        if let Some(source_thread_id) = self.thread_id {
+        if let (Some(source_thread_id), Some(plan_turn_id)) = (
+            self.thread_id,
+            self.handoff_state
+                .active
+                .as_ref()
+                .and_then(|active| active.ready_plan_turn_id.as_ref()),
+        ) {
             self.app_event_tx.send(AppEvent::StartHandoffTransfer {
                 source_thread_id,
+                plan_turn_id: plan_turn_id.clone(),
                 generation,
                 plan: plan.into_text(),
             });
@@ -341,6 +351,14 @@ impl ChatWidget {
 
     fn open_handoff_decision_prompt(&mut self, generation: u64, plan: HandoffPlan) {
         let Some(source_thread_id) = self.thread_id else {
+            return;
+        };
+        let Some(plan_turn_id) = self
+            .handoff_state
+            .active
+            .as_ref()
+            .and_then(|active| active.ready_plan_turn_id.clone())
+        else {
             return;
         };
         let plan_text = plan.into_text();
@@ -355,6 +373,7 @@ impl ChatWidget {
                     actions: vec![Box::new(move |tx| {
                         tx.send(AppEvent::StartHandoffTransfer {
                             source_thread_id,
+                            plan_turn_id: plan_turn_id.clone(),
                             generation,
                             plan: plan_text.clone(),
                         });

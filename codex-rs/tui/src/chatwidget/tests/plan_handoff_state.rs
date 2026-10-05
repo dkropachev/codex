@@ -31,13 +31,16 @@ async fn completed_default_handoff_emits_fresh_thread_transfer() {
     let transfer = std::iter::from_fn(|| events.try_recv().ok()).find_map(|event| match event {
         AppEvent::StartHandoffTransfer {
             source_thread_id,
+            plan_turn_id,
             generation,
             plan,
-        } => Some((source_thread_id, generation, plan)),
+        } => Some((source_thread_id, plan_turn_id, generation, plan)),
         _ => None,
     });
-    let (source_thread_id, generation, plan) = transfer.expect("handoff transfer event");
+    let (source_thread_id, plan_turn_id, generation, plan) =
+        transfer.expect("handoff transfer event");
     assert_eq!(source_thread_id, chat.thread_id.expect("source thread"));
+    assert_eq!(plan_turn_id, "planning-turn");
     assert_eq!(plan, "- Finish the work");
     assert!(chat.handoff_transfer_is_locally_safe(source_thread_id, generation, &plan));
 }
@@ -62,12 +65,15 @@ async fn ask_handoff_shows_proceed_or_stay_without_transferring_early() {
     let transfer = std::iter::from_fn(|| events.try_recv().ok()).find_map(|event| match event {
         AppEvent::StartHandoffTransfer {
             source_thread_id,
+            plan_turn_id,
             generation,
             plan,
-        } => Some((source_thread_id, generation, plan)),
+        } => Some((source_thread_id, plan_turn_id, generation, plan)),
         _ => None,
     });
-    let (source_thread_id, generation, plan) = transfer.expect("selected transfer event");
+    let (source_thread_id, plan_turn_id, generation, plan) =
+        transfer.expect("selected transfer event");
+    assert_eq!(plan_turn_id, "planning-turn");
     assert!(chat.handoff_transfer_is_locally_safe(source_thread_id, generation, &plan));
 }
 
