@@ -398,7 +398,7 @@ impl App {
                 generation,
                 plan,
             } => {
-                self.start_handoff_transfer(
+                Box::pin(self.start_handoff_transfer(
                     tui,
                     app_server,
                     HandoffTransferRequest {
@@ -408,7 +408,7 @@ impl App {
                         plan,
                         kind: HandoffTransferKind::Proceed,
                     },
-                )
+                ))
                 .await?;
             }
             AppEvent::StartDeferredHandoffTransfer {
@@ -418,7 +418,7 @@ impl App {
                 plan,
                 user_message,
             } => {
-                self.start_handoff_transfer(
+                Box::pin(self.start_handoff_transfer(
                     tui,
                     app_server,
                     HandoffTransferRequest {
@@ -428,7 +428,7 @@ impl App {
                         plan,
                         kind: HandoffTransferKind::Deferred { user_message },
                     },
-                )
+                ))
                 .await?;
             }
             AppEvent::ConfirmDeferredHandoffDiscard {

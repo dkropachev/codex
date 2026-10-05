@@ -9,7 +9,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn mark_deferred_execution_prompt(&mut self, user_message: UserMessage) {
-        self.handoff_state.recoverable_execution_prompt = Some(user_message);
+        self.handoff_state.recoverable_execution_prompt = Some(Box::new(user_message));
     }
 
     pub(in crate::chatwidget) fn fail_deferred_mode_update(&mut self) {
@@ -31,7 +31,7 @@ impl ChatWidget {
 
     pub(in crate::chatwidget) fn restore_rejected_deferred_execution_prompt(&mut self) {
         if let Some(user_message) = self.handoff_state.recoverable_execution_prompt.take() {
-            self.restore_user_message_to_composer(user_message);
+            self.restore_user_message_to_composer(*user_message);
             self.add_info_message(
                 "The fresh handoff turn was rejected.".to_string(),
                 Some("The combined plan and prompt are in the composer for review.".to_string()),
@@ -57,14 +57,14 @@ impl ChatWidget {
             );
             return;
         };
-        self.handoff_state.pending = Some(DeferredHandoff {
+        self.handoff_state.pending = Some(Box::new(DeferredHandoff {
             source_thread_id,
             plan_turn_id,
             plan_text,
             generation,
             in_flight: None,
             awaiting_default_mode_update: false,
-        });
+        }));
         self.handoff_state.active = None;
         self.set_collaboration_mask_from_user_action(default_mask);
         if let Some(pending) = self.handoff_state.pending.as_mut() {

@@ -132,7 +132,7 @@ impl ThreadComposerState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ThreadInputState {
-    pub(super) deferred_handoff: Option<super::handoff::DeferredHandoff>,
+    pub(super) deferred_handoff: Option<Box<super::handoff::DeferredHandoff>>,
     pub(crate) questions: Option<crate::bottom_pane::QuestionState>,
     pub(super) composer: Option<ThreadComposerState>,
     pub(super) safety_buffering_prompt: Option<UserMessage>,

@@ -14,8 +14,8 @@ mod deferred;
 pub(super) struct HandoffState {
     active: Option<ManualHandoff>,
     next_generation: u64,
-    pub(super) pending: Option<DeferredHandoff>,
-    pub(super) recoverable_execution_prompt: Option<UserMessage>,
+    pub(super) pending: Option<Box<DeferredHandoff>>,
+    pub(super) recoverable_execution_prompt: Option<Box<UserMessage>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
