@@ -121,6 +121,16 @@ pub(super) fn cells(item: ThreadItem, cwd: &AbsolutePathBuf) -> TranscriptCells 
                 cells.push(Arc::new(cell));
             }
         }
+        ThreadItem::EnteredReviewMode { review, .. } => {
+            cells.push(Arc::new(history_cell::new_review_status_line(format!(
+                ">> Code review started: {review} <<"
+            ))));
+        }
+        ThreadItem::ExitedReviewMode { .. } => {
+            cells.push(Arc::new(history_cell::new_review_status_line(
+                "<< Code review finished >>".to_string(),
+            )));
+        }
         ThreadItem::UserMessage { .. }
         | ThreadItem::AgentMessage { .. }
         | ThreadItem::FunctionCallOutput { .. }

@@ -185,6 +185,22 @@ async fn ephemeral_goal_tools_preserve_specs_but_reject_execution() -> anyhow::R
 }
 
 #[tokio::test]
+async fn goal_tools_hidden_for_review_subagents() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    let tools = installed_tools_with_start(
+        runtime,
+        thread_id,
+        SessionSource::SubAgent(SubAgentSource::Review),
+        /*persistent_thread_state_available*/ true,
+    )
+    .await;
+
+    assert!(tools.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn installed_goal_tools_only_replace_complete_goal() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;

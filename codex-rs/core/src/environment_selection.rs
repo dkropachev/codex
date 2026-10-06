@@ -871,6 +871,18 @@ impl ThreadEnvironments {
         }
     }
 
+    /// Resolves the first configured environment without falling through to a ready secondary.
+    pub(crate) async fn resolve_primary_environment(
+        &self,
+    ) -> Result<Option<TurnEnvironment>, Arc<ExecServerError>> {
+        let current = self.environments.load_full();
+        let Some(primary) = current.first() else {
+            return Ok(None);
+        };
+        let environment = primary.resolution.clone().await?;
+        Ok(environment.into_turn_environment(primary.selection.clone(), primary.config_origin))
+    }
+
     pub(crate) fn environment_manager(&self) -> Arc<EnvironmentManager> {
         Arc::clone(&self.environment_manager)
     }

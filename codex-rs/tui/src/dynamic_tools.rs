@@ -1082,6 +1082,8 @@ async fn execute_inner(
                                     | ThreadItem::Reasoning { .. }
                                     | ThreadItem::SubAgentActivity { .. }
                                     | ThreadItem::ImageView { .. }
+                                    | ThreadItem::EnteredReviewMode { .. }
+                                    | ThreadItem::ExitedReviewMode { .. }
                                     | ThreadItem::ContextCompaction { .. } => None,
                                 })
                                 });
@@ -1525,6 +1527,17 @@ fn turn_summary(turn: &Turn, include_outputs: bool, output_chars: usize) -> Valu
                 }
                 image
             }
+            ThreadItem::EnteredReviewMode { id, review } => json!({
+                "type": "enteredReviewMode", "id": id, "review": truncate(review, DEFAULT_OUTPUT_CHARS)
+            }),
+            ThreadItem::ExitedReviewMode {
+                id,
+                review,
+                finding_count,
+            } => json!({
+                "type": "exitedReviewMode", "id": id,
+                "review": truncate(review, DEFAULT_OUTPUT_CHARS), "findingCount": finding_count
+            }),
             ThreadItem::ContextCompaction { id } => json!({
                 "type": "contextCompaction", "id": id
             }),

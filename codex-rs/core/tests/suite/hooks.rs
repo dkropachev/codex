@@ -1545,7 +1545,7 @@ async fn session_end_skips_subagents() -> Result<()> {
         .with_config(trust_discovered_hooks);
     let test = builder.build(&server).await?;
     for source in [
-        SubAgentSource::Compact,
+        SubAgentSource::Review,
         SubAgentSource::ThreadSpawn {
             parent_thread_id: test.session_configured.thread_id,
             depth: 1,

@@ -75,6 +75,8 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 use crate::resume_picker::SessionTarget;
+use crate::review_scope::AppServerReviewScopeResolver;
+use crate::review_scope::SharedReviewScopeResolver;
 use crate::session_state::ThreadSessionState;
 use crate::startup_draft::StartupDraftPump;
 #[cfg(test)]
@@ -561,6 +563,7 @@ pub(crate) struct App {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
     workspace_command_runner: Option<WorkspaceCommandRunner>,
+    review_scope_resolver: Option<SharedReviewScopeResolver>,
     /// Legacy bootstrap and server-setting inputs; local preferences live in `local_settings`.
     pub(crate) config: Config,
     pub(crate) local_settings: crate::local_settings::LocalSettings,
@@ -838,6 +841,7 @@ impl App {
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
             workspace_command_runner: self.workspace_command_runner.clone(),
+            review_scope_resolver: self.review_scope_resolver.clone(),
             initial_user_message,
             enhanced_keys_supported: self.enhanced_keys_supported,
             has_chatgpt_account: self.chat_widget.has_chatgpt_account(),

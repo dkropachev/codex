@@ -1,6 +1,6 @@
 ---
 source: tui/src/app/tests/realtime_requests.rs
-assertion_line: 302
+assertion_line: 429
 expression: "normalize_voice_snapshot_directory(&rendered, &app.config.cwd)"
 ---
 ╭────────────────────────────────────────╮
@@ -16,5 +16,6 @@ expression: "normalize_voice_snapshot_directory(&rendered, &app.config.cwd)"
   /status - show current session configuration
   /permissions - choose what Codex is allowed to do
   /model - choose what model and reasoning effort to use
+  /review - review any changes and find issues
 
 › spoken partial completed

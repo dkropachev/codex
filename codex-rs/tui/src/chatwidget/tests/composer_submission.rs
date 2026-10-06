@@ -270,6 +270,7 @@ async fn parent_owned_thread_blocks_all_direct_input_entry_points() {
 
     for command in [
         "/init",
+        "/review check this",
         "/side inspect this",
         "/archive",
         "/rename",
@@ -868,7 +869,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
     let remote_url = "https://example.com/remote-only.png".to_string();
     chat.set_remote_image_urls(vec![remote_url.clone()]);
 
-    chat.open_approvals_popup();
+    chat.open_review_popup();
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert_eq!(chat.remote_image_urls(), vec![remote_url]);

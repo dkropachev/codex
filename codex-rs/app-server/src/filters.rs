@@ -10,6 +10,7 @@ const ALL_THREAD_SOURCE_KINDS: &[ThreadSourceKind] = &[
     ThreadSourceKind::Exec,
     ThreadSourceKind::AppServer,
     ThreadSourceKind::SubAgent,
+    ThreadSourceKind::SubAgentReview,
     ThreadSourceKind::SubAgentCompact,
     ThreadSourceKind::SubAgentThreadSpawn,
     ThreadSourceKind::SubAgentOther,
@@ -47,6 +48,7 @@ pub(crate) fn compute_source_filters(
             ThreadSourceKind::Exec
                 | ThreadSourceKind::AppServer
                 | ThreadSourceKind::SubAgent
+                | ThreadSourceKind::SubAgentReview
                 | ThreadSourceKind::SubAgentCompact
                 | ThreadSourceKind::SubAgentThreadSpawn
                 | ThreadSourceKind::SubAgentOther
@@ -65,6 +67,7 @@ pub(crate) fn compute_source_filters(
                 ThreadSourceKind::Exec
                 | ThreadSourceKind::AppServer
                 | ThreadSourceKind::SubAgent
+                | ThreadSourceKind::SubAgentReview
                 | ThreadSourceKind::SubAgentCompact
                 | ThreadSourceKind::SubAgentThreadSpawn
                 | ThreadSourceKind::SubAgentOther
@@ -119,6 +122,12 @@ fn source_kind_matches(
             matches!(source, CoreSessionSource::SubAgent(_))
                 || matches!(thread_source, Some(CoreThreadSource::Subagent))
         }
+        ThreadSourceKind::SubAgentReview => {
+            matches!(
+                source,
+                CoreSessionSource::SubAgent(CoreSubAgentSource::Review)
+            )
+        }
         ThreadSourceKind::SubAgentCompact => {
             matches!(
                 source,
@@ -142,6 +151,7 @@ fn filter_includes_subagent_sources(filter: &[ThreadSourceKind]) -> bool {
         matches!(
             kind,
             ThreadSourceKind::SubAgent
+                | ThreadSourceKind::SubAgentReview
                 | ThreadSourceKind::SubAgentCompact
                 | ThreadSourceKind::SubAgentThreadSpawn
                 | ThreadSourceKind::SubAgentOther
@@ -199,7 +209,7 @@ mod tests {
 
     #[test]
     fn compute_source_filters_subagent_variant_requires_post_filtering() {
-        let source_kinds = vec![ThreadSourceKind::SubAgentCompact];
+        let source_kinds = vec![ThreadSourceKind::SubAgentReview];
         let (allowed_sources, filter) = compute_source_filters(Some(source_kinds.clone()));
 
         assert_eq!(allowed_sources, Vec::new());
@@ -210,7 +220,7 @@ mod tests {
     fn source_kind_matches_distinguishes_subagent_variants() {
         let parent_thread_id =
             ThreadId::from_string(&Uuid::new_v4().to_string()).expect("valid thread id");
-        let compact = CoreSessionSource::SubAgent(CoreSubAgentSource::Compact);
+        let review = CoreSessionSource::SubAgent(CoreSubAgentSource::Review);
         let spawn = CoreSessionSource::SubAgent(CoreSubAgentSource::ThreadSpawn {
             parent_thread_id,
             depth: 1,
@@ -220,12 +230,12 @@ mod tests {
         });
 
         assert!(source_kind_matches(
-            &compact,
+            &review,
             /*thread_source*/ None,
-            &[ThreadSourceKind::SubAgentCompact]
+            &[ThreadSourceKind::SubAgentReview]
         ));
         assert!(!source_kind_matches(
-            &compact,
+            &review,
             /*thread_source*/ None,
             &[ThreadSourceKind::SubAgentThreadSpawn]
         ));
@@ -237,7 +247,7 @@ mod tests {
         assert!(!source_kind_matches(
             &spawn,
             /*thread_source*/ None,
-            &[ThreadSourceKind::SubAgentCompact]
+            &[ThreadSourceKind::SubAgentReview]
         ));
     }
 

@@ -16,6 +16,8 @@ use codex_protocol::items::CommandExecutionItem;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::DynamicToolCallItem;
 use codex_protocol::items::DynamicToolCallStatus;
+use codex_protocol::items::EnteredReviewModeItem;
+use codex_protocol::items::ExitedReviewModeItem;
 use codex_protocol::items::FileChangeItem;
 use codex_protocol::items::McpToolCallError;
 use codex_protocol::items::McpToolCallItem;
@@ -229,6 +231,30 @@ pub(super) fn completed_item(
                 id: next_item_id()?,
             }),
             None,
+        )),
+        EventMsg::EnteredReviewMode(event) => Some((
+            TurnItem::EnteredReviewMode(EnteredReviewModeItem {
+                id: match event.item_id.clone() {
+                    Some(id) => id,
+                    None => next_item_id()?,
+                },
+                target: event.target.clone(),
+                user_facing_hint: event
+                    .user_facing_hint
+                    .clone()
+                    .unwrap_or_else(|| "Review requested.".to_string()),
+            }),
+            event.turn_id.clone(),
+        )),
+        EventMsg::ExitedReviewMode(event) => Some((
+            TurnItem::ExitedReviewMode(ExitedReviewModeItem {
+                id: match event.item_id.clone() {
+                    Some(id) => id,
+                    None => next_item_id()?,
+                },
+                review_output: event.review_output.clone(),
+            }),
+            event.turn_id.clone(),
         )),
         EventMsg::SubAgentActivity(event) => Some((
             TurnItem::SubAgentActivity(SubAgentActivityItem {

@@ -647,7 +647,8 @@ impl TurnContext {
                 self.session_source,
                 SessionSource::Internal(_)
                     | SessionSource::SubAgent(
-                        SubAgentSource::Compact
+                        SubAgentSource::Review
+                            | SubAgentSource::Compact
                             | SubAgentSource::MemoryConsolidation
                             | SubAgentSource::Other(_)
                     )

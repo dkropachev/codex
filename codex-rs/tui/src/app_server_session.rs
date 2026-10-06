@@ -63,6 +63,10 @@ use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewThreadModelDefaults;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ReviewDelivery;
+use codex_app_server_protocol::ReviewStartParams;
+use codex_app_server_protocol::ReviewStartResponse;
+use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
@@ -1643,6 +1647,25 @@ impl AppServerSession {
             .await
             .wrap_err("thread/backgroundTerminals/clean failed in TUI")?;
         Ok(())
+    }
+
+    pub(crate) async fn review_start(
+        &mut self,
+        thread_id: ThreadId,
+        target: ReviewTarget,
+    ) -> Result<ReviewStartResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ReviewStart {
+                request_id,
+                params: ReviewStartParams {
+                    thread_id: thread_id.to_string(),
+                    target,
+                    delivery: Some(ReviewDelivery::Inline),
+                },
+            })
+            .await
+            .wrap_err("review/start failed in TUI")
     }
 
     pub(crate) async fn skills_list(

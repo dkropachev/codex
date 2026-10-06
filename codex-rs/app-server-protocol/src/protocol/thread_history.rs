@@ -4,6 +4,8 @@ use crate::protocol::item_builders::build_file_change_approval_request_item;
 use crate::protocol::item_builders::build_file_change_begin_item;
 use crate::protocol::item_builders::build_file_change_end_item;
 use crate::protocol::item_builders::build_item_from_guardian_event;
+use crate::protocol::item_builders::review_finding_count;
+use crate::protocol::item_builders::review_output_text;
 use crate::protocol::v2::CollabAgentState;
 use crate::protocol::v2::CollabAgentTool;
 use crate::protocol::v2::CollabAgentToolCallStatus;
@@ -58,6 +60,8 @@ use codex_protocol::protocol::UserMessageImageKind;
 use codex_protocol::protocol::ViewImageToolCallEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
+#[cfg(test)]
+use codex_protocol::review_format::REVIEW_FALLBACK_MESSAGE;
 use codex_rollout::CompactedItem;
 use codex_rollout::RolloutItem;
 use std::collections::HashMap;
@@ -403,6 +407,8 @@ impl ThreadHistoryBuilder {
             EventMsg::CollabResumeBegin(payload) => self.handle_collab_resume_begin(payload),
             EventMsg::CollabResumeEnd(payload) => self.handle_collab_resume_end(payload),
             EventMsg::ContextCompacted(payload) => self.handle_context_compacted(payload),
+            EventMsg::EnteredReviewMode(payload) => self.handle_entered_review_mode(payload),
+            EventMsg::ExitedReviewMode(payload) => self.handle_exited_review_mode(payload),
             EventMsg::ItemStarted(payload) => self.handle_item_started(payload),
             EventMsg::ItemCompleted(payload) => self.handle_item_completed(payload),
             EventMsg::HookStarted(_) | EventMsg::HookCompleted(_) => {}
@@ -637,6 +643,11 @@ impl ThreadHistoryBuilder {
         turn_id: &str,
         item: &codex_protocol::items::TurnItem,
     ) {
+        let is_review_mode_item = matches!(
+            item,
+            codex_protocol::items::TurnItem::EnteredReviewMode(_)
+                | codex_protocol::items::TurnItem::ExitedReviewMode(_)
+        );
         let should_upsert = match item {
             codex_protocol::items::TurnItem::Plan(plan) => !plan.text.is_empty(),
             codex_protocol::items::TurnItem::HookPrompt(_)
@@ -646,7 +657,9 @@ impl ThreadHistoryBuilder {
             | codex_protocol::items::TurnItem::CollabAgentToolCall(_)
             | codex_protocol::items::TurnItem::SubAgentActivity(_)
             | codex_protocol::items::TurnItem::ContextCompaction(_)
-            | codex_protocol::items::TurnItem::Extension(_) => true,
+            | codex_protocol::items::TurnItem::Extension(_)
+            | codex_protocol::items::TurnItem::EnteredReviewMode(_)
+            | codex_protocol::items::TurnItem::ExitedReviewMode(_) => true,
             codex_protocol::items::TurnItem::UserMessage(_)
             | codex_protocol::items::TurnItem::AgentMessage(_)
             | codex_protocol::items::TurnItem::Reasoning(_)
@@ -659,7 +672,11 @@ impl ThreadHistoryBuilder {
 
         if should_upsert {
             let item = ThreadItem::from(item.clone());
-            self.upsert_item_in_turn_id(turn_id, item);
+            if is_review_mode_item {
+                self.upsert_review_mode_item(Some(turn_id), item);
+            } else {
+                self.upsert_item_in_turn_id(turn_id, item);
+            }
         }
     }
 
@@ -1177,6 +1194,62 @@ impl ThreadHistoryBuilder {
         }
         let id = self.next_item_id();
         self.push_item_in_current_turn(ThreadItem::ContextCompaction { id });
+    }
+
+    fn handle_entered_review_mode(
+        &mut self,
+        payload: &codex_protocol::protocol::EnteredReviewModeEvent,
+    ) {
+        let review = payload
+            .user_facing_hint
+            .clone()
+            .unwrap_or_else(|| "Review requested.".to_string());
+        let id = payload
+            .item_id
+            .clone()
+            .unwrap_or_else(|| self.next_item_id());
+        self.upsert_review_mode_item(
+            payload.turn_id.as_deref(),
+            ThreadItem::EnteredReviewMode { id, review },
+        );
+    }
+
+    fn handle_exited_review_mode(
+        &mut self,
+        payload: &codex_protocol::protocol::ExitedReviewModeEvent,
+    ) {
+        let review = review_output_text(payload.review_output.as_ref());
+        let finding_count = review_finding_count(payload.review_output.as_ref());
+        let id = payload
+            .item_id
+            .clone()
+            .unwrap_or_else(|| self.next_item_id());
+        self.upsert_review_mode_item(
+            payload.turn_id.as_deref(),
+            ThreadItem::ExitedReviewMode {
+                id,
+                review,
+                finding_count,
+            },
+        );
+    }
+
+    fn upsert_review_mode_item(&mut self, turn_id: Option<&str>, item: ThreadItem) {
+        let Some(turn_id) = turn_id else {
+            self.upsert_item_in_current_turn(item);
+            return;
+        };
+        let current_turn_matches = self
+            .current_turn
+            .as_ref()
+            .is_some_and(|turn| turn.id == turn_id);
+        if !current_turn_matches && !self.turns.iter().any(|turn| turn.id == turn_id) {
+            self.finish_current_turn();
+            let turn = self.new_turn(Some(turn_id.to_string()));
+            self.record_changed_pending_turn(&turn);
+            self.current_turn = Some(turn);
+        }
+        self.upsert_item_in_turn_id(turn_id, item);
     }
 
     fn handle_error(&mut self, payload: &ErrorEvent) {
@@ -1722,6 +1795,8 @@ mod tests {
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
     use codex_protocol::items::CommandExecutionItem as CoreCommandExecutionItem;
     use codex_protocol::items::CommandExecutionStatus as CoreCommandExecutionStatus;
+    use codex_protocol::items::EnteredReviewModeItem as CoreEnteredReviewModeItem;
+    use codex_protocol::items::ExitedReviewModeItem as CoreExitedReviewModeItem;
     use codex_protocol::items::HookPromptFragment as CoreHookPromptFragment;
     use codex_protocol::items::SubAgentActivityItem as CoreSubAgentActivityItem;
     use codex_protocol::items::TurnItem as CoreTurnItem;
@@ -1737,13 +1812,20 @@ mod tests {
     use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::DynamicToolCallResponseEvent;
+    use codex_protocol::protocol::EnteredReviewModeEvent;
     use codex_protocol::protocol::ExecCommandBeginEvent;
     use codex_protocol::protocol::ExecCommandEndEvent;
     use codex_protocol::protocol::ExecCommandSource;
+    use codex_protocol::protocol::ExitedReviewModeEvent;
     use codex_protocol::protocol::ItemStartedEvent;
     use codex_protocol::protocol::McpInvocation;
     use codex_protocol::protocol::McpToolCallEndEvent;
     use codex_protocol::protocol::PatchApplyBeginEvent;
+    use codex_protocol::protocol::ReviewCodeLocation;
+    use codex_protocol::protocol::ReviewFinding;
+    use codex_protocol::protocol::ReviewLineRange;
+    use codex_protocol::protocol::ReviewOutputEvent;
+    use codex_protocol::protocol::ReviewTarget;
     use codex_protocol::protocol::SubAgentActivityKind as CoreSubAgentActivityKind;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
@@ -1912,6 +1994,135 @@ mod tests {
                 delivery: None,
                 questions: None,
             }
+        );
+    }
+
+    #[test]
+    fn review_mode_events_replay_persisted_ids_and_finding_count() {
+        let review_output = ReviewOutputEvent {
+            findings: vec![ReviewFinding {
+                title: "Fix the bug".into(),
+                body: "This can fail.".into(),
+                confidence_score: 0.9,
+                priority: 1,
+                code_location: ReviewCodeLocation {
+                    absolute_file_path: PathBuf::from("/tmp/file.rs"),
+                    line_range: ReviewLineRange { start: 10, end: 10 },
+                },
+            }],
+            overall_correctness: "incorrect".into(),
+            overall_explanation: "Found one issue.".into(),
+            overall_confidence_score: 0.9,
+        };
+        let review = review_output_text(Some(&review_output));
+        let events = vec![
+            EventMsg::EnteredReviewMode(EnteredReviewModeEvent {
+                target: ReviewTarget::Custom {
+                    instructions: "review this".into(),
+                },
+                user_facing_hint: Some("Review requested.".into()),
+                turn_id: Some("turn-1".into()),
+                item_id: Some("entered-review".into()),
+            }),
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+                turn_id: Some("turn-1".into()),
+                item_id: Some("exited-review".into()),
+                review_output: Some(review_output),
+            }),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-1".into(),
+                started_at: None,
+                last_agent_message: None,
+                error: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        ];
+
+        let mut builder = ThreadHistoryBuilder::new();
+        for event in &events {
+            builder.handle_event(event);
+        }
+        let turns = builder.finish();
+
+        assert_eq!(turns[0].id, "turn-1");
+        assert_eq!(
+            turns[0].items,
+            vec![
+                ThreadItem::EnteredReviewMode {
+                    id: "entered-review".into(),
+                    review: "Review requested.".into(),
+                },
+                ThreadItem::ExitedReviewMode {
+                    id: "exited-review".into(),
+                    review,
+                    finding_count: 1,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn review_mode_items_replay_without_turn_started() {
+        let thread_id = ThreadId::new();
+        let entered = CoreTurnItem::EnteredReviewMode(CoreEnteredReviewModeItem {
+            id: "entered-review".into(),
+            target: ReviewTarget::Custom {
+                instructions: "review this".into(),
+            },
+            user_facing_hint: "Review requested.".into(),
+        });
+        let exited = CoreTurnItem::ExitedReviewMode(CoreExitedReviewModeItem {
+            id: "exited-review".into(),
+            review_output: None,
+        });
+        let events = vec![
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id,
+                turn_id: "turn-1".into(),
+                item: entered,
+                started_at_ms: Some(0),
+                completed_at_ms: 0,
+            }),
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id,
+                turn_id: "turn-1".into(),
+                item: exited,
+                started_at_ms: Some(0),
+                completed_at_ms: 0,
+            }),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-1".into(),
+                started_at: None,
+                last_agent_message: None,
+                error: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        ];
+
+        let mut builder = ThreadHistoryBuilder::new();
+        for event in &events {
+            builder.handle_event(event);
+        }
+        let turns = builder.finish();
+
+        assert_eq!(turns[0].id, "turn-1");
+        assert_eq!(
+            turns[0].items,
+            vec![
+                ThreadItem::EnteredReviewMode {
+                    id: "entered-review".into(),
+                    review: "Review requested.".into(),
+                },
+                ThreadItem::ExitedReviewMode {
+                    id: "exited-review".into(),
+                    review: REVIEW_FALLBACK_MESSAGE.into(),
+                    finding_count: 0,
+                },
+            ]
         );
     }
 

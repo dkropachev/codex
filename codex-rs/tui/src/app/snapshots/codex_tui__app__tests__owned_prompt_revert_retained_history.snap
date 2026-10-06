@@ -1,10 +1,11 @@
 ---
 source: tui/src/app/tests.rs
+assertion_line: 8480
 expression: transcript
 ---
-  /status - show current session configuration
   /permissions - choose what Codex is allowed to do
   /model - choose what model and reasoning effort to use
+  /review - review any changes and find issues
 
 
 › retained prompt

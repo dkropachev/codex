@@ -1,10 +1,15 @@
 use codex_protocol::ThreadId;
+use codex_protocol::items::EnteredReviewModeItem;
+use codex_protocol::items::ExitedReviewModeItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::EnteredReviewModeEvent;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
@@ -281,5 +286,67 @@ fn item_completion_persistence_depends_on_history_mode() {
     assert_eq!(
         paginated_measurement.items[0].decision,
         super::PersistenceDecision::Kept
+    );
+}
+
+#[test]
+fn review_mode_persistence_depends_on_history_mode() {
+    let completed_items = vec![
+        RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::default(),
+            turn_id: "turn".to_string(),
+            item: TurnItem::EnteredReviewMode(EnteredReviewModeItem {
+                id: "entered-review".to_string(),
+                target: ReviewTarget::Custom {
+                    instructions: "review this".to_string(),
+                },
+                user_facing_hint: "Review requested.".to_string(),
+            }),
+            started_at_ms: Some(0),
+            completed_at_ms: 0,
+        })),
+        RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::default(),
+            turn_id: "turn".to_string(),
+            item: TurnItem::ExitedReviewMode(ExitedReviewModeItem {
+                id: "exited-review".to_string(),
+                review_output: None,
+            }),
+            started_at_ms: Some(0),
+            completed_at_ms: 0,
+        })),
+    ];
+    let legacy_events = vec![
+        RolloutItem::EventMsg(EventMsg::EnteredReviewMode(EnteredReviewModeEvent {
+            target: ReviewTarget::Custom {
+                instructions: "review this".to_string(),
+            },
+            user_facing_hint: Some("Review requested.".to_string()),
+            turn_id: Some("turn".to_string()),
+            item_id: Some("entered-review".to_string()),
+        })),
+        RolloutItem::EventMsg(EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            turn_id: Some("turn".to_string()),
+            item_id: Some("exited-review".to_string()),
+            review_output: None,
+        })),
+    ];
+    let items = completed_items
+        .iter()
+        .chain(&legacy_events)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let (persisted_legacy, _) = measure_and_filter_rollout_items(&items, ThreadHistoryMode::Legacy);
+    assert_eq!(
+        serde_json::to_value(persisted_legacy).expect("serialize persisted items"),
+        serde_json::to_value(legacy_events).expect("serialize expected items")
+    );
+
+    let (persisted_paginated, _) =
+        measure_and_filter_rollout_items(&items, ThreadHistoryMode::Paginated);
+    assert_eq!(
+        serde_json::to_value(persisted_paginated).expect("serialize persisted items"),
+        serde_json::to_value(completed_items).expect("serialize expected items")
     );
 }

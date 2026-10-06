@@ -1,6 +1,7 @@
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 
 use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
@@ -24,11 +25,92 @@ pub fn git_config_override_env(
     }
     environment
 }
+pub(crate) fn ensure_git_repository(path: &Path) -> Result<(), GitToolingError> {
+    match run_git_for_stdout(
+        path,
+        vec![
+            OsString::from("rev-parse"),
+            OsString::from("--is-inside-work-tree"),
+        ],
+        /*env*/ None,
+    ) {
+        Ok(output) if output.trim() == "true" => Ok(()),
+        Ok(_) => Err(GitToolingError::NotAGitRepository {
+            path: path.to_path_buf(),
+        }),
+        Err(GitToolingError::GitCommand { status, .. }) if status.code() == Some(128) => {
+            Err(GitToolingError::NotAGitRepository {
+                path: path.to_path_buf(),
+            })
+        }
+        Err(err) => Err(err),
+    }
+}
+
+pub(crate) fn resolve_head(path: &Path) -> Result<Option<String>, GitToolingError> {
+    match run_git_for_stdout(
+        path,
+        vec![
+            OsString::from("rev-parse"),
+            OsString::from("--verify"),
+            OsString::from("HEAD"),
+        ],
+        /*env*/ None,
+    ) {
+        Ok(sha) => Ok(Some(sha)),
+        Err(GitToolingError::GitCommand { status, .. }) if status.code() == Some(128) => Ok(None),
+        Err(other) => Err(other),
+    }
+}
+
+pub(crate) fn resolve_repository_root(path: &Path) -> Result<PathBuf, GitToolingError> {
+    let root = run_git_for_stdout(
+        path,
+        vec![
+            OsString::from("rev-parse"),
+            OsString::from("--show-toplevel"),
+        ],
+        /*env*/ None,
+    )?;
+    Ok(PathBuf::from(root))
+}
+
 pub(crate) fn run_git_for_status<I, S>(
     dir: &Path,
     args: I,
     env: Option<&[(OsString, OsString)]>,
 ) -> Result<(), GitToolingError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    run_git(dir, args, env)?;
+    Ok(())
+}
+
+pub(crate) fn run_git_for_stdout<I, S>(
+    dir: &Path,
+    args: I,
+    env: Option<&[(OsString, OsString)]>,
+) -> Result<String, GitToolingError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let run = run_git(dir, args, env)?;
+    String::from_utf8(run.output.stdout)
+        .map(|value| value.trim().to_string())
+        .map_err(|source| GitToolingError::GitOutputUtf8 {
+            command: run.command,
+            source,
+        })
+}
+
+fn run_git<I, S>(
+    dir: &Path,
+    args: I,
+    env: Option<&[(OsString, OsString)]>,
+) -> Result<GitRun, GitToolingError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -65,7 +147,10 @@ where
             stderr,
         });
     }
-    Ok(())
+    Ok(GitRun {
+        command: command_string,
+        output,
+    })
 }
 
 fn build_command_string(args: &[OsString]) -> String {
@@ -78,4 +163,9 @@ fn build_command_string(args: &[OsString]) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     format!("git {joined}")
+}
+
+struct GitRun {
+    command: String,
+    output: std::process::Output,
 }

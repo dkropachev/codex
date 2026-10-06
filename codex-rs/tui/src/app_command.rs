@@ -6,6 +6,7 @@ use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
+use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_app_server_protocol::UserInput;
 use codex_app_server_protocol::UserVerificationProof;
@@ -185,6 +186,9 @@ pub(crate) enum AppCommand {
     SetThreadName {
         name: String,
     },
+    Review {
+        target: ReviewTarget,
+    },
     ApproveGuardianDeniedAction {
         event: GuardianAssessmentEvent,
     },
@@ -351,6 +355,10 @@ impl AppCommand {
 
     pub(crate) fn set_thread_name(name: String) -> Self {
         Self::SetThreadName { name }
+    }
+
+    pub(crate) fn review(target: ReviewTarget) -> Self {
+        Self::Review { target }
     }
 
     pub(crate) fn approve_guardian_denied_action(event: GuardianAssessmentEvent) -> Self {

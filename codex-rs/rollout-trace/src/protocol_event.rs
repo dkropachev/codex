@@ -417,6 +417,8 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
         | EventMsg::PlanUpdate(_)
         | EventMsg::TurnAborted(_)
         | EventMsg::ShutdownComplete
+        | EventMsg::EnteredReviewMode(_)
+        | EventMsg::ExitedReviewMode(_)
         | EventMsg::RawResponseItem(_)
         | EventMsg::RawResponseCompleted(_)
         | EventMsg::ItemStarted(_)
@@ -494,6 +496,8 @@ pub(crate) fn wrapped_protocol_event_type(event: &EventMsg) -> Option<&'static s
         | EventMsg::TurnDiff(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
         | EventMsg::PlanUpdate(_)
+        | EventMsg::EnteredReviewMode(_)
+        | EventMsg::ExitedReviewMode(_)
         | EventMsg::RawResponseItem(_)
         | EventMsg::RawResponseCompleted(_)
         | EventMsg::ItemStarted(_)
@@ -546,6 +550,7 @@ fn execution_status_for_abort_reason(reason: &TurnAbortReason) -> ExecutionStatu
     match reason {
         TurnAbortReason::Interrupted
         | TurnAbortReason::Replaced
+        | TurnAbortReason::ReviewEnded
         | TurnAbortReason::BudgetLimited => ExecutionStatus::Cancelled,
     }
 }

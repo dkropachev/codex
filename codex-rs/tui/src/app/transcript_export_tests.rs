@@ -3,6 +3,7 @@ use std::sync::Arc;
 use pretty_assertions::assert_eq;
 
 use super::render_markdown_transcript;
+use super::visible_export_items;
 use super::write_transcript;
 use crate::history_cell::AgentMarkdownCell;
 use crate::history_cell::HistoryCell;
@@ -10,6 +11,10 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::history_cell::new_proposed_plan;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnItemsView;
+use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::UserInput;
 
 #[test]
 fn markdown_transcript_preserves_messages_and_formats_activity() {
@@ -53,6 +58,66 @@ fn markdown_transcript_preserves_messages_and_formats_activity() {
     insta::assert_snapshot!(
         "markdown_transcript",
         render_markdown_transcript(&cells).expect("exported transcript")
+    );
+}
+
+#[test]
+fn transcript_export_excludes_hidden_review_prompts_and_nested_duplicates() {
+    let user = |id: &str, text: &str| ThreadItem::UserMessage {
+        id: id.to_string(),
+        client_id: None,
+        content: vec![UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }],
+    };
+    let entered_review = ThreadItem::EnteredReviewMode {
+        id: "review-enter".to_string(),
+        review: "review".to_string(),
+    };
+    let exited_review = ThreadItem::ExitedReviewMode {
+        id: "review-exit".to_string(),
+        review: "review".to_string(),
+        finding_count: 0,
+    };
+    let duplicate_one = user("duplicate-one", "duplicate review prompt");
+    let duplicate_two = user("duplicate-two", "duplicate review prompt");
+    let turn = |id: &str, items: Vec<ThreadItem>, status| Turn {
+        id: id.to_string(),
+        items,
+        items_view: TurnItemsView::Full,
+        status,
+        error: None,
+        started_at: None,
+        completed_at: None,
+        duration_ms: None,
+    };
+    let review = turn(
+        "review-turn",
+        vec![
+            entered_review.clone(),
+            user("review-prompt", "hidden review prompt"),
+            exited_review.clone(),
+        ],
+        TurnStatus::Completed,
+    );
+    let nested = turn(
+        "nested-turn",
+        vec![duplicate_one.clone(), duplicate_two.clone()],
+        TurnStatus::Interrupted,
+    );
+    assert_eq!(
+        visible_export_items(vec![review.clone(), nested]),
+        vec![entered_review.clone(), exited_review.clone()],
+    );
+    let completed = turn(
+        "completed-turn",
+        vec![duplicate_one.clone(), duplicate_two.clone()],
+        TurnStatus::Completed,
+    );
+    assert_eq!(
+        visible_export_items(vec![review, completed]),
+        vec![entered_review, exited_review, duplicate_one, duplicate_two],
     );
 }
 

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use super::session::Session;
 use super::step_context::StepContext;
 use crate::connectors;
+use crate::context::PullRequestContext;
 use crate::context::TokenBudgetContext;
 use crate::context::world_state::AgentsMdState;
 use crate::context::world_state::AppsInstructionsState;
@@ -18,6 +19,7 @@ use crate::context::world_state::MultiAgentUsageHintState;
 use crate::context::world_state::PermissionsState;
 use crate::context::world_state::PersistentModeState;
 use crate::context::world_state::PluginsInstructionsState;
+use crate::context::world_state::PullRequestContextState;
 use crate::context::world_state::RealtimeState;
 use crate::context::world_state::ToolsState;
 use crate::context::world_state::WorldState;
@@ -212,6 +214,13 @@ impl Session {
                 .await
                 .with_subagents(environment_subagents),
             );
+        }
+        if let Some(context) = self
+            .services
+            .thread_extension_data
+            .get::<PullRequestContext>()
+        {
+            world_state.add_section(PullRequestContextState::new(context));
         }
         world_state.add_section(EnvironmentsInstructionsState::new(
             turn_context.config.include_environment_context

@@ -1,4 +1,6 @@
 use super::thread_input::ensure_direct_input_allowed;
+use codex_agent_extension::AgentRunner;
+mod review;
 use super::*;
 use codex_app_server_protocol::ImageReference as V2ImageReference;
 use codex_protocol::error::CodexErrorDetails;
@@ -75,6 +77,7 @@ fn validate_response_item_image_urls(items: &[ResponseItem]) -> Result<(), JSONR
 
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
+    agent_runner: AgentRunner,
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
@@ -149,7 +152,9 @@ impl TurnRequestProcessor {
         skills_watcher: Arc<SkillsWatcher>,
         turn_cost_worker: Option<crate::turn_cost_worker::TurnCostWorkerHandle>,
     ) -> Self {
+        let agent_runner = AgentRunner::new(Arc::downgrade(&thread_manager));
         Self {
+            agent_runner,
             auth_manager,
             thread_manager,
             outgoing,
@@ -977,6 +982,10 @@ impl TurnRequestProcessor {
                     ),
                     NotSubmittedReason::ActiveTurnNotSteerable { turn_kind } => {
                         let (message, turn_steer_error) = match turn_kind {
+                            codex_protocol::protocol::NonSteerableTurnKind::Review => (
+                                "cannot steer a review turn".to_string(),
+                                TurnSteerRequestError::NonSteerableReview,
+                            ),
                             codex_protocol::protocol::NonSteerableTurnKind::Compact => (
                                 "cannot steer a compact turn".to_string(),
                                 TurnSteerRequestError::NonSteerableCompact,

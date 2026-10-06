@@ -110,6 +110,9 @@ mod request_permissions;
 mod request_user_input;
 mod request_validation;
 mod residency;
+mod review;
+mod review_pull_request;
+mod review_scope;
 #[path = "rollout_compress_tests.rs"]
 mod rollout_compress;
 mod rollout_migration;

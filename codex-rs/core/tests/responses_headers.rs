@@ -106,7 +106,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
 
     let thread_id = ThreadId::new();
     let auth_mode = TelemetryAuthMode::Chatgpt;
-    let session_source = SessionSource::SubAgent(SubAgentSource::Other("review".to_string()));
+    let session_source = SessionSource::SubAgent(SubAgentSource::Review);
     let model_info =
         codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
     let expected_window_id = format!("{thread_id}:0");

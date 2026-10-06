@@ -755,6 +755,9 @@ pub enum Op {
     /// Record that the user approved one retry of a concrete Guardian-denied action.
     ApproveGuardianDeniedAction { event: GuardianAssessmentEvent },
 
+    /// Request a code review from the agent.
+    Review { review_request: ReviewRequest },
+
     /// Request to shut down codex instance.
     Shutdown,
 
@@ -973,6 +976,7 @@ impl Op {
             Self::CompactIfIdle { .. } => "compact_if_idle",
             Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
             Self::ApproveGuardianDeniedAction { .. } => "approve_guardian_denied_action",
+            Self::Review { .. } => "review",
             Self::Shutdown => "shutdown",
             Self::RunUserShellCommand { .. } => "run_user_shell_command",
             Self::RunWorkflowCommand { .. } => "run_workflow_command",
@@ -1545,6 +1549,12 @@ pub enum EventMsg {
     /// Notification that the agent is shutting down.
     ShutdownComplete,
 
+    /// Entered review mode.
+    EnteredReviewMode(EnteredReviewModeEvent),
+
+    /// Exited review mode with an optional final result to apply.
+    ExitedReviewMode(ExitedReviewModeEvent),
+
     RawResponseItem(RawResponseItemEvent),
     RawResponseCompleted(RawResponseCompletedEvent),
 
@@ -1852,6 +1862,7 @@ pub enum AgentStatus {
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
 pub enum NonSteerableTurnKind {
+    Review,
     Compact,
 }
 
@@ -2001,6 +2012,31 @@ pub struct ReasoningRawContentDeltaEvent {
     // load with default value so it's backward compatible with the old format.
     #[serde(default)]
     pub content_index: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct EnteredReviewModeEvent {
+    pub target: ReviewTarget,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub user_facing_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ExitedReviewModeEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub item_id: Option<String>,
+    pub review_output: Option<ReviewOutputEvent>,
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -2884,6 +2920,7 @@ pub enum InternalSessionSource {
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
 pub enum SubAgentSource {
+    Review,
     Compact,
     ThreadSpawn {
         parent_thread_id: ThreadId,
@@ -2924,7 +2961,7 @@ impl<'de> Deserialize<'de> for SubAgentSource {
         D: serde::Deserializer<'de>,
     {
         Ok(match SubAgentSourceWire::deserialize(deserializer)? {
-            SubAgentSourceWire::Review => Self::Other("review".to_string()),
+            SubAgentSourceWire::Review => Self::Review,
             SubAgentSourceWire::Compact => Self::Compact,
             SubAgentSourceWire::ThreadSpawn {
                 parent_thread_id,
@@ -3052,6 +3089,7 @@ impl SessionSource {
 impl fmt::Display for SubAgentSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            SubAgentSource::Review => f.write_str("review"),
             SubAgentSource::Compact => f.write_str("compact"),
             SubAgentSource::MemoryConsolidation => f.write_str("memory_consolidation"),
             SubAgentSource::ThreadSpawn {
@@ -3069,6 +3107,7 @@ impl fmt::Display for SubAgentSource {
 impl SubAgentSource {
     pub fn kind(&self) -> &str {
         match self {
+            SubAgentSource::Review => "review",
             SubAgentSource::Compact => "compact",
             SubAgentSource::ThreadSpawn { .. } => "thread_spawn",
             SubAgentSource::MemoryConsolidation => "memory_consolidation",
@@ -3081,7 +3120,8 @@ impl SubAgentSource {
             SubAgentSource::ThreadSpawn {
                 parent_thread_id, ..
             } => Some(*parent_thread_id),
-            SubAgentSource::Compact
+            SubAgentSource::Review
+            | SubAgentSource::Compact
             | SubAgentSource::MemoryConsolidation
             | SubAgentSource::Other(_) => None,
         }
@@ -3461,6 +3501,98 @@ pub struct GitInfo {
     )]
     #[schemars(with = "Option<String>")]
     pub repository_url: Option<SanitizedGitUrl>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDelivery {
+    Inline,
+    Detached,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+pub enum ReviewTarget {
+    /// Review the working tree: staged, unstaged, and untracked files.
+    UncommittedChanges,
+
+    /// Review changes between the current branch and the given base branch.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    BaseBranch { branch: String },
+
+    /// Review the changes introduced by a specific commit.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Commit {
+        sha: String,
+        /// Optional human-readable label (e.g., commit subject) for UIs.
+        title: Option<String>,
+    },
+
+    /// Review a pull request by URL.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    PullRequest { url: String },
+
+    /// Arbitrary instructions provided by the user.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Custom { instructions: String },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+/// Review request sent to the review session.
+pub struct ReviewRequest {
+    pub target: ReviewTarget,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub user_facing_hint: Option<String>,
+}
+
+/// Structured review result produced by a child review session.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ReviewOutputEvent {
+    pub findings: Vec<ReviewFinding>,
+    pub overall_correctness: String,
+    pub overall_explanation: String,
+    pub overall_confidence_score: f32,
+}
+
+impl Default for ReviewOutputEvent {
+    fn default() -> Self {
+        Self {
+            findings: Vec::new(),
+            overall_correctness: String::default(),
+            overall_explanation: String::default(),
+            overall_confidence_score: 0.0,
+        }
+    }
+}
+
+/// A single review finding describing an observed issue or recommendation.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ReviewFinding {
+    pub title: String,
+    pub body: String,
+    pub confidence_score: f32,
+    pub priority: i32,
+    pub code_location: ReviewCodeLocation,
+}
+
+/// Location of the code related to a review finding.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ReviewCodeLocation {
+    pub absolute_file_path: PathBuf,
+    pub line_range: ReviewLineRange,
+}
+
+/// Inclusive line range in a file associated with the finding.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ReviewLineRange {
+    pub start: u32,
+    pub end: u32,
 }
 
 #[derive(
@@ -4201,6 +4333,7 @@ pub struct TurnAbortedEvent {
 pub enum TurnAbortReason {
     Interrupted,
     Replaced,
+    ReviewEnded,
     BudgetLimited,
 }
 
@@ -4633,10 +4766,10 @@ mod tests {
     }
 
     #[test]
-    fn legacy_review_subagent_source_deserializes_as_other() {
+    fn review_subagent_source_deserializes_as_review() {
         assert_eq!(
             serde_json::from_value::<SubAgentSource>(json!("review")).unwrap(),
-            SubAgentSource::Other("review".to_string())
+            SubAgentSource::Review
         );
     }
 

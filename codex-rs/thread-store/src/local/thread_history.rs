@@ -353,8 +353,8 @@ WHERE thread_turns.rollout_end_ordinal IS NULL
         .await
         .map_err(thread_history_error)?;
 
-        // Some historical turns persisted completed items before their turn lifecycle record.
-        // Fill the summary IDs from those older item rows when the turn row finally arrives.
+        // Review turns can persist completed items before their turn lifecycle record. Fill the
+        // summary IDs from those older item rows when the turn row finally arrives.
         sqlx::query(
             r#"
 UPDATE thread_turns
@@ -531,6 +531,8 @@ WHERE thread_id = ?
             | ThreadItem::ImageView { .. }
             | ThreadItem::Sleep(_)
             | ThreadItem::ImageGeneration(_)
+            | ThreadItem::EnteredReviewMode { .. }
+            | ThreadItem::ExitedReviewMode { .. }
             | ThreadItem::ContextCompaction { .. } => {}
         }
     }

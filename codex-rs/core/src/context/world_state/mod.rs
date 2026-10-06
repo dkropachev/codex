@@ -12,6 +12,7 @@ mod multi_agent_usage_hint;
 mod permissions;
 mod persistent_mode;
 mod plugins_instructions;
+mod pull_request_context;
 mod realtime;
 #[cfg(test)]
 mod test_support;
@@ -51,6 +52,7 @@ pub(crate) use multi_agent_usage_hint::MultiAgentUsageHintState;
 pub(crate) use permissions::PermissionsState;
 pub(crate) use persistent_mode::PersistentModeState;
 pub(crate) use plugins_instructions::PluginsInstructionsState;
+pub(crate) use pull_request_context::PullRequestContextState;
 pub(crate) use realtime::RealtimeState;
 pub(crate) use tools::ToolsState;
 

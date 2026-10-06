@@ -119,7 +119,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Returned when `turn/start` or `turn/steer` is submitted while the current active turn cannot accept same-turn steering, for example manual `/compact`.",
+          "description": "Returned when `turn/start` or `turn/steer` is submitted while the current active turn cannot accept same-turn steering, for example `/review` or manual `/compact`.",
           "properties": {
             "activeTurnNotSteerable": {
               "properties": {
@@ -184,6 +184,7 @@
     },
     "NonSteerableTurnKind": {
       "enum": [
+        "review",
         "compact"
       ],
       "type": "string"

@@ -250,7 +250,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Returned when `turn/start` or `turn/steer` is submitted while the current active turn cannot accept same-turn steering, for example manual `/compact`.",
+          "description": "Returned when `turn/start` or `turn/steer` is submitted while the current active turn cannot accept same-turn steering, for example `/review` or manual `/compact`.",
           "properties": {
             "activeTurnNotSteerable": {
               "properties": {
@@ -1012,6 +1012,7 @@
     },
     "NonSteerableTurnKind": {
       "enum": [
+        "review",
         "compact"
       ],
       "type": "string"
@@ -1268,6 +1269,7 @@
       "oneOf": [
         {
           "enum": [
+            "review",
             "compact",
             "memory_consolidation"
           ],
@@ -2410,6 +2412,60 @@
             "type"
           ],
           "title": "ImageGenerationThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "review": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "enteredReviewMode"
+              ],
+              "title": "EnteredReviewModeThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "review",
+            "type"
+          ],
+          "title": "EnteredReviewModeThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "findingCount": {
+              "default": 0,
+              "format": "uint",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "id": {
+              "type": "string"
+            },
+            "review": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "exitedReviewMode"
+              ],
+              "title": "ExitedReviewModeThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "review",
+            "type"
+          ],
+          "title": "ExitedReviewModeThreadItem",
           "type": "object"
         },
         {

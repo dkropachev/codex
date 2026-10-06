@@ -280,6 +280,7 @@ impl ForcedChatgptWorkspaceIds {
 #[ts(export_to = "v2/")]
 pub struct Config {
     pub model: Option<String>,
+    pub review_model: Option<String>,
     pub model_context_window: Option<i64>,
     pub model_auto_compact_token_limit: Option<i64>,
     pub model_auto_compact_token_limit_scope: Option<AutoCompactTokenLimitScope>,

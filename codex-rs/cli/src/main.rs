@@ -26,6 +26,7 @@ use codex_cloud_config::cloud_config_bundle_loader_for_storage;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_exec::Cli as ExecCli;
 use codex_exec::Command as ExecCommand;
+use codex_exec::ReviewArgs;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_http_client::HttpClientFactory;
@@ -170,6 +171,9 @@ enum Subcommand {
     /// Run Codex non-interactively.
     #[clap(visible_alias = "e")]
     Exec(ExecCli),
+
+    /// Run a code review non-interactively.
+    Review(ReviewCommand),
 
     /// Manage login.
     Login(LoginCommand),
@@ -329,6 +333,16 @@ struct DebugModelsCommand {
     /// Skip refresh and dump only the bundled catalog shipped with this binary.
     #[arg(long = "bundled", default_value_t = false)]
     bundled: bool,
+}
+
+#[derive(Debug, Parser)]
+struct ReviewCommand {
+    /// Error out when config.toml contains fields that are not recognized by this version of Codex.
+    #[arg(long = "strict-config", default_value_t = false)]
+    strict_config: bool,
+
+    #[clap(flatten)]
+    args: ReviewArgs,
 }
 
 #[derive(Debug, Parser)]
@@ -1339,6 +1353,27 @@ async fn cli_main(
             );
             codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
         }
+        Some(Subcommand::Review(ReviewCommand {
+            strict_config,
+            args: review_args,
+        })) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "review",
+            )?;
+            let mut exec_cli = ExecCli::try_parse_from(["codex", "exec"])?;
+            exec_cli
+                .shared
+                .inherit_exec_root_options(&interactive.shared);
+            exec_cli.command = Some(ExecCommand::Review(review_args));
+            exec_cli.strict_config = strict_config || root_strict_config;
+            prepend_config_flags(
+                &mut exec_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
+        }
         Some(Subcommand::Mcp(mut mcp_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -2114,6 +2149,7 @@ fn profile_v2_for_subcommand<'a>(
     match subcommand {
         Subcommand::Agents(_)
         | Subcommand::Exec(_)
+        | Subcommand::Review(_)
         | Subcommand::Resume(_)
         | Subcommand::Queue(_)
         | Subcommand::Archive(_)
@@ -2735,6 +2771,9 @@ fn reject_unsupported_worktree_for_subcommand(
         }
         Some(Subcommand::Exec(command)) => match &command.command {
             None | Some(ExecCommand::Fork(_)) => Ok(()),
+            Some(ExecCommand::Review(_)) => {
+                anyhow::bail!("`--worktree` is not supported for code review")
+            }
             Some(ExecCommand::Resume(_)) => anyhow::bail!(
                 "`--worktree` cannot resume an existing session; use `codex exec fork --worktree`"
             ),
@@ -2782,6 +2821,7 @@ fn unsupported_subcommand_name_for_strict_config(
         None
         | Some(Subcommand::Agents(_))
         | Some(Subcommand::Exec(_))
+        | Some(Subcommand::Review(_))
         | Some(Subcommand::ExecServer(_))
         | Some(Subcommand::Resume(_))
         | Some(Subcommand::Queue(_))
@@ -4762,6 +4802,23 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn review_command_forwards_scope_and_strict_config() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "review", "--strict-config", "--uncommitted"])
+                .expect("parse review command");
+        assert_matches!(
+            cli.subcommand,
+            Some(Subcommand::Review(ReviewCommand {
+                strict_config: true,
+                args: ReviewArgs {
+                    uncommitted: true,
+                    ..
+                },
+            }))
+        );
     }
 
     #[test]

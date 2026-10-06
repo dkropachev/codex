@@ -194,6 +194,8 @@ impl GoalAccountingState {
             | TurnItem::ImageGeneration(_)
             | TurnItem::FileChange(_)
             | TurnItem::McpToolCall(_)
+            | TurnItem::EnteredReviewMode(_)
+            | TurnItem::ExitedReviewMode(_)
             | TurnItem::ContextCompaction(_) => turn.has_activity = true,
         }
         if turn.has_activity {
