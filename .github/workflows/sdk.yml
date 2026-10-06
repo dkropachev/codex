@@ -34,11 +34,8 @@ jobs:
             '
 
   sdks:
-    if: github.repository == 'openai/codex'
-    runs-on:
-      group: ${{ github.event.repository.name }}-runners
-      labels: ${{ github.event.repository.name }}-linux-x64
-    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     environment:
       name: bazel
       deployment: false

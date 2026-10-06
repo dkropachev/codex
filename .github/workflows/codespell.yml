@@ -4,10 +4,6 @@ name: Codespell
 
 on:
   workflow_call:
-  push:
-    branches: [main, "forked-rust-v*"]
-  pull_request:
-    branches: [main]
 
 permissions:
   contents: read
