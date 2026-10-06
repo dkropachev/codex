@@ -1,10 +1,14 @@
 name: rust-platform-tests
 
-# The release tag calls this before creating its draft. Workflow dispatch lets
-# maintainers exercise the same platform matrix against a branch before a tag.
+# The release tag calls this before creating its draft. Run the full matrix on
+# PRs that change this workflow so its runner wiring is tested before merging.
 on:
   workflow_call:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/rust-platform-tests.yml
+      - .github/workflows/rust-ci-full-nextest-platform.yml
 
 jobs:
   tests:

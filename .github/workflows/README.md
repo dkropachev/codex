@@ -23,6 +23,8 @@ Stable release tags run the broader platform matrix before publication.
   codespell, repository checks, and SDK tests. These must pass before the
   unpublished release draft is created. Linux musl packages are built and
   smoke-tested before the draft is published.
+- Changes to the release test matrix or its shared nextest workflow run that
+  matrix on the PR as well, so runner wiring can be checked before merging.
 - Manual package dry-runs and historical backfills retain their package
   validation without running release CI against the default branch.
 
