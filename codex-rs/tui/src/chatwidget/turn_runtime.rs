@@ -222,6 +222,8 @@ impl ChatWidget {
                 });
             }
             self.maybe_show_pending_rate_limit_prompt();
+            self.qualify_automatic_handoff_after_live_completion();
+            self.request_automatic_handoff_check();
         }
     }
 

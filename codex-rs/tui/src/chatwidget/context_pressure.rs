@@ -359,6 +359,7 @@ impl ChatWidget {
         turn_id: &str,
         observation: CompactionObservation,
     ) {
+        self.note_automatic_handoff_compaction(observation);
         let is_new_item = self.observe_context_compaction(id, turn_id, observation);
         let Some(thread_id) = self.thread_id else {
             return;

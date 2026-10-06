@@ -322,6 +322,41 @@ impl App {
         Ok(())
     }
 
+    pub(super) async fn maybe_start_automatic_handoff(&mut self, thread_id: ThreadId) {
+        if self.primary_thread_id != Some(thread_id)
+            || self.current_displayed_thread_id() != Some(thread_id)
+            || self.overlay.is_some()
+            || self.agent_navigation.is_parent_owned(thread_id)
+            || self.pending_app_server_requests.has_pending_user_input()
+            || self.has_active_handoff_descendant(thread_id).await
+        {
+            return;
+        }
+        self.chat_widget.start_automatic_handoff();
+    }
+
+    pub(super) async fn maybe_advance_automatic_handoff_planning(
+        &mut self,
+        source_thread_id: ThreadId,
+        generation: u64,
+    ) {
+        if self.primary_thread_id != Some(source_thread_id)
+            || self.current_displayed_thread_id() != Some(source_thread_id)
+            || self.overlay.is_some()
+            || self.agent_navigation.is_parent_owned(source_thread_id)
+            || self.pending_app_server_requests.has_pending_user_input()
+            || self.has_active_handoff_descendant(source_thread_id).await
+        {
+            if self.chat_widget.thread_id() == Some(source_thread_id) {
+                self.chat_widget
+                    .cancel_automatic_handoff_at_app_gate(generation);
+            }
+            return;
+        }
+        self.chat_widget
+            .continue_automatic_handoff_planning(generation);
+    }
+
     async fn has_active_handoff_descendant(&self, source_thread_id: ThreadId) -> bool {
         if self
             .agent_navigation

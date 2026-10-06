@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests/auto_handoff_tests.rs
+expression: lines_to_single_string(&planning_lines)
+---
+• Model changed to gpt-5.6-sol medium for Handoff mode.
+
+
+› Prepare a focused handoff plan for continuing this task in a fresh session.
+  Use the goal, completed work, current state, changed files, validation,
+  decisions, constraints, blockers, next steps, and acceptance criteria.
+  Explore or ask needed clarifications as in Plan mode. Do not implement more
+  work. Emit `<proposed_plan>` only when the handoff is decision-complete. If
+  the work is complete, report completion without a proposed plan.

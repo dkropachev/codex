@@ -581,6 +581,17 @@ pub(crate) enum AppEvent {
         plan: String,
     },
 
+    /// Recheck whether an idle thread can begin automatic handoff.
+    AutomaticHandoffCandidate {
+        thread_id: ThreadId,
+    },
+
+    /// Recheck app-owned safety gates after automatic wrap-up completes.
+    AdvanceAutomaticHandoffPlanning {
+        source_thread_id: ThreadId,
+        generation: u64,
+    },
+
     /// Start a deferred handoff with the next model-bound user prompt.
     StartDeferredHandoffTransfer {
         source_thread_id: ThreadId,

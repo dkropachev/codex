@@ -7,8 +7,23 @@ use crate::chatwidget::slash_dispatch::SlashCommandDispatchSource;
 use crate::handoff::HandoffDisposition;
 use crate::handoff::HandoffPlan;
 
+#[path = "handoff_automatic.rs"]
+mod automatic;
 #[path = "handoff_deferred.rs"]
 mod deferred;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HandoffTrigger {
+    Manual,
+    Automatic,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HandoffPhase {
+    WrappingUp,
+    AwaitingPlanning,
+    Planning,
+}
 
 #[derive(Default)]
 pub(super) struct HandoffState {
@@ -16,6 +31,9 @@ pub(super) struct HandoffState {
     next_generation: u64,
     pub(super) pending: Option<Box<DeferredHandoff>>,
     pub(super) recoverable_execution_prompt: Option<Box<UserMessage>>,
+    automatic_latched: bool,
+    automatic_cancelled_until_rearm: bool,
+    automatic_compaction_observed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -35,6 +53,8 @@ pub(super) enum DeferredSubmission {
 }
 
 struct ManualHandoff {
+    trigger: HandoffTrigger,
+    phase: HandoffPhase,
     disposition: HandoffDisposition,
     generation: u64,
     owned_turn_id: Option<String>,
@@ -248,6 +268,8 @@ impl ChatWidget {
 
         self.handoff_state.next_generation = self.handoff_state.next_generation.wrapping_add(1);
         self.handoff_state.active = Some(ManualHandoff {
+            trigger: HandoffTrigger::Manual,
+            phase: HandoffPhase::Planning,
             disposition,
             generation: self.handoff_state.next_generation,
             owned_turn_id: None,
@@ -273,6 +295,14 @@ impl ChatWidget {
     }
 
     pub(super) fn note_handoff_submission(&mut self, items: Vec<UserInput>) {
+        if self.handoff_state.active.as_ref().is_some_and(|active| {
+            active.trigger == HandoffTrigger::Automatic
+                && active.phase == HandoffPhase::WrappingUp
+                && (active.owned_turn_id.is_some() || active.owned_submission_items.is_some())
+        }) {
+            self.cancel_automatic_handoff();
+            return;
+        }
         if let Some(active) = self.handoff_state.active.as_mut() {
             active.clear_turn();
             active.owned_submission_items = Some(items);
@@ -303,12 +333,16 @@ impl ChatWidget {
 
     /// Returns true when this handoff owns the Plan-mode completion UI.
     pub(super) fn advance_manual_handoff_after_successful_turn(&mut self) -> bool {
+        if self.advance_automatic_wrap_up_after_successful_turn() {
+            return true;
+        }
         let Some(active) = self.handoff_state.active.as_ref() else {
             return false;
         };
         if !active.owned_turn_completed {
             return true;
         }
+        let automatic = active.trigger == HandoffTrigger::Automatic;
         let disposition = active.disposition;
         let generation = active.generation;
         let owned_turn_id = active.owned_turn_id.clone();
@@ -334,12 +368,18 @@ impl ChatWidget {
                         .to_string(),
                 ),
             );
+            if automatic {
+                self.cancel_automatic_handoff();
+            }
             return true;
         };
         let plan = match HandoffPlan::new(plan_text.clone()) {
             Ok(plan) => plan,
             Err(error) => {
                 self.add_error_message(error.to_string());
+                if automatic {
+                    self.cancel_automatic_handoff();
+                }
                 return true;
             }
         };
@@ -433,6 +473,12 @@ impl ChatWidget {
     }
 
     pub(crate) fn stay_in_handoff(&mut self, generation: u64) {
+        if self.handoff_state.active.as_ref().is_some_and(|active| {
+            active.generation == generation && active.trigger == HandoffTrigger::Automatic
+        }) {
+            self.cancel_automatic_handoff();
+            return;
+        }
         if let Some(active) = self.handoff_state.active.as_mut()
             && active.generation == generation
         {
@@ -478,19 +524,39 @@ impl ChatWidget {
 
     pub(super) fn leave_handoff_for_user_mode_change(&mut self, mask: &CollaborationModeMask) {
         if !crate::handoff::is_handoff_mask(Some(mask)) {
+            if self
+                .handoff_state
+                .active
+                .as_ref()
+                .is_some_and(|active| active.trigger == HandoffTrigger::Automatic)
+            {
+                self.handoff_state.automatic_cancelled_until_rearm = true;
+            }
             self.handoff_state.active = None;
         }
     }
 
     pub(super) fn stop_handoff_after_turn_failure(&mut self) {
+        if self
+            .handoff_state
+            .active
+            .as_ref()
+            .is_some_and(|active| active.trigger == HandoffTrigger::Automatic)
+        {
+            self.cancel_automatic_handoff();
+            return;
+        }
         if let Some(active) = self.handoff_state.active.as_mut() {
             active.clear_turn();
         }
     }
 
     pub(super) fn fail_handoff_mode_update(&mut self) {
-        if self.handoff_state.active.take().is_none() {
+        let Some(active) = self.handoff_state.active.take() else {
             return;
+        };
+        if active.trigger == HandoffTrigger::Automatic {
+            self.handoff_state.automatic_cancelled_until_rearm = true;
         }
         if let Some(default_mask) =
             collaboration_modes::default_mode_mask(self.model_catalog.as_ref())

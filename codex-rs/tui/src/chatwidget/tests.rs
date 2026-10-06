@@ -232,6 +232,8 @@ fn next_goal_draft(
 mod account_pool_status_and_layout;
 mod app_server;
 mod approval_requests;
+#[path = "tests/auto_handoff_tests.rs"]
+mod auto_handoff_tests;
 #[path = "tests/backend_banners_tests.rs"]
 mod backend_banners_tests;
 #[path = "tests/bedrock_catalog_tests.rs"]

@@ -12,7 +12,9 @@ Context management keeps long-running threads usable without allowing one client
 
 `/handoff` enters a Handoff presentation of Plan mode from an idle, resumable Default-mode thread. It accepts optional `--ask`, `--defer`, and guidance. A completed Plan item owned by the planning turn is eligible only while no later accepted user input has superseded it. Default handoff starts a fresh Default-mode thread and submits only the validated plan as new context; `--ask` offers proceed or stay. `--defer` returns to Default mode with a pending plan; the next model-bound prompt starts a fresh thread with the plan and prompt. Local and shell commands leave the plan pending. The source remains resumable. The full generated prompt obeys the existing 10,000 estimated-token model-context item ceiling. Manual `/compact` retains its explicit compaction meaning.
 
-When the latest active context use first reaches 70% of the adjusted model window, the TUI shows one passive hint recommending both `/compact` and `/handoff`. Cumulative session tokens do not drive the hint, and an unknown or unusable context window does not trigger it. A new compaction item rearms the hint only after active use falls below 70%; repeated notifications and historical replay of the same item do not rearm it. A fresh thread starts a new hint cycle. This hint does not start automatic context management.
+When the latest active context use first reaches 70% of the adjusted model window, the TUI shows one passive hint recommending both `/compact` and `/handoff`. Cumulative session tokens do not drive the hint, and an unknown or unusable context window does not trigger it. A new compaction item rearms the hint only after active use falls below 70%; repeated notifications and historical replay of the same item do not rearm it. A fresh thread starts a new hint cycle. The hint itself does not start automatic context management.
+
+Automatic handoff is disabled unless `[tui].auto_handoff_threshold_percent` is set to a value from 71 through 85. A live Default-mode turn at or above that adjusted active-context threshold may start automation after it completes. Replayed usage alone never starts it. The primary thread must be idle and free of queued input, pending interactions, active goals, and active descendants. Automation first submits a visible wrap-up turn, then uses the existing Handoff-mode planner and verified fresh-thread transfer. A failed or interrupted step leaves the source thread in place and does not immediately retry.
 
 ## Entry Points
 
@@ -125,11 +127,12 @@ Not covered
 
 #### Description
 
-PTY coverage exercises a manual handoff through Plan generation, fresh execution, and source resume.
+PTY coverage exercises manual and automatic handoff through Plan generation and fresh execution.
 
 #### Test cases
 
 - Default handoff executes in a fresh thread without copying source-only text and the source remains resumable: codex-rs/tui/tests/suite/context_management__handoff_live.rs:plan_handoff_default_transfers_to_fresh_thread_and_source_remains_resumable
+- Automatic handoff wraps up the source turn before planning and transferring: codex-rs/tui/tests/suite/context_management__handoff_live.rs:automatic_handoff_wraps_up_then_plans_and_transfers
 
 ### tui-component (focused TUI component behavior)
 
@@ -150,6 +153,7 @@ Component coverage exercises parser, attachments, Plan authority, ask/stay decis
 - Deferred Plan state, pending and recovery displays, source-input invalidation, local and shell preservation, mode changes, and destructive confirmations: codex-rs/tui/src/chatwidget/tests/plan_handoff_deferred.rs:deferred_plan_waits_for_next_prompt_in_default_mode,shell_command_does_not_consume_deferred_handoff,local_status_command_preserves_deferred_handoff,resume_picker_can_be_opened_without_discarding_deferred_handoff,mode_change_does_not_strand_the_next_deferred_prompt,restored_deferred_transfer_keeps_prompt_in_recovered_queue,accepted_source_input_invalidates_pending_handoff_in_live_and_replay,destructive_commands_confirm_before_discarding_deferred_plan,app_new_session_action_uses_the_same_discard_confirmation,reconnect_restores_pending_plan_without_automatic_transfer,deferred_handoff_waits_for_remote_workspace_image_preparation
 - Deferred fresh transfer, attachment offsets, failure recovery, App discard confirmation, and navigation replay: codex-rs/tui/src/app/tests/plan_handoff_deferred.rs:deferred_handoff_executes_plan_and_followup_in_fresh_thread,deferred_handoff_preserves_followup_image_and_text_element,deferred_start_failure_restores_prompt_and_pending_plan,new_session_event_confirms_before_discarding_deferred_plan,confirmed_inline_handoff_discards_pending_plan_and_preserves_arguments,prompt_edit_requires_confirmation_before_discarding_deferred_plan,deferred_plan_survives_thread_navigation_and_replay,rejected_deferred_execution_restores_combined_prompt_without_resend
 - Adjusted 69%/70% boundary, active versus cumulative usage, unknown window, post-compaction rearm, repeated and stale IDs, bounded recent versus older replay pages, same-turn item ordering, background compaction, fresh-thread reset, and rendered hint snapshot: codex-rs/tui/src/chatwidget/tests/context_pressure_tests.rs:context_pressure_hint_starts_at_seventy_percent_of_adjusted_active_usage,replayed_compaction_id_does_not_rearm_but_new_background_item_does,first_compaction_seen_during_navigation_rearms_the_hint,bounded_replay_distinguishes_newer_compaction_from_older_page,cached_low_usage_before_compaction_does_not_rearm,older_replay_page_without_previous_compaction_does_not_rearm,compaction_before_last_hint_does_not_rearm_from_older_page,same_turn_replay_uses_item_cursor_to_reject_old_and_accept_new_compaction
+- Opt-in automatic handoff ignores replayed usage, clears idle candidates when live context drops, and cancels wrap-up after compaction lowers use: codex-rs/tui/src/chatwidget/tests/auto_handoff_tests.rs:automatic_handoff_requires_opt_in_and_live_context_usage,automatic_handoff_candidate_clears_after_live_context_drop,compaction_below_threshold_cancels_automatic_wrap_up
 
 ### login-auth (auth and login behavior)
 
