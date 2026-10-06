@@ -1,0 +1,88 @@
+name: Bazel test platform
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        required: true
+        type: string
+      target:
+        required: true
+        type: string
+
+jobs:
+  test:
+    name: Bazel tests on ${{ inputs.target }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 120
+    environment:
+      name: bazel
+      deployment: false
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Prepare Bazel CI
+        id: prepare_bazel
+        uses: ./.github/actions/prepare-bazel-ci
+        with:
+          target: ${{ inputs.target }}
+          cache-scope: bazel-${{ github.job }}
+
+      - name: Check rusty_v8 MODULE.bazel checksums
+        if: inputs.runner == 'ubuntu-24.04' && inputs.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          python3 .github/scripts/rusty_v8_bazel.py check-module-bazel
+          just test-github-scripts
+
+      - name: Check MODULE.bazel.lock is up to date
+        if: inputs.runner == 'ubuntu-24.04' && inputs.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: ./scripts/check-module-bazel-lock.sh
+
+      - name: bazel test //...
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: |
+          bazel_targets=(
+            //...
+            # Standalone V8 library targets stay out of ordinary Bazel CI.
+            # V8 consumers under `//codex-rs/...` participate transitively.
+            -//third_party/v8:all
+            -//codex-rs/v8-poc:v8-poc-unit-tests
+          )
+          ./.github/scripts/run-bazel-ci.sh \
+            --print-failed-action-summary \
+            --print-failed-test-logs \
+            -- \
+            test \
+            --test_tag_filters=-argument-comment-lint \
+            --test_env=RUST_TEST_THREADS=1 \
+            --test_verbose_timeout_warnings \
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+            -- \
+            "${bazel_targets[@]}"
+
+      - name: Upload Bazel execution logs
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: bazel-execution-logs-test-${{ inputs.target }}
+          path: ${{ runner.temp }}/bazel-execution-logs
+          if-no-files-found: ignore
+
+      - name: Save bazel repository cache
+        if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
+          key: ${{ steps.prepare_bazel.outputs.repository-cache-key }}
+
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree

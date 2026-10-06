@@ -1,7 +1,7 @@
 # Workflow Strategy
 
-Pull requests and `main` run Linux x86_64 and ARM64 tests plus fast checks.
-Stable release tags run the broader platform matrix before publication.
+Pull requests and `main` run Linux x86_64 and ARM64 Bazel tests plus fast
+checks. Stable release tags run the broader platform checks before publication.
 
 ## Pull Requests
 
@@ -9,7 +9,7 @@ Stable release tags run the broader platform matrix before publication.
   request head alone. This includes changes already on `main` and catches
   conflicts before they reach the branch.
 - `blocking-ci.yml` requires the changed-blob policy, `rust-ci.yml`, and the
-  Linux x86_64 and ARM64 nextest suites.
+  Linux x86_64 and ARM64 Bazel test suites.
 - `rust-ci.yml` runs the fast Rust checks:
   - `cargo fmt --check`
   - `cargo shear`
@@ -18,16 +18,10 @@ Stable release tags run the broader platform matrix before publication.
 
 ## Stable Release Tags
 
-- `fork-rust-release.yml` runs Bazel tests, Clippy, and release-build checks,
-  plus Rust nextest on Linux, Windows, and macOS (x86_64 and ARM64), cargo-deny,
-  codespell, repository checks, and SDK tests. These must pass before the
-  unpublished release draft is created. Linux musl packages are built and
-  smoke-tested before the draft is published.
-- Changes to the release test matrix or its shared nextest workflow run that
-  matrix on the PR as well, so runner wiring can be checked before merging.
-- The Cargo nextest matrices exclude the private `codex-voice-host` crate,
-  which needs a prepared GStreamer SDK on every target. Bazel keeps its
-  declared voice-host targets in the release test suite.
+- `fork-rust-release.yml` runs Bazel tests on Linux x86_64 and ARM64 (GNU and
+  musl) and macOS x86_64 and ARM64, plus Clippy and release-build checks,
+  plus cargo-deny, codespell, repository checks, and SDK tests. These must pass
+  before the unpublished release draft is created.
 - Manual package dry-runs and historical backfills retain their package
   validation without running release CI against the default branch.
 

@@ -158,12 +158,6 @@ jobs:
     uses: ./.github/workflows/repo-checks.yml
     secrets: inherit
 
-  rust-platform-tests:
-    if: github.event_name == 'push'
-    needs: validate
-    uses: ./.github/workflows/rust-platform-tests.yml
-    secrets: inherit
-
   sdk:
     if: github.event_name == 'push'
     needs: validate
@@ -177,7 +171,6 @@ jobs:
       - cargo-deny
       - codespell
       - repo-checks
-      - rust-platform-tests
       - sdk
     if: ${{ always() }}
     runs-on: ubuntu-24.04

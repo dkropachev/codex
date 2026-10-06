@@ -47,10 +47,6 @@ on:
         required: false
         default: false
         type: boolean
-      exclude_voice_host:
-        required: false
-        default: false
-        type: boolean
 
 jobs:
   archive:
@@ -68,7 +64,6 @@ jobs:
       USE_SCCACHE: ${{ inputs.use_sccache && 'true' || 'false' }}
       CODEX_CI_PROFILE: ${{ inputs.profile }}
       CODEX_CI_TARGET: ${{ inputs.target }}
-      CODEX_CI_EXCLUDE_VOICE_HOST: ${{ inputs.exclude_voice_host }}
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
       NEXTEST_ARCHIVE_FILE: nextest-${{ inputs.artifact_id }}.tar.zst
@@ -93,11 +88,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           targets: ${{ inputs.target }}
-
-      - name: Configure rusty_v8 artifacts
-        uses: ./.github/actions/setup-rusty-v8
-        with:
-          target: ${{ inputs.target }}
 
       - name: Expose MSVC SDK environment (Windows)
         if: ${{ runner.os == 'Windows' && inputs.target == 'aarch64-pc-windows-msvc' }}
@@ -181,16 +171,11 @@ jobs:
           set -euo pipefail
           archive_dir="${RUNNER_TEMP}/nextest-archive"
           mkdir -p "${archive_dir}"
-          package_args=()
-          if [[ "${CODEX_CI_EXCLUDE_VOICE_HOST}" == "true" ]]; then
-            package_args=(--workspace --exclude codex-voice-host)
-          fi
           cargo nextest archive \
             --target "${CODEX_CI_TARGET}" \
             --cargo-profile "${CODEX_CI_PROFILE}" \
             --timings \
-            --archive-file "${archive_dir}/${NEXTEST_ARCHIVE_FILE}" \
-            "${package_args[@]}"
+            --archive-file "${archive_dir}/${NEXTEST_ARCHIVE_FILE}"
 
       - name: Build runtime test helpers
         if: ${{ runner.os == 'Linux' || runner.os == 'Windows' }}
