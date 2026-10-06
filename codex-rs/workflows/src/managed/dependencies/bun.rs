@@ -185,9 +185,18 @@ pub(in crate::managed) fn materialize_bun_environment(
         .context("failed to create managed Bun cache")?;
     super::install::ensure_regular_directory_tree(management_root, &operations_dir)
         .context("failed to create managed Bun operation root")?;
+    let mut operation_builder = tempfile::Builder::new();
+    operation_builder.prefix("operation-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
 
-    let operation = tempfile::Builder::new()
-        .prefix("operation-")
+        let private = fs::Permissions::from_mode(0o700);
+        fs::set_permissions(operations_dir.as_path(), private.clone())
+            .context("failed to secure managed Bun operation root")?;
+        operation_builder.permissions(private);
+    }
+    let operation = operation_builder
         .tempdir_in(operations_dir.as_path())
         .context("failed to create private managed Bun operation directory")?;
     let operation_root = AbsolutePathBuf::from_absolute_path_checked(operation.path())
