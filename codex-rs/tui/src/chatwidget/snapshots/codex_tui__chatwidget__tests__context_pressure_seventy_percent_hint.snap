@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests/context_pressure_tests.rs
+expression: history_text(&mut rx)
+---
+• Context use has reached 70%. Use /compact to make room here, or /handoff to continue in a fresh thread.

@@ -530,6 +530,7 @@ pub(super) fn handle_token_count(chat: &mut ChatWidget, info: Option<TokenUsageI
                             last: token_usage_breakdown(info.last_token_usage),
                             model_context_window: info.model_context_window,
                         },
+                        usage_after_compaction_item_id: None,
                     },
                 ),
                 /*replay_kind*/ None,

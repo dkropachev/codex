@@ -9913,6 +9913,13 @@ class ThreadTokenUsageUpdatedNotification(BaseModel):
     thread_id: Annotated[str, Field(alias="threadId")]
     token_usage: Annotated[ThreadTokenUsage, Field(alias="tokenUsage")]
     turn_id: Annotated[str, Field(alias="turnId")]
+    usage_after_compaction_item_id: Annotated[
+        str | None,
+        Field(
+            alias="usageAfterCompactionItemId",
+            description="Present on attachment replay when the persisted usage follows this completed item.",
+        ),
+    ] = None
 
 
 class ThreadTurnsListParams(BaseModel):

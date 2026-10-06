@@ -2,7 +2,7 @@
 
 ## Summary
 
-Context management keeps long-running threads usable without allowing one client to replace another client's active work. It defines atomic app-server contracts for standalone compaction and idle-only turn starts, plus a manual TUI handoff to a fresh thread.
+Context management keeps long-running threads usable without allowing one client to replace another client's active work. It defines atomic app-server contracts for standalone compaction and idle-only turn starts, plus a manual TUI handoff to a fresh thread and a passive context-pressure hint.
 
 ## Behavior
 
@@ -11,6 +11,8 @@ Context management keeps long-running threads usable without allowing one client
 `turn/start` retains start-or-steer by default. With `startIfIdle: true`, it starts only on an idle thread and otherwise rejects without recording, queueing, or steering the input. Neither RPC retries a rejected or transport-uncertain submission.
 
 `/handoff` enters a Handoff presentation of Plan mode from an idle, resumable Default-mode thread. It accepts optional `--ask`, `--defer`, and guidance. A completed Plan item owned by the planning turn is eligible only while no later accepted user input has superseded it. Default handoff starts a fresh Default-mode thread and submits only the validated plan as new context; `--ask` offers proceed or stay. `--defer` returns to Default mode with a pending plan; the next model-bound prompt starts a fresh thread with the plan and prompt. Local and shell commands leave the plan pending. The source remains resumable. The full generated prompt obeys the existing 10,000 estimated-token model-context item ceiling. Manual `/compact` retains its explicit compaction meaning.
+
+When the latest active context use first reaches 70% of the adjusted model window, the TUI shows one passive hint recommending both `/compact` and `/handoff`. Cumulative session tokens do not drive the hint, and an unknown or unusable context window does not trigger it. A new compaction item rearms the hint only after active use falls below 70%; repeated notifications and historical replay of the same item do not rearm it. A fresh thread starts a new hint cycle. This hint does not start automatic context management.
 
 ## Entry Points
 
@@ -53,6 +55,22 @@ Context management keeps long-running threads usable without allowing one client
 - The next accepted model-bound prompt triggers one fresh-thread transfer. A failed start restores the prompt; a rejected first destination turn restores the combined prompt without resending it.
 - Commands that would discard a pending Plan require explicit confirmation, including direct App actions outside slash-command dispatch.
 
+### Context Pressure Guidance
+
+#### Entry Points
+
+- [codex-rs/tui/src/chatwidget/context_pressure.rs](../tui/src/chatwidget/context_pressure.rs)
+- [codex-rs/tui/src/token_usage.rs](../tui/src/token_usage.rs)
+
+#### Invariants
+
+- The threshold uses the latest active token usage and the adjusted window, not cumulative session usage or a rounded display percentage.
+- Each thread remembers its last observed compaction item ID across navigation and replay. Only a new item followed by active use below 70% can rearm the hint.
+- History reconstruction keeps the durable ID of modern compaction items; legacy events without an item retain their synthetic IDs.
+- A persisted compaction start without completion does not materialize a completed history item.
+- Attachment usage replay identifies the latest completed compaction item when Core's persisted token count is available; Core recomputes usage before completing each compaction item.
+- The hint is informational and leaves explicit `/compact` and `/handoff` unchanged.
+
 ## Invariants
 
 - Admission is decided inside Core, not from a stale app-server status snapshot, and a losing request cannot abort or steer the winning turn.
@@ -91,6 +109,7 @@ App-server coverage exercises defaults, response correlation, and idle-versus-bu
 - Idle-only turn start accepts idle work and rejects a busy request: codex-rs/app-server/tests/suite/v2/turn_start.rs:turn_start_if_idle_starts_idle_turn_and_rejects_busy_thread
 - Idle-only turn start preserves an empty user turn in Plan mode: codex-rs/app-server/tests/suite/v2/turn_start.rs:turn_start_with_empty_input_runs_model_request
 - Omission preserves start-or-steer behavior: codex-rs/app-server/tests/suite/v2/turn_start.rs:turn_start_defaults_to_start_or_steer_while_active
+- Restored token usage omits compaction correlation when no compaction preceded it: codex-rs/app-server/tests/suite/v2/thread_resume.rs:thread_resume_emits_restored_token_usage_before_next_turn
 
 ### cli (main CLI command behavior)
 
@@ -130,6 +149,7 @@ Component coverage exercises parser, attachments, Plan authority, ask/stay decis
 - Deferred parsing accepts `--defer` and rejects conflicting dispositions: codex-rs/tui/src/handoff_tests.rs:parser_accepts_deferred_handoff_and_rejects_conflicting_dispositions
 - Deferred Plan state, pending and recovery displays, source-input invalidation, local and shell preservation, mode changes, and destructive confirmations: codex-rs/tui/src/chatwidget/tests/plan_handoff_deferred.rs:deferred_plan_waits_for_next_prompt_in_default_mode,shell_command_does_not_consume_deferred_handoff,local_status_command_preserves_deferred_handoff,resume_picker_can_be_opened_without_discarding_deferred_handoff,mode_change_does_not_strand_the_next_deferred_prompt,restored_deferred_transfer_keeps_prompt_in_recovered_queue,accepted_source_input_invalidates_pending_handoff_in_live_and_replay,destructive_commands_confirm_before_discarding_deferred_plan,app_new_session_action_uses_the_same_discard_confirmation,reconnect_restores_pending_plan_without_automatic_transfer,deferred_handoff_waits_for_remote_workspace_image_preparation
 - Deferred fresh transfer, attachment offsets, failure recovery, App discard confirmation, and navigation replay: codex-rs/tui/src/app/tests/plan_handoff_deferred.rs:deferred_handoff_executes_plan_and_followup_in_fresh_thread,deferred_handoff_preserves_followup_image_and_text_element,deferred_start_failure_restores_prompt_and_pending_plan,new_session_event_confirms_before_discarding_deferred_plan,confirmed_inline_handoff_discards_pending_plan_and_preserves_arguments,prompt_edit_requires_confirmation_before_discarding_deferred_plan,deferred_plan_survives_thread_navigation_and_replay,rejected_deferred_execution_restores_combined_prompt_without_resend
+- Adjusted 69%/70% boundary, active versus cumulative usage, unknown window, post-compaction rearm, repeated and stale IDs, bounded recent versus older replay pages, same-turn item ordering, background compaction, fresh-thread reset, and rendered hint snapshot: codex-rs/tui/src/chatwidget/tests/context_pressure_tests.rs:context_pressure_hint_starts_at_seventy_percent_of_adjusted_active_usage,replayed_compaction_id_does_not_rearm_but_new_background_item_does,first_compaction_seen_during_navigation_rearms_the_hint,bounded_replay_distinguishes_newer_compaction_from_older_page,cached_low_usage_before_compaction_does_not_rearm,older_replay_page_without_previous_compaction_does_not_rearm,compaction_before_last_hint_does_not_rearm_from_older_page,same_turn_replay_uses_item_cursor_to_reject_old_and_accept_new_compaction
 
 ### login-auth (auth and login behavior)
 

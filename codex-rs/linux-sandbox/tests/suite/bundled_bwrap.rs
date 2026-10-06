@@ -3,7 +3,6 @@
 use codex_linux_sandbox::BUNDLED_BWRAP_DIGEST_VERIFICATION_FAILURE_EXIT_CODE;
 use codex_protocol::models::PermissionProfile;
 use pretty_assertions::assert_eq;
-use std::path::PathBuf;
 use std::process::Command;
 
 #[test]
@@ -13,11 +12,8 @@ fn bazel_build_rejects_tampered_bundled_bwrap() {
         return;
     }
 
-    let bwrap_runfile =
-        std::env::var("CARGO_BIN_EXE_bwrap").expect("Bazel should provide the bwrap runfile");
-    let runfiles_dir =
-        std::env::var_os("TEST_SRCDIR").expect("Bazel should provide its runfiles directory");
-    let bwrap_binary = PathBuf::from(runfiles_dir).join(bwrap_runfile);
+    let bwrap_binary =
+        codex_utils_cargo_bin::cargo_bin("bwrap").expect("Bazel should provide the bwrap binary");
 
     let original_bwrap_bytes =
         std::fs::read(&bwrap_binary).expect("built bwrap should be readable");
@@ -27,7 +23,9 @@ fn bazel_build_rejects_tampered_bundled_bwrap() {
     std::fs::create_dir(&resources).expect("package resource directory should be created");
 
     let sandbox_binary = package.path().join("codex-linux-sandbox");
-    std::fs::copy(env!("CARGO_BIN_EXE_codex-linux-sandbox"), &sandbox_binary)
+    let original_sandbox = codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
+        .expect("codex-linux-sandbox binary should be available");
+    std::fs::copy(original_sandbox, &sandbox_binary)
         .expect("sandbox binary should be copied into the package");
 
     let bundled_bwrap = resources.join("bwrap");

@@ -466,6 +466,38 @@ fn thread_items_list_round_trips() {
 }
 
 #[test]
+fn token_usage_notification_accepts_older_payload_without_compaction_correlation() {
+    let usage = TokenUsageBreakdown {
+        total_tokens: 1,
+        input_tokens: 1,
+        cached_input_tokens: 0,
+        cache_write_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_output_tokens: 0,
+    };
+    let expected = ThreadTokenUsageUpdatedNotification {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        token_usage: ThreadTokenUsage {
+            total: usage.clone(),
+            last: usage,
+            model_context_window: None,
+        },
+        usage_after_compaction_item_id: None,
+    };
+    let mut value = serde_json::to_value(&expected).expect("serialize notification");
+    value
+        .as_object_mut()
+        .expect("notification object")
+        .remove("usageAfterCompactionItemId");
+    assert_eq!(
+        serde_json::from_value::<ThreadTokenUsageUpdatedNotification>(value)
+            .expect("deserialize older notification"),
+        expected,
+    );
+}
+
+#[test]
 fn thread_list_params_accepts_single_cwd() {
     let params = serde_json::from_value::<ThreadListParams>(json!({
         "cwd": "/workspace",

@@ -75,6 +75,12 @@ fn create_env_from_core_vars() -> HashMap<String, String> {
     create_env(&policy, /*thread_id*/ None)
 }
 
+fn codex_linux_sandbox_exe() -> std::path::PathBuf {
+    let sandbox_program = codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
+        .expect("codex-linux-sandbox binary should be available");
+    sandbox_program.canonicalize().unwrap_or(sandbox_program)
+}
+
 fn strip_proxy_env(env: &mut HashMap<String, String>) {
     for key in PROXY_ENV_KEYS {
         env.remove(*key);
@@ -180,7 +186,7 @@ fn linux_sandbox_command(
     args.push("--".to_string());
     args.extend(command.iter().map(|entry| (*entry).to_string()));
 
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_codex-linux-sandbox"));
+    let mut cmd = Command::new(codex_linux_sandbox_exe());
     cmd.args(args)
         .current_dir(cwd)
         .env_clear()
@@ -329,14 +335,19 @@ async fn unsupported_system_bwrap_falls_back_to_bundled_bwrap() {
 
     let tempdir = tempfile::tempdir().expect("create isolated sandbox installation");
     let sandbox_executable = tempdir.path().join("codex-linux-sandbox");
-    let original_executable = env!("CARGO_BIN_EXE_codex-linux-sandbox");
-    if std::fs::hard_link(original_executable, &sandbox_executable).is_err() {
-        std::fs::copy(original_executable, &sandbox_executable).expect("copy sandbox executable");
+    let original_executable = codex_linux_sandbox_exe();
+    if std::fs::hard_link(&original_executable, &sandbox_executable).is_err() {
+        std::fs::copy(&original_executable, &sandbox_executable).expect("copy sandbox executable");
     }
 
     let resources_dir = tempdir.path().join("codex-resources");
     std::fs::create_dir(&resources_dir).expect("create bundled resource directory");
-    std::os::unix::fs::symlink(&system_bwrap, resources_dir.join("bwrap"))
+    let bundled_bwrap = if option_env!("BAZEL_PACKAGE").is_some() {
+        codex_utils_cargo_bin::cargo_bin("bwrap").expect("Bazel should provide the bwrap binary")
+    } else {
+        system_bwrap
+    };
+    std::os::unix::fs::symlink(&bundled_bwrap, resources_dir.join("bwrap"))
         .expect("install bundled bubblewrap");
 
     let system_dir = tempdir.path().join("system");
@@ -382,6 +393,15 @@ async fn unsupported_system_bwrap_falls_back_to_bundled_bwrap() {
     .await
     .expect("bundled bubblewrap should not time out")
     .expect("sandbox command should execute");
+
+    if !output.status.success()
+        && is_managed_proxy_permission_error(String::from_utf8_lossy(&output.stderr).as_ref())
+    {
+        eprintln!(
+            "skipping bundled bubblewrap fallback test: kernel namespace privileges are unavailable"
+        );
+        return;
+    }
 
     assert_eq!(
         output.status.success(),
@@ -595,7 +615,8 @@ async fn managed_proxy_mode_routes_through_bridge_and_blocks_direct_egress() {
         format!("http://127.0.0.1:{proxy_port}"),
     );
 
-    let sandbox_helper_dir = std::path::Path::new(env!("CARGO_BIN_EXE_codex-linux-sandbox"))
+    let sandbox_executable = codex_linux_sandbox_exe();
+    let sandbox_helper_dir = sandbox_executable
         .parent()
         .expect("sandbox helper should have a parent");
     let file_system_sandbox_policy =

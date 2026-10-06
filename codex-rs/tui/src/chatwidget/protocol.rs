@@ -45,9 +45,22 @@ impl ChatWidget {
         }
         match notification {
             ServerNotification::ThreadTokenUsageUpdated(notification) => {
-                self.set_token_info(Some(token_usage_info_from_app_server(
-                    notification.token_usage,
-                )));
+                let update = if self.token_usage_pending {
+                    context_pressure::UsageUpdate::AttachmentReplay {
+                        turn_id: &notification.turn_id,
+                        after_compaction_item_id: notification
+                            .usage_after_compaction_item_id
+                            .as_deref(),
+                    }
+                } else if replay_kind.is_some() {
+                    context_pressure::UsageUpdate::BufferedServerTurn(&notification.turn_id)
+                } else {
+                    context_pressure::UsageUpdate::LiveServerTurn(&notification.turn_id)
+                };
+                self.apply_token_info(
+                    token_usage_info_from_app_server(notification.token_usage),
+                    update,
+                );
             }
             ServerNotification::ThreadNameUpdated(notification) => {
                 match ThreadId::from_string(&notification.thread_id) {
@@ -96,9 +109,11 @@ impl ChatWidget {
                 self.handle_turn_completed_notification(notification, replay_kind);
             }
             ServerNotification::ItemStarted(notification) => {
+                self.record_context_pressure_item(notification.item.id(), &notification.turn_id);
                 self.handle_item_started_notification(notification, replay_kind);
             }
             ServerNotification::ItemCompleted(notification) => {
+                self.record_context_pressure_item(notification.item.id(), &notification.turn_id);
                 self.handle_item_completed_notification(notification, replay_kind);
             }
             ServerNotification::AgentMessageDelta(notification) => {
@@ -551,6 +566,7 @@ impl ChatWidget {
             ThreadItem::ContextCompaction { id }
                 if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages)) =>
             {
+                self.note_started_context_compaction(&id, &notification.turn_id);
                 // Buffered starts reconstruct an in-flight compaction when switching tasks.
                 let elapsed = if replay_kind == Some(ReplayKind::ThreadSnapshot) {
                     let elapsed_ms = chrono::Utc::now()
@@ -616,6 +632,16 @@ impl ChatWidget {
             ))
         {
             return;
+        }
+        if let ThreadItem::ContextCompaction { id } = &notification.item
+            && !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages))
+        {
+            let observation = if replay_kind.is_some() {
+                context_pressure::CompactionObservation::BufferedReplay
+            } else {
+                context_pressure::CompactionObservation::Live
+            };
+            self.observe_completed_context_compaction(id, &notification.turn_id, observation);
         }
         // Buffered live notifications can introduce questions; historical turn replay cannot.
         if replay_kind == Some(ReplayKind::ThreadSnapshot)
