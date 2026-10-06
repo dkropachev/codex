@@ -23,6 +23,8 @@ const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 #[cfg(unix)]
 const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
 const LOCK_FILENAME: &str = ".lock";
+// The TUI reconstructs large widgets on this thread while other async dispatch frames are live.
+const MAIN_THREAD_STACK_SIZE_BYTES: usize = THREAD_STACK_SIZE_BYTES + THREAD_STACK_SIZE_BYTES / 2;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Arg0DispatchPaths {
@@ -230,12 +232,11 @@ where
     let path_entry_guard = arg0_dispatch();
     let current_exe = std::env::current_exe().ok();
 
-    // Regular invocation. Run the async entry point on a thread with the same
-    // stack budget as Tokio workers; `Runtime::block_on` otherwise runs the
-    // top-level future on the caller's OS stack.
+    // Regular invocation. `Runtime::block_on` runs the top-level future on this
+    // thread, where nested TUI thread transitions need more stack than workers.
     let handle = std::thread::Builder::new()
         .name("codex-main".to_string())
-        .stack_size(THREAD_STACK_SIZE_BYTES)
+        .stack_size(MAIN_THREAD_STACK_SIZE_BYTES)
         .spawn(move || {
             let runtime = build_runtime()?;
             runtime.block_on(run_main_with_arg0_guard(

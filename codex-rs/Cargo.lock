@@ -2223,6 +2223,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "codex-agent-extension",
  "codex-analytics",
  "codex-app-server-protocol",
  "codex-app-server-transport",
@@ -3627,11 +3628,13 @@ dependencies = [
  "regex",
  "schemars 0.8.22",
  "serde",
+ "serde_json",
  "similar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "ts-rs",
+ "url",
  "walkdir",
 ]
 
@@ -4379,15 +4382,19 @@ dependencies = [
 name = "codex-prompts"
 version = "0.156.1"
 dependencies = [
+ "anyhow",
  "codex-collaboration-mode-templates",
  "codex-context-fragments",
  "codex-execpolicy",
+ "codex-git-utils",
  "codex-guardian-context",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-output-truncation",
+ "codex-utils-path-uri",
  "codex-utils-template",
  "pretty_assertions",
+ "tokio",
  "tracing",
 ]
 

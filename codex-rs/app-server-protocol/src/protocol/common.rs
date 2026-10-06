@@ -1107,6 +1107,17 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadRealtimeListVoicesResponse,
     },
+    ReviewStart => "review/start" {
+        params: v2::ReviewStartParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ReviewStartResponse,
+    },
+    ReviewResolveScope => "review/resolveScope" {
+        params: v2::ReviewResolveScopeParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ReviewResolveScopeResponse,
+    },
+
     ModelList => "model/list" {
         params: v2::ModelListParams,
         serialization: None,

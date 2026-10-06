@@ -415,7 +415,7 @@ async fn migration_publishes_canonical_projected_history_and_is_idempotent() {
 }
 
 #[tokio::test]
-async fn migration_retires_review_records_and_normalizes_review_subagent_metadata() {
+async fn migration_restores_review_subagent_metadata() {
     let home = TempDir::new().expect("create Codex home");
     let thread_id = ThreadId::new();
     let path = write_rollout(
@@ -472,7 +472,7 @@ async fn migration_retires_review_records_and_normalizes_review_subagent_metadat
         &lines[0].item,
         RolloutItem::SessionMeta(metadata)
             if metadata.meta.source
-                == SessionSource::SubAgent(SubAgentSource::Other("review".to_string()))
+                == SessionSource::SubAgent(SubAgentSource::Review)
     ));
     let migrated = fs::read_to_string(path).expect("read migrated rollout");
     for retired_type in [
@@ -486,7 +486,7 @@ async fn migration_retires_review_records_and_normalizes_review_subagent_metadat
 }
 
 #[tokio::test]
-async fn migration_retires_review_lifecycle_but_preserves_review_messages() {
+async fn migration_preserves_review_lifecycle_and_messages() {
     let home = TempDir::new().expect("create Codex home");
     let thread_id = ThreadId::new();
     let path = write_rollout(
@@ -634,9 +634,9 @@ async fn migration_retires_review_lifecycle_but_preserves_review_messages() {
         assert!(migrated.contains(retained), "missing {retained}");
     }
     assert_eq!(migrated.matches("ordinary repeated prompt").count(), 2);
-    assert_eq!(migrated.matches(review_prompt).count(), 1);
-    for retired in ["review-marker", "review_ended"] {
-        assert!(!migrated.contains(retired), "retained {retired}");
+    assert_eq!(migrated.matches(review_prompt).count(), 3);
+    for retained in ["review-marker", "review_ended"] {
+        assert!(migrated.contains(retained), "missing {retained}");
     }
     let review_child = list_active_summary_turns(&store, thread_id)
         .await

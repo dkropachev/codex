@@ -632,6 +632,12 @@
             }
           ]
         },
+        "review_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "sandbox_mode": {
           "anyOf": [
             {

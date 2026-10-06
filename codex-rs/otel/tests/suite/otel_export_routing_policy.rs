@@ -305,7 +305,7 @@ fn otel_export_routing_policy_routes_tool_result_log_and_trace_events() {
                 agent_role: None,
             }),
         );
-        let unnamed = make_manager(unnamed_id, SessionSource::SubAgent(SubAgentSource::Compact));
+        let unnamed = make_manager(unnamed_id, SessionSource::SubAgent(SubAgentSource::Review));
         for (manager, name, error) in [
             (&manager, "root_failure", "failure"),
             (&legacy, "legacy_failure", output.as_str()),

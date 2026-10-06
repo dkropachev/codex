@@ -984,7 +984,9 @@ pub(crate) async fn apply_bespoke_event_handling(
         | EventMsg::CollabResumeEnd(_)
         | EventMsg::SubAgentActivity(_)
         | EventMsg::ExecCommandBegin(_)
-        | EventMsg::ExecCommandEnd(_) => {
+        | EventMsg::ExecCommandEnd(_)
+        | EventMsg::EnteredReviewMode(_)
+        | EventMsg::ExitedReviewMode(_) => {
             // Deprecated item lifecycle events are still fanned out for raw-event and rollout
             // compatibility consumers.
             // App-server v2 receives TurnItem lifecycle instead, and dispatches dynamic tool

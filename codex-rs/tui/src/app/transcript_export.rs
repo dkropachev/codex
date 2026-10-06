@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::Turn;
 use codex_protocol::ThreadId;
 use codex_protocol::models::local_image_label_text;
 
@@ -114,7 +115,7 @@ pub(super) async fn load_export_transcript(
         }
     }
     let mut cells: Vec<Arc<dyn HistoryCell>> = Vec::new();
-    for item in thread.turns.into_iter().flat_map(|turn| turn.items) {
+    for item in visible_export_items(thread.turns) {
         if let Some(cell) = export_activity_cell(&item) {
             cells.push(Arc::new(cell));
         } else {
@@ -191,6 +192,31 @@ fn export_activity_cell(item: &ThreadItem) -> Option<PlainHistoryCell> {
         _ => return None,
     };
     Some(PlainHistoryCell::new(lines))
+}
+
+fn visible_export_items(turns: Vec<Turn>) -> Vec<ThreadItem> {
+    let mut visible = Vec::new();
+    let mut review_mode = false;
+    let mut previous_turn = None;
+
+    for turn in turns {
+        let hidden_nested_review_turn = previous_turn.as_ref().is_some_and(|previous| {
+            crate::app_backtrack::is_hidden_nested_review_turn(previous, &turn)
+        });
+        for item in turn.items.iter().cloned() {
+            match item {
+                ThreadItem::EnteredReviewMode { .. } | ThreadItem::ExitedReviewMode { .. } => {
+                    review_mode = matches!(item, ThreadItem::EnteredReviewMode { .. });
+                    visible.push(item);
+                }
+                ThreadItem::UserMessage { .. } if review_mode || hidden_nested_review_turn => {}
+                _ => visible.push(item),
+            }
+        }
+        previous_turn = Some(turn);
+    }
+
+    visible
 }
 
 fn render_markdown_transcript(cells: &[Arc<dyn HistoryCell>]) -> Result<String, String> {

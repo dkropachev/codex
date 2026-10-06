@@ -569,6 +569,32 @@ pub(crate) fn backtrack_revert_before_turn_id(
     bail!("the selected prompt was not found in the persisted thread")
 }
 
+/// Detects a reconstructed inline-review child with duplicate prompt inputs.
+pub(crate) fn is_hidden_nested_review_turn(previous: &Turn, turn: &Turn) -> bool {
+    if previous.status != TurnStatus::Completed
+        || turn.status != TurnStatus::Interrupted
+        || turn.completed_at.is_some()
+        || !previous
+            .items
+            .iter()
+            .any(|item| matches!(item, ThreadItem::EnteredReviewMode { .. }))
+        || !previous
+            .items
+            .iter()
+            .any(|item| matches!(item, ThreadItem::ExitedReviewMode { .. }))
+    {
+        return false;
+    }
+    let mut user_messages = turn.items.iter().filter_map(|item| match item {
+        ThreadItem::UserMessage { content, .. } => Some(content),
+        _ => None,
+    });
+    matches!(
+        (user_messages.next(), user_messages.next(), user_messages.next()),
+        (Some(first), Some(second), None) if first == second
+    )
+}
+
 pub(crate) fn user_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> usize {
     user_positions_iter(cells).count()
 }

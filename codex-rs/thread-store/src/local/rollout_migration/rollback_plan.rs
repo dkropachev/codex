@@ -480,6 +480,8 @@ fn explicit_event_turn_id(event: &EventMsg) -> Option<&str> {
         EventMsg::ExecCommandEnd(event) => Some(event.turn_id.as_str()),
         EventMsg::PatchApplyEnd(event) => Some(event.turn_id.as_str()),
         EventMsg::DynamicToolCallResponse(event) => Some(event.turn_id.as_str()),
+        EventMsg::EnteredReviewMode(event) => event.turn_id.as_deref(),
+        EventMsg::ExitedReviewMode(event) => event.turn_id.as_deref(),
         _ => None,
     }
     .filter(|turn_id| !turn_id.is_empty())

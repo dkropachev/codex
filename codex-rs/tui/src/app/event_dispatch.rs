@@ -2973,6 +2973,21 @@ impl App {
                     self.chat_widget.open_approvals_popup();
                 }
             }
+            AppEvent::OpenReviewBranchPicker { thread_id, cwd } => {
+                self.chat_widget.show_review_branch_picker(thread_id, &cwd);
+            }
+            AppEvent::OpenReviewCommitPicker { thread_id, cwd } => {
+                self.chat_widget.show_review_commit_picker(thread_id, &cwd);
+            }
+            AppEvent::OpenReviewCustomPrompt { thread_id, cwd } => {
+                self.chat_widget.show_review_custom_prompt(thread_id, &cwd);
+            }
+            AppEvent::ReviewScopesResolved { request_id, cwd, resolution } => {
+                self.chat_widget.apply_review_scope_resolution(request_id, cwd, resolution);
+            }
+            AppEvent::StartReportReview { thread_id, cwd, target } => {
+                self.chat_widget.start_review_for_thread(thread_id, cwd, target);
+            }
             AppEvent::SubmitUserMessageWithMode {
                 text,
                 collaboration_mode,

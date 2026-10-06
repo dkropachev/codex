@@ -187,7 +187,7 @@ async fn migrates_legacy_review_subagent_on_startup() {
     assert_eq!(metadata.history_mode, ThreadHistoryMode::Paginated);
     assert_eq!(
         metadata.source,
-        SessionSource::SubAgent(SubAgentSource::Other("review".to_string()))
+        SessionSource::SubAgent(SubAgentSource::Review)
     );
 }
 

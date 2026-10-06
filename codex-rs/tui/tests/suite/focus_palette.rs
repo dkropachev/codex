@@ -503,7 +503,11 @@ impl PtyCodex {
                 return Ok(());
             }
             if let Some(status) = self.child.try_wait()? {
-                bail!("Codex exited while waiting for {text:?} ({status})");
+                let tail = &self.output[self.output.len().saturating_sub(/*rhs*/ 2048)..];
+                bail!(
+                    "Codex exited while waiting for {text:?} ({status}); output tail:\n{}",
+                    String::from_utf8_lossy(tail)
+                );
             }
         }
         bail!("missing {text:?}; screen:\n{}", self.screen_contents())

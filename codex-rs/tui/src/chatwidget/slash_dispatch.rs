@@ -271,6 +271,7 @@ impl ChatWidget {
     fn slash_command_blocked_by_active_task(&self, cmd: SlashCommand) -> bool {
         (!cmd.available_during_task()
             && (self.turn_lifecycle.agent_turn_running
+                || self.review.is_review_mode
                 || (self.bottom_pane.is_task_running()
                     && (self.mcp_startup_status.is_none()
                         || self.input_queue.user_turn_pending_start))))
@@ -298,6 +299,14 @@ impl ChatWidget {
                 self.bottom_pane.drain_pending_submission_state();
             }
             self.request_redraw();
+            return;
+        }
+        if matches!(cmd, SlashCommand::Side | SlashCommand::Btw) && self.review.is_review_mode {
+            self.add_error_message(format!(
+                "'/{}' is unavailable while code review is running.",
+                cmd.command()
+            ));
+            self.bottom_pane.drain_pending_submission_state();
             return;
         }
         if self.confirm_deferred_discard_if_needed(DeferredDiscardAction::Command(cmd)) {
@@ -426,6 +435,12 @@ impl ChatWidget {
                 );
                 self.input_queue.user_turn_pending_start = true;
                 self.app_event_tx.compact();
+            }
+            SlashCommand::Review => {
+                self.open_review_popup();
+                if self.mcp_startup_status.is_some() {
+                    self.defer_input_until_settings_applied();
+                }
             }
             SlashCommand::Handoff => {
                 self.dispatch_prepared_command_with_args(
@@ -1207,6 +1222,13 @@ impl ChatWidget {
                 );
                 self.request_side_conversation(parent_thread_id, Some(user_message));
             }
+            SlashCommand::Review if !trimmed.is_empty() => {
+                self.app_event_tx.send(AppEvent::StartReportReview {
+                    thread_id: self.thread_id,
+                    cwd: self.config.cwd.to_path_buf(),
+                    target: codex_app_server_protocol::ReviewTarget::Custom { instructions: args },
+                });
+            }
             SlashCommand::Resume if !trimmed.is_empty() => {
                 self.app_event_tx
                     .send(AppEvent::ResumeSessionByIdOrName(args));
@@ -1460,6 +1482,7 @@ impl ChatWidget {
             | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact
+            | SlashCommand::Review
             | SlashCommand::Model
             | SlashCommand::Plan
             | SlashCommand::Handoff

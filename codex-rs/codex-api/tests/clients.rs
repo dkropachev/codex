@@ -579,7 +579,7 @@ async fn azure_store_sends_ids_and_headers() -> Result<()> {
             ResponsesOptions {
                 session_id: Some("sess_123".into()),
                 thread_id: Some("thread_123".into()),
-                session_source: Some(SessionSource::SubAgent(SubAgentSource::Compact)),
+                session_source: Some(SessionSource::SubAgent(SubAgentSource::Review)),
                 extra_headers,
                 compression: Compression::None,
                 turn_state: None,
@@ -609,7 +609,7 @@ async fn azure_store_sends_ids_and_headers() -> Result<()> {
         req.headers
             .get("x-openai-subagent")
             .and_then(|v| v.to_str().ok()),
-        Some("compact")
+        Some("review")
     );
     assert_eq!(
         req.headers

@@ -116,16 +116,6 @@ fn delayed_enter_after_typing_submits() {
 }
 
 #[test]
-fn enter_with_empty_prompt_does_not_submit() {
-    let (mut view, submitted_rx) = custom_prompt_view();
-
-    view.handle_key_event(KeyEvent::from(KeyCode::Enter));
-
-    assert!(submitted_rx.try_recv().is_err());
-    assert!(!view.is_complete());
-}
-
-#[test]
 fn vim_insert_escape_clears_paste_burst_before_enter() {
     let (mut view, submitted_rx) = custom_prompt_view();
     let now = Instant::now();

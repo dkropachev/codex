@@ -422,6 +422,14 @@ impl ChatWidget {
                     item.saved_path,
                 );
             }
+            ThreadItem::EnteredReviewMode { review, .. } => {
+                if from_replay {
+                    self.enter_review_mode_with_hint(review, /*from_replay*/ true);
+                }
+            }
+            ThreadItem::ExitedReviewMode { .. } => {
+                self.exit_review_mode_after_item();
+            }
             ThreadItem::ContextCompaction { id } => {
                 self.on_context_compaction_completed(&id, from_replay);
             }

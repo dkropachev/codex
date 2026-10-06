@@ -556,6 +556,10 @@ pub(super) async fn submission_loop(sess: Arc<Session>, rx_sub: Receiver<Submiss
                     standalone_compact::run(&sess, sub.id.clone()).await;
                     false
                 }
+                Op::Review { review_request } => {
+                    super::review::review(&sess, sub.id.clone(), review_request).await;
+                    false
+                }
                 Op::CompactIfIdle { source, reply } => {
                     let outcome =
                         standalone_compact::run_if_idle(&sess, sub.id.clone(), source).await;

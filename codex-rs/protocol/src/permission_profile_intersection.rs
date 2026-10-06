@@ -213,6 +213,9 @@ pub fn intersect_effective_permission_profiles(
     paths.dedup();
     denies.sort_by_cached_key(|entry| format!("{:?}", entry.path));
     let mut intersection = FileSystemSandboxPolicy::restricted(denies);
+    if let Some(temp) = common_temp {
+        intersection.entries.push(temp);
+    }
     intersection.glob_scan_max_depth = glob_depth.flatten();
     let intersection_denies = ReadDenyMatcher::try_new_for_local_paths(&intersection, cwd)
         .map_err(PermissionIntersectionError::UnsupportedPath)?;
@@ -262,9 +265,6 @@ pub fn intersect_effective_permission_profiles(
         if !intersection.entries.contains(&entry) {
             intersection.entries.push(entry);
         }
-    }
-    if let Some(temp) = common_temp {
-        intersection.entries.push(temp);
     }
     Ok(PermissionProfile::from_runtime_permissions(
         &intersection,

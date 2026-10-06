@@ -63,6 +63,7 @@ pub(super) const fn default_enabled() -> bool {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum NonSteerableTurnKind {
+    Review,
     Compact,
 }
 
@@ -110,7 +111,7 @@ pub enum CodexErrorInfo {
         http_status_code: Option<u16>,
     },
     /// Returned when `turn/start` or `turn/steer` is submitted while the current active turn
-    /// cannot accept same-turn steering, for example manual `/compact`.
+    /// cannot accept same-turn steering, for example `/review` or manual `/compact`.
     ActiveTurnNotSteerable {
         #[serde(rename = "turnKind")]
         #[ts(rename = "turnKind")]
@@ -162,6 +163,7 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
 impl From<CoreNonSteerableTurnKind> for NonSteerableTurnKind {
     fn from(value: CoreNonSteerableTurnKind) -> Self {
         match value {
+            CoreNonSteerableTurnKind::Review => Self::Review,
             CoreNonSteerableTurnKind::Compact => Self::Compact,
         }
     }

@@ -950,7 +950,10 @@ async fn steer_only_enforces_expected_turn_id() {
 
 #[tokio::test]
 async fn rejects_non_regular_turns() {
-    for (task_kind, turn_kind) in [(TaskKind::Compact, NonSteerableTurnKind::Compact)] {
+    for (task_kind, turn_kind) in [
+        (TaskKind::Review, NonSteerableTurnKind::Review),
+        (TaskKind::Compact, NonSteerableTurnKind::Compact),
+    ] {
         let (session, incoming_turn_context, _rx) = make_session_and_context_with_rx().await;
         incoming_turn_context
             .turn_metadata_state

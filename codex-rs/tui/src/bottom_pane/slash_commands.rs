@@ -396,13 +396,13 @@ mod tests {
     fn side_conversation_exact_lookup_still_resolves_hidden_commands_for_dispatch_error() {
         assert_eq!(
             find_builtin_command(
-                "rename",
+                "review",
                 BuiltinCommandFlags {
                     side_conversation_active: true,
                     ..all_enabled_flags()
                 },
             ),
-            Some(SlashCommand::Rename)
+            Some(SlashCommand::Review)
         );
     }
 

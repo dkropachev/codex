@@ -425,6 +425,7 @@ impl ChatWidget {
         notification: TurnCompletedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        self.clear_pending_review();
         // User-message dedupe only suppresses the app-server echo of a prompt
         // this TUI already rendered locally. Once that turn ends, another
         // client can submit the same text and it still needs its own user cell.
@@ -535,6 +536,9 @@ impl ChatWidget {
     ) {
         self.restore_realtime_transcripts_before_turn(&notification.turn_id);
         match notification.item {
+            ThreadItem::EnteredReviewMode { review, .. } => {
+                self.enter_review_mode_with_hint(review, replay_kind.is_some());
+            }
             ThreadItem::UserMessage { content, .. } if replay_kind.is_none() => {
                 self.note_realtime_user_item_started(&notification.turn_id, &content);
             }

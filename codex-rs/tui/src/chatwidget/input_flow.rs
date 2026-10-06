@@ -339,6 +339,8 @@ impl ChatWidget {
         self.pending_image_submission.is_some()
             || self.input_queue.user_turn_pending_start
             || self.turn_lifecycle.agent_turn_running
+            || self.review.is_review_mode
+            || self.review.pending_review
             || (self.bottom_pane.is_task_running() && self.mcp_startup_status.is_none())
     }
 

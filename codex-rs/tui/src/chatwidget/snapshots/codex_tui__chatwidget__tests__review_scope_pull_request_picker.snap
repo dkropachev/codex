@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests/review_flow.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Select a review scope
+
+
+› 1. Review pull request #314    Open PR into main
+  2. Review uncommitted changes
+  3. Choose a base branch        Select a specific branch
+  4. Review a commit
+  5. Custom review instructions
+
+  enter select · esc back

@@ -1684,7 +1684,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         })
         .await
         .expect("start first thread");
-    let second_session_source = SessionSource::SubAgent(SubAgentSource::Compact);
+    let second_session_source = SessionSource::SubAgent(SubAgentSource::Review);
     let second_thread = manager
         .start_thread(StartThreadOptions {
             environments: Some(Vec::new()),

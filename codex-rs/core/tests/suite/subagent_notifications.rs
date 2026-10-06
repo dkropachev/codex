@@ -901,7 +901,7 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
     let internal_thread = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            session_source: Some(SessionSource::SubAgent(SubAgentSource::Compact)),
+            session_source: Some(SessionSource::SubAgent(SubAgentSource::Review)),
             environments: Some(Vec::new()),
             ..StartThreadOptions::new(test.config.clone())
         })

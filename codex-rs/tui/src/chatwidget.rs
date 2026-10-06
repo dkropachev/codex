@@ -425,6 +425,10 @@ mod reasoning_shortcuts;
 use self::realtime::RealtimeConversationUiState;
 mod rendering;
 mod replay;
+mod review;
+mod review_popups;
+use self::review::ReviewState;
+use crate::review_scope::SharedReviewScopeResolver;
 mod safety_buffering;
 mod service_tiers;
 mod settings;
@@ -526,6 +530,7 @@ pub(crate) struct ChatWidgetInit {
     /// Tests that do not exercise git status-line refreshes may leave this unset. Production TUI
     /// construction provides a runner for the active app-server session.
     pub(crate) workspace_command_runner: Option<WorkspaceCommandRunner>,
+    pub(crate) review_scope_resolver: Option<SharedReviewScopeResolver>,
     pub(crate) initial_user_message: Option<UserMessage>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) has_chatgpt_account: bool,
@@ -699,6 +704,7 @@ pub(crate) struct ChatWidget {
     // Preserves reasoning-summary part boundaries for transcript-only recording.
     reasoning_summary_parts: Vec<String>,
     status_state: StatusState,
+    review: ReviewState,
     recent_auto_review_denials: auto_review_denials::RecentAutoReviewDenials,
     // Active hook runs render in a dedicated live cell so they can run alongside tools.
     active_hook_cell: Option<HookCell>,
@@ -767,6 +773,7 @@ pub(crate) struct ChatWidget {
     current_cwd: Option<PathBuf>,
     // App-server-backed command runner for status-line workspace metadata lookups.
     workspace_command_runner: Option<WorkspaceCommandRunner>,
+    review_scope_resolver: Option<SharedReviewScopeResolver>,
     // Instruction source files loaded for the current session, supplied by app-server.
     instruction_source_paths: Vec<PathUri>,
     // Runtime network proxy bind addresses from SessionConfigured.
@@ -1329,6 +1336,9 @@ impl ChatWidget {
         }
         let display = Self::user_message_display_from_inputs(items);
         if from_replay {
+            if self.review.is_review_mode {
+                return;
+            }
             self.bottom_pane
                 .record_replayed_user_message_history(HistoryEntry {
                     text: display.message.clone(),
@@ -1372,7 +1382,9 @@ impl ChatWidget {
                 );
                 self.on_user_message_display(display);
             }
-        } else if self.last_rendered_user_message_display.as_ref() != Some(&display) {
+        } else if !self.review.is_review_mode
+            && self.last_rendered_user_message_display.as_ref() != Some(&display)
+        {
             self.on_user_message_display(display);
         }
     }

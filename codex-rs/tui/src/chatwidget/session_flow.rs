@@ -112,6 +112,7 @@ impl ChatWidget {
             self.clear_thread_usage_state();
         }
         self.turn_lifecycle.reset_thread();
+        self.review.reset_for_thread_change();
         self.clear_safety_buffering();
         self.thread_name = session.thread_name.clone();
         self.current_goal_status_indicator = None;
@@ -348,6 +349,7 @@ impl ChatWidget {
             /*last_agent_message*/ None, /*completion*/ None, /*from_replay*/ true,
         );
         self.turn_lifecycle.reset_thread();
+        self.review.reset_for_thread_change();
         self.recent_auto_review_denials = Default::default();
         self.transcript.take_active_cell();
         self.transcript.reset_copy_history();
