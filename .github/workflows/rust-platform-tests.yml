@@ -1,0 +1,47 @@
+name: rust-platform-tests
+
+# The release tag calls this before creating its draft. Workflow dispatch lets
+# maintainers exercise the same platform matrix against a branch before a tag.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: Rust tests — ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            artifact_id: release-linux-x64
+            remote_env: true
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact_id: release-linux-arm64
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            artifact_id: release-windows-x64
+          - runner: windows-11-arm
+            archive_runner: windows-2025
+            target: aarch64-pc-windows-msvc
+            artifact_id: release-windows-arm64
+            test_threads: 8
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            artifact_id: release-macos-x64
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            artifact_id: release-macos-arm64
+    uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
+    with:
+      runner: ${{ matrix.runner }}
+      archive_runner: ${{ matrix.archive_runner || '' }}
+      target: ${{ matrix.target }}
+      profile: ci-test
+      artifact_id: ${{ matrix.artifact_id }}
+      remote_env: ${{ matrix.remote_env || false }}
+      test_threads: ${{ matrix.test_threads || 0 }}
+      use_sccache: true
+    secrets: inherit
