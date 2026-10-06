@@ -14,6 +14,11 @@ impl ChatWidget {
 
     pub(in crate::chatwidget) fn fail_deferred_mode_update(&mut self) {
         if let Some(pending) = self.handoff_state.pending.take() {
+            HandoffTelemetryEvent::Failure {
+                trigger: HandoffTrigger::Manual,
+                reason: HandoffTelemetryFailure::ModeUnavailable,
+            }
+            .record(&self.session_telemetry);
             if let Some(user_message) = pending.in_flight {
                 self.restore_user_message_to_composer(user_message);
             }
@@ -31,6 +36,11 @@ impl ChatWidget {
 
     pub(in crate::chatwidget) fn restore_rejected_deferred_execution_prompt(&mut self) {
         if let Some(user_message) = self.handoff_state.recoverable_execution_prompt.take() {
+            HandoffTelemetryEvent::Failure {
+                trigger: HandoffTrigger::Manual,
+                reason: HandoffTelemetryFailure::TurnFailed,
+            }
+            .record(&self.session_telemetry);
             self.restore_user_message_to_composer(*user_message);
             self.add_info_message(
                 "The fresh handoff turn was rejected.".to_string(),
@@ -187,6 +197,8 @@ impl ChatWidget {
         }
         self.refresh_deferred_footer();
         if !from_replay {
+            HandoffTelemetryEvent::Cancellation(HandoffTrigger::Manual)
+                .record(&self.session_telemetry);
             self.add_info_message(
                 "The deferred handoff plan was superseded by new source input.".to_string(),
                 Some("Run /handoff --defer again to prepare a current plan.".to_string()),
@@ -273,6 +285,7 @@ impl ChatWidget {
         {
             self.restore_user_message_to_composer(user_message);
         }
+        HandoffTelemetryEvent::Cancellation(HandoffTrigger::Manual).record(&self.session_telemetry);
         self.refresh_deferred_footer();
         self.add_info_message(
             "Deferred handoff plan discarded.".to_string(),

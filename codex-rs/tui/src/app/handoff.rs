@@ -5,6 +5,9 @@ use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::chatwidget::UserMessage;
 use crate::handoff::HandoffPlan;
+use crate::handoff::HandoffTelemetryEvent;
+use crate::handoff::HandoffTelemetryFailure;
+use crate::handoff::HandoffTrigger;
 
 pub(super) enum HandoffTransferKind {
     Proceed,
@@ -161,6 +164,17 @@ impl App {
             plan,
             kind,
         } = request;
+        let trigger = match &kind {
+            HandoffTransferKind::Proceed => self
+                .chat_widget
+                .active_handoff_trigger()
+                .unwrap_or(HandoffTrigger::Manual),
+            HandoffTransferKind::Deferred { .. } => HandoffTrigger::Manual,
+        };
+        let telemetry = self.session_telemetry.clone();
+        let record_failure = |reason| {
+            HandoffTelemetryEvent::Failure { trigger, reason }.record(&telemetry);
+        };
         if self.current_displayed_thread_id() != Some(source_thread_id)
             || self.overlay.is_some()
             || self.agent_navigation.is_parent_owned(source_thread_id)
@@ -169,6 +183,7 @@ impl App {
             || !kind.is_locally_safe(&self.chat_widget, source_thread_id, generation, &plan)
             || self.reject_pending_permission_root_switch()
         {
+            record_failure(HandoffTelemetryFailure::SourceChanged);
             if kind.is_current_transaction(&self.chat_widget, source_thread_id, generation) {
                 self.chat_widget.add_info_message(
                     "Handoff transfer paused because the source thread is no longer safely idle."
@@ -182,6 +197,7 @@ impl App {
         let plan = match HandoffPlan::new(plan) {
             Ok(plan) => plan,
             Err(error) => {
+                record_failure(HandoffTelemetryFailure::InvalidPlan);
                 self.chat_widget.add_error_message(error.to_string());
                 kind.rollback(&mut self.chat_widget, generation);
                 return Ok(());
@@ -190,6 +206,7 @@ impl App {
         let initial_user_message = match kind.initial_user_message(&plan) {
             Ok(message) => message,
             Err(error) => {
+                record_failure(HandoffTelemetryFailure::InvalidPlan);
                 self.chat_widget.add_error_message(error.to_string());
                 kind.rollback(&mut self.chat_widget, generation);
                 return Ok(());
@@ -203,6 +220,7 @@ impl App {
         {
             Ok(revision) if revision.matches_plan_turn(&plan_turn_id) => revision,
             _ => {
+                record_failure(HandoffTelemetryFailure::SourceChanged);
                 self.chat_widget.add_info_message(
                     "Handoff transfer paused because the source Plan could not be verified."
                         .to_string(),
@@ -223,6 +241,7 @@ impl App {
         let mut config = match self.load_new_session_config(app_server).await {
             Ok(config) => config,
             Err(error) => {
+                record_failure(HandoffTelemetryFailure::ThreadStart);
                 self.chat_widget.add_error_message(format!(
                     "Failed to prepare the fresh handoff thread: {error}. The source thread remains resumable."
                 ));
@@ -257,6 +276,7 @@ impl App {
         {
             Ok(started) => started,
             Err(error) => {
+                record_failure(HandoffTelemetryFailure::ThreadStart);
                 self.chat_widget.add_error_message(format!(
                     "Failed to start the fresh handoff thread: {error}. The source thread remains resumable."
                 ));
@@ -278,6 +298,7 @@ impl App {
                     && revision.event_latest_turn_id == source_revision.event_latest_turn_id
             });
         if !source_is_current {
+            record_failure(HandoffTelemetryFailure::SourceChanged);
             self.chat_widget.add_info_message(
                 "Handoff transfer paused because the source Plan could not be verified after preparation."
                     .to_string(),
@@ -301,6 +322,7 @@ impl App {
             )
             .await
         {
+            record_failure(HandoffTelemetryFailure::ThreadStart);
             if self.current_displayed_thread_id() == Some(source_thread_id)
                 && self.active_thread_id == Some(source_thread_id)
             {
@@ -318,6 +340,7 @@ impl App {
             self.chat_widget
                 .mark_deferred_execution_prompt(user_message);
         }
+        HandoffTelemetryEvent::Completion(trigger).record(&telemetry);
         tui.frame_requester().schedule_frame();
         Ok(())
     }

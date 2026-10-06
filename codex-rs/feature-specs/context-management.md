@@ -16,6 +16,8 @@ When the latest active context use first reaches 70% of the adjusted model windo
 
 Automatic handoff is disabled unless `[tui].auto_handoff_threshold_percent` is set to a value from 71 through 85. A live Default-mode turn at or above that adjusted active-context threshold may start automation after it completes. Replayed usage alone never starts it. The primary thread must be idle and free of queued input, pending interactions, active goals, and active descendants. Automation first submits a visible wrap-up turn, then uses the existing Handoff-mode planner and verified fresh-thread transfer. A failed or interrupted step leaves the source thread in place and does not immediately retry.
 
+Handoff lifecycle counters record trigger, selected disposition, completion, cancellation, and failure with fixed labels. No prompt, plan, guidance, filename, or other user-authored text is a counter name or attribute.
+
 ## Entry Points
 
 - [codex-rs/protocol/src/turn_input.rs](../protocol/src/turn_input.rs)
@@ -23,10 +25,24 @@ Automatic handoff is disabled unless `[tui].auto_handoff_threshold_percent` is s
 - [codex-rs/app-server-protocol/src/protocol/v2/thread.rs](../app-server-protocol/src/protocol/v2/thread.rs)
 - [codex-rs/app-server/src/request_processors/thread_processor.rs](../app-server/src/request_processors/thread_processor.rs)
 - [codex-rs/tui/src/handoff.rs](../tui/src/handoff.rs)
+- [codex-rs/tui/src/handoff/telemetry.rs](../tui/src/handoff/telemetry.rs)
 - [codex-rs/tui/src/chatwidget/handoff.rs](../tui/src/chatwidget/handoff.rs)
 - [codex-rs/tui/src/app/handoff.rs](../tui/src/app/handoff.rs)
 
 ## Subfeatures
+
+### Handoff Telemetry
+
+#### Entry Points
+
+- [codex-rs/tui/src/handoff/telemetry.rs](../tui/src/handoff/telemetry.rs)
+- [codex-rs/tui/src/chatwidget/handoff.rs](../tui/src/chatwidget/handoff.rs)
+- [codex-rs/tui/src/app/handoff.rs](../tui/src/app/handoff.rs)
+
+#### Invariants
+
+- Counter names and tag values come only from fixed enums; user-authored text is never recorded.
+- Manual and automatic triggers are distinct, and completion is recorded only after fresh-thread transfer succeeds.
 
 ### Manual Handoff
 

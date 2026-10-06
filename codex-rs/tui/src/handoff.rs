@@ -9,6 +9,13 @@ use codex_utils_string::approx_token_count;
 use crate::collaboration_modes;
 use crate::model_catalog::ModelCatalog;
 
+mod telemetry;
+
+pub(crate) use telemetry::HandoffTelemetryDisposition;
+pub(crate) use telemetry::HandoffTelemetryEvent;
+pub(crate) use telemetry::HandoffTelemetryFailure;
+pub(crate) use telemetry::HandoffTrigger;
+
 pub(crate) const HANDOFF_MODE_NAME: &str = "Handoff";
 pub(crate) const HANDOFF_USAGE: &str = "Usage: /handoff [--ask | --defer] [--] [guidance...]";
 

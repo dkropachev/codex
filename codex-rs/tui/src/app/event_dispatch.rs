@@ -481,6 +481,11 @@ impl App {
                         .chat_widget
                         .is_current_handoff_transaction(source_thread_id, generation)
                 {
+                    crate::handoff::HandoffTelemetryEvent::Disposition {
+                        trigger: crate::handoff::HandoffTrigger::Manual,
+                        disposition: crate::handoff::HandoffTelemetryDisposition::Stay,
+                    }
+                    .record(&self.session_telemetry);
                     self.chat_widget.stay_in_handoff(generation);
                 }
             }
