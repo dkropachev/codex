@@ -1187,6 +1187,7 @@ impl ChatWidget {
         update: context_pressure::UsageUpdate<'_>,
     ) {
         self.update_context_pressure_hint(&info, update);
+        self.observe_automatic_handoff_usage(&info, update);
         self.token_usage_pending = false;
         self.bottom_pane
             .set_context_window_pending(/*pending*/ false);

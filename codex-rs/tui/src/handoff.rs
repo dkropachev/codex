@@ -12,6 +12,9 @@ use crate::model_catalog::ModelCatalog;
 pub(crate) const HANDOFF_MODE_NAME: &str = "Handoff";
 pub(crate) const HANDOFF_USAGE: &str = "Usage: /handoff [--ask | --defer] [--] [guidance...]";
 
+pub(crate) const AUTOMATIC_WRAP_UP_PROMPT: &str = "Prepare this task for an automatic session handoff. Finish the current atomic work safely, run relevant targeted validation, stop expanding scope, and record blockers. Report the current state so a focused handoff plan can be prepared.";
+pub(crate) const AUTOMATIC_PLANNING_PROMPT: &str = "Prepare a focused handoff plan for continuing this task in a fresh session. Use the goal, completed work, current state, changed files, validation, decisions, constraints, blockers, next steps, and acceptance criteria. Explore or ask needed clarifications as in Plan mode. Do not implement more work. Emit `<proposed_plan>` only when the handoff is decision-complete. If the work is complete, report completion without a proposed plan.";
+
 const MAX_CONTEXT_ITEM_TOKENS: usize = 10_000;
 const FRESH_EXECUTION_PREAMBLE: &str = "A previous session prepared the authoritative handoff plan below. Continue the task in this fresh session by implementing that plan. Treat it as the source of task intent, re-read repository files as needed, preserve completed work, and carry the remaining work through implementation and appropriate verification.";
 const HANDOFF_MODE_INSTRUCTIONS: &str = r#"# Handoff Mode

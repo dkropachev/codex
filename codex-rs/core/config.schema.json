@@ -4875,6 +4875,14 @@
           "description": "Enable animations (welcome screen, shimmer effects, spinners). Defaults to `true`.",
           "type": "boolean"
         },
+        "auto_handoff_threshold_percent": {
+          "default": null,
+          "description": "Active context use that triggers automatic handoff. Omit to disable it.",
+          "format": "uint8",
+          "maximum": 85.0,
+          "minimum": 71.0,
+          "type": "integer"
+        },
         "auto_recap": {
           "default": true,
           "description": "Generate automatic conversation recaps when the terminal is unfocused. Defaults to `true`. Disabling this leaves `/recap` available on demand.",

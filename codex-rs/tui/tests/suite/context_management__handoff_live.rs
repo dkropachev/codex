@@ -20,6 +20,109 @@ const EXECUTION_RESPONSE: &str = "fresh handoff execution sentinel";
 const SOURCE_THREAD_NAME: &str = "src";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn automatic_handoff_wraps_up_then_plans_and_transfers() -> Result<()> {
+    let codex = codex_utils_cargo_bin::cargo_bin("codex-tui")?;
+    let codex_home = tempdir()?;
+    let log_dir = tempdir()?;
+    let workspace = tempdir()?;
+    let server = MockServer::start().await;
+
+    write_config(codex_home.path(), workspace.path(), &server.uri())?;
+    let mut config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(codex_home.path().join("config.toml"))?;
+    writeln!(config, "\n[tui]\nauto_handoff_threshold_percent = 80")?;
+    write_auth(codex_home.path())?;
+
+    let spawned = spawn_tui(&codex, codex_home.path(), log_dir.path(), workspace.path()).await?;
+    let writer = spawned.session.writer_sender();
+    let mut output_rx = combine_output_receivers(spawned.stdout_rx, spawned.stderr_rx);
+    let mut screen = vt100::Parser::new(/*rows*/ 60, /*cols*/ 100, /*scrollback*/ 0);
+    wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
+        contents.contains("Ask Codex to do anything")
+    })
+    .await?;
+    rename_source_thread(&writer, &mut output_rx, &mut screen).await?;
+
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            source_turn_with_high_usage_sse(),
+            responses::sse(vec![
+                responses::ev_response_created("resp-auto-wrap-up"),
+                responses::ev_assistant_message("msg-auto-wrap-up", "Atomic work is complete."),
+                responses::ev_completed("resp-auto-wrap-up"),
+            ]),
+            handoff_plan_sse(),
+            execution_turn_sse(),
+            thread_title_sse("automatic"),
+        ],
+    )
+    .await;
+
+    let result = async {
+        writer.send(SOURCE_PROMPT.as_bytes().to_vec()).await?;
+        wait_for_screen(
+            &mut output_rx,
+            &mut screen,
+            "source prompt draft",
+            |contents| contents.contains(SOURCE_PROMPT),
+        )
+        .await?;
+        writer.send(b"\r".to_vec()).await?;
+        wait_for_screen(
+            &mut output_rx,
+            &mut screen,
+            "automatic execution",
+            |contents| contents.contains(EXECUTION_RESPONSE),
+        )
+        .await?;
+
+        let requests = wait_for_request_count(&response_mock, /*expected*/ 5).await?;
+        anyhow::ensure!(
+            requests.len() == 5,
+            "expected five automatic handoff requests"
+        );
+        let source_thread_id = requests[0].body_json()["client_metadata"]["thread_id"]
+            .as_str()
+            .context("source request missing thread ID")?
+            .to_string();
+        for request in &requests[1..3] {
+            anyhow::ensure!(
+                request.body_json()["client_metadata"]["thread_id"].as_str()
+                    == Some(source_thread_id.as_str()),
+                "automatic wrap-up or planning left the source thread"
+            );
+        }
+        anyhow::ensure!(
+            requests[3].body_json()["client_metadata"]["thread_id"].as_str()
+                != Some(source_thread_id.as_str()),
+            "automatic execution reused the source thread"
+        );
+        anyhow::ensure!(
+            requests[1].body_contains_text("Prepare this task for an automatic session handoff"),
+            "automatic wrap-up prompt was not submitted"
+        );
+        anyhow::ensure!(
+            requests[2].body_contains_text("Prepare a focused handoff plan"),
+            "automatic planning prompt was not submitted"
+        );
+        anyhow::ensure!(
+            requests[3].body_contains_text(HANDOFF_PLAN)
+                && !requests[3].body_contains_text(SOURCE_PROMPT),
+            "fresh execution did not isolate the handoff plan"
+        );
+        Ok(())
+    }
+    .await;
+    spawned.session.terminate();
+    if result.is_err() {
+        server.reset().await;
+    }
+    result
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plan_handoff_default_transfers_to_fresh_thread_and_source_remains_resumable() -> Result<()>
 {
     let codex = codex_utils_cargo_bin::cargo_bin("codex-tui")?;
@@ -232,6 +335,26 @@ fn source_turn_sse() -> String {
         responses::ev_response_created("resp-handoff-source"),
         responses::ev_assistant_message("msg-handoff-source", SOURCE_RESPONSE),
         responses::ev_completed("resp-handoff-source"),
+    ])
+}
+
+fn source_turn_with_high_usage_sse() -> String {
+    responses::sse(vec![
+        responses::ev_response_created("resp-auto-source"),
+        responses::ev_assistant_message("msg-auto-source", SOURCE_RESPONSE),
+        serde_json::json!({
+            "type": "response.completed",
+            "response": {
+                "id": "resp-auto-source",
+                "usage": {
+                    "input_tokens": 85_000,
+                    "input_tokens_details": null,
+                    "output_tokens": 100,
+                    "output_tokens_details": null,
+                    "total_tokens": 85_100
+                }
+            }
+        }),
     ])
 }
 

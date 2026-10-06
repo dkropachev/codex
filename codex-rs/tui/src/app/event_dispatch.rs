@@ -411,6 +411,16 @@ impl App {
                 ))
                 .await?;
             }
+            AppEvent::AutomaticHandoffCandidate { thread_id } => {
+                self.maybe_start_automatic_handoff(thread_id).await;
+            }
+            AppEvent::AdvanceAutomaticHandoffPlanning {
+                source_thread_id,
+                generation,
+            } => {
+                self.maybe_advance_automatic_handoff_planning(source_thread_id, generation)
+                    .await;
+            }
             AppEvent::StartDeferredHandoffTransfer {
                 source_thread_id,
                 plan_turn_id,

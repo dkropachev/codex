@@ -772,6 +772,9 @@ pub struct Config {
     /// Generate automatic TUI recaps. Manual `/recap` remains available when disabled.
     pub tui_auto_recap: bool,
 
+    /// Active context use that triggers automatic TUI handoff.
+    pub tui_auto_handoff_threshold_percent: Option<u8>,
+
     /// Persisted startup availability NUX state for model tooltips.
     pub model_availability_nux: ModelAvailabilityNuxConfig,
 
@@ -3251,6 +3254,18 @@ impl Config {
                 "model_post_turn_compact_threshold_percent must be between 0 and 100",
             ));
         }
+        let tui_auto_handoff_threshold_percent = cfg
+            .tui
+            .as_ref()
+            .and_then(|tui| tui.auto_handoff_threshold_percent);
+        if let Some(percent) = tui_auto_handoff_threshold_percent
+            && !(71..=85).contains(&percent)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "tui.auto_handoff_threshold_percent must be between 71 and 85",
+            ));
+        }
         if let Some(responses_api_metadata) = cfg.responses_api_metadata.as_ref() {
             validate_extra_metadata(responses_api_metadata.iter()).map_err(|message| {
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, message)
@@ -4480,6 +4495,7 @@ impl Config {
                 .map(|t| t.show_server_version_notice)
                 .unwrap_or(true),
             tui_auto_recap: cfg.tui.as_ref().map(|t| t.auto_recap).unwrap_or(/*default*/ true),
+            tui_auto_handoff_threshold_percent,
             model_availability_nux: cfg
                 .tui
                 .as_ref()
@@ -4922,3 +4938,7 @@ mod tests;
 #[cfg(test)]
 #[path = "config_loader_tests.rs"]
 mod config_loader_tests;
+
+#[cfg(test)]
+#[path = "auto_handoff_config_tests.rs"]
+mod auto_handoff_config_tests;
