@@ -25,6 +25,9 @@ Stable release tags run the broader platform matrix before publication.
   smoke-tested before the draft is published.
 - Changes to the release test matrix or its shared nextest workflow run that
   matrix on the PR as well, so runner wiring can be checked before merging.
+- The Cargo nextest matrices exclude the private `codex-voice-host` crate,
+  which needs a prepared GStreamer SDK on every target. Bazel keeps its
+  declared voice-host targets in the release test suite.
 - Manual package dry-runs and historical backfills retain their package
   validation without running release CI against the default branch.
 
