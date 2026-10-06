@@ -6,17 +6,15 @@ use crate::chatwidget::slash_dispatch::PreparedSlashCommandArgs;
 use crate::chatwidget::slash_dispatch::SlashCommandDispatchSource;
 use crate::handoff::HandoffDisposition;
 use crate::handoff::HandoffPlan;
+use crate::handoff::HandoffTelemetryDisposition;
+use crate::handoff::HandoffTelemetryEvent;
+use crate::handoff::HandoffTelemetryFailure;
+use crate::handoff::HandoffTrigger;
 
 #[path = "handoff_automatic.rs"]
 mod automatic;
 #[path = "handoff_deferred.rs"]
 mod deferred;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum HandoffTrigger {
-    Manual,
-    Automatic,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HandoffPhase {
@@ -290,6 +288,18 @@ impl ChatWidget {
             self.add_error_message(
                 "Handoff planning could not start. The source thread is unchanged.".to_string(),
             );
+            HandoffTelemetryEvent::Failure {
+                trigger: HandoffTrigger::Manual,
+                reason: HandoffTelemetryFailure::TurnFailed,
+            }
+            .record(&self.session_telemetry);
+        } else {
+            HandoffTelemetryEvent::Trigger(HandoffTrigger::Manual).record(&self.session_telemetry);
+            HandoffTelemetryEvent::Disposition {
+                trigger: HandoffTrigger::Manual,
+                disposition: HandoffTelemetryDisposition::from(disposition),
+            }
+            .record(&self.session_telemetry);
         }
         submitted
     }
@@ -343,6 +353,7 @@ impl ChatWidget {
             return true;
         }
         let automatic = active.trigger == HandoffTrigger::Automatic;
+        let trigger = active.trigger;
         let disposition = active.disposition;
         let generation = active.generation;
         let owned_turn_id = active.owned_turn_id.clone();
@@ -361,6 +372,11 @@ impl ChatWidget {
             active.clear_turn();
         }
         let Some((plan_turn_id, plan_text)) = authoritative else {
+            HandoffTelemetryEvent::Failure {
+                trigger,
+                reason: HandoffTelemetryFailure::InvalidPlan,
+            }
+            .record(&self.session_telemetry);
             self.add_info_message(
                 "Handoff planning ended without an authoritative plan.".to_string(),
                 Some(
@@ -376,6 +392,11 @@ impl ChatWidget {
         let plan = match HandoffPlan::new(plan_text.clone()) {
             Ok(plan) => plan,
             Err(error) => {
+                HandoffTelemetryEvent::Failure {
+                    trigger,
+                    reason: HandoffTelemetryFailure::InvalidPlan,
+                }
+                .record(&self.session_telemetry);
                 self.add_error_message(error.to_string());
                 if automatic {
                     self.cancel_automatic_handoff();
@@ -400,6 +421,16 @@ impl ChatWidget {
     }
 
     fn emit_handoff_transfer(&self, generation: u64, plan: HandoffPlan) {
+        if self.handoff_state.active.as_ref().is_some_and(|active| {
+            active.trigger == HandoffTrigger::Manual
+                && active.disposition == HandoffDisposition::Ask
+        }) {
+            HandoffTelemetryEvent::Disposition {
+                trigger: HandoffTrigger::Manual,
+                disposition: HandoffTelemetryDisposition::Proceed,
+            }
+            .record(&self.session_telemetry);
+        }
         if let (Some(source_thread_id), Some(plan_turn_id)) = (
             self.thread_id,
             self.handoff_state
@@ -501,6 +532,13 @@ impl ChatWidget {
                 .is_some_and(|active| active.generation == generation)
     }
 
+    pub(crate) fn active_handoff_trigger(&self) -> Option<HandoffTrigger> {
+        self.handoff_state
+            .active
+            .as_ref()
+            .map(|active| active.trigger)
+    }
+
     pub(crate) fn handoff_transfer_is_locally_safe(
         &self,
         source_thread_id: ThreadId,
@@ -524,6 +562,9 @@ impl ChatWidget {
 
     pub(super) fn leave_handoff_for_user_mode_change(&mut self, mask: &CollaborationModeMask) {
         if !crate::handoff::is_handoff_mask(Some(mask)) {
+            if let Some(active) = self.handoff_state.active.as_ref() {
+                HandoffTelemetryEvent::Cancellation(active.trigger).record(&self.session_telemetry);
+            }
             if self
                 .handoff_state
                 .active
@@ -537,6 +578,15 @@ impl ChatWidget {
     }
 
     pub(super) fn stop_handoff_after_turn_failure(&mut self) {
+        if let Some(active) = self.handoff_state.active.as_ref()
+            && (active.owned_turn_id.is_some() || active.owned_submission_items.is_some())
+        {
+            HandoffTelemetryEvent::Failure {
+                trigger: active.trigger,
+                reason: HandoffTelemetryFailure::TurnFailed,
+            }
+            .record(&self.session_telemetry);
+        }
         if self
             .handoff_state
             .active
@@ -555,6 +605,11 @@ impl ChatWidget {
         let Some(active) = self.handoff_state.active.take() else {
             return;
         };
+        HandoffTelemetryEvent::Failure {
+            trigger: active.trigger,
+            reason: HandoffTelemetryFailure::ModeUnavailable,
+        }
+        .record(&self.session_telemetry);
         if active.trigger == HandoffTrigger::Automatic {
             self.handoff_state.automatic_cancelled_until_rearm = true;
         }

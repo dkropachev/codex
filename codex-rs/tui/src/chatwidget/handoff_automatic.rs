@@ -1,6 +1,9 @@
 //! Opt-in automatic handoff built on the existing manual transfer path.
 
 use super::*;
+use crate::handoff::HandoffTelemetryDisposition;
+use crate::handoff::HandoffTelemetryEvent;
+use crate::handoff::HandoffTelemetryFailure;
 
 impl ChatWidget {
     pub(in crate::chatwidget) fn observe_automatic_handoff_usage(
@@ -126,7 +129,20 @@ impl ChatWidget {
             UserMessageSource::Prompt,
         );
         if !submitted {
+            HandoffTelemetryEvent::Failure {
+                trigger: HandoffTrigger::Automatic,
+                reason: HandoffTelemetryFailure::TurnFailed,
+            }
+            .record(&self.session_telemetry);
             self.cancel_automatic_handoff();
+        } else {
+            HandoffTelemetryEvent::Trigger(HandoffTrigger::Automatic)
+                .record(&self.session_telemetry);
+            HandoffTelemetryEvent::Disposition {
+                trigger: HandoffTrigger::Automatic,
+                disposition: HandoffTelemetryDisposition::Proceed,
+            }
+            .record(&self.session_telemetry);
         }
     }
 
@@ -171,6 +187,11 @@ impl ChatWidget {
             return;
         }
         let Some(mask) = crate::handoff::handoff_mask(self.model_catalog.as_ref()) else {
+            HandoffTelemetryEvent::Failure {
+                trigger: HandoffTrigger::Automatic,
+                reason: HandoffTelemetryFailure::ModeUnavailable,
+            }
+            .record(&self.session_telemetry);
             self.cancel_automatic_handoff();
             return;
         };
@@ -185,6 +206,11 @@ impl ChatWidget {
             UserMessageSource::Prompt,
         );
         if !submitted {
+            HandoffTelemetryEvent::Failure {
+                trigger: HandoffTrigger::Automatic,
+                reason: HandoffTelemetryFailure::TurnFailed,
+            }
+            .record(&self.session_telemetry);
             self.cancel_automatic_handoff();
         }
     }
@@ -198,6 +224,15 @@ impl ChatWidget {
     }
 
     pub(super) fn cancel_automatic_handoff(&mut self) {
+        if self
+            .handoff_state
+            .active
+            .as_ref()
+            .is_some_and(|active| active.trigger == HandoffTrigger::Automatic)
+        {
+            HandoffTelemetryEvent::Cancellation(HandoffTrigger::Automatic)
+                .record(&self.session_telemetry);
+        }
         self.handoff_state.active = None;
         self.handoff_state.automatic_latched = false;
         self.handoff_state.automatic_cancelled_until_rearm = true;
