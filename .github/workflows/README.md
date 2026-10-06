@@ -1,46 +1,33 @@
 # Workflow Strategy
 
-The workflows in this directory are split so that pull requests get fast, review-friendly signal while `main` still gets the full cross-platform verification pass.
+Pull requests and `main` run a small required suite. Stable release tags run
+the slower checks before publication.
 
 ## Pull Requests
 
 - Required checks run against GitHub's synthetic merge commit, not the pull
   request head alone. This includes changes already on `main` and catches
   conflicts before they reach the branch.
-- `bazel.yml` is the main pre-merge verification path for Rust code.
-  It runs Bazel `test` and Bazel `clippy` on the supported Bazel targets,
-  including the generated Rust test binaries needed to lint inline `#[cfg(test)]`
-  code.
-- `rust-ci.yml` keeps the Cargo-native PR checks intentionally small:
+- `blocking-ci.yml` requires the changed-blob policy and `rust-ci.yml`.
+- `rust-ci.yml` runs the fast Rust checks:
   - `cargo fmt --check`
   - `cargo shear`
-  - `argument-comment-lint` on Linux, macOS, and Windows
+  - `argument-comment-lint` on Linux
   - `tools/argument-comment-lint` package tests when the lint or its workflow wiring changes
 
-## Post-Merge On `main`
+## Stable Release Tags
 
-- `bazel.yml` also runs on pushes to `main`.
-  This re-verifies the merged Bazel path and helps keep the BuildBuddy caches warm.
-- `rust-ci-full.yml` is the full Cargo-native verification workflow.
-  It keeps the heavier checks off the PR path while still validating them after merge:
-  - the full Cargo `clippy` matrix
-  - the full Cargo `nextest` matrix via per-platform archive-backed shards
-  - Windows ARM64 nextest archives cross-compiled on Windows x64, then replayed on native Windows ARM64 shards
-  - release-profile Cargo builds
-  - cross-platform `argument-comment-lint`
-  - Linux remote-env tests
-
-## Rule Of Thumb
-
-- If a build/test/clippy check can be expressed in Bazel, prefer putting the PR-time version in `bazel.yml`.
-- Keep `rust-ci.yml` fast enough that it usually does not dominate PR latency.
-- Reserve `rust-ci-full.yml` for heavyweight Cargo-native coverage that Bazel does not replace yet.
+- `fork-rust-release.yml` runs Bazel tests, Clippy, and release-build checks,
+  plus cargo-deny, codespell, repository checks, and SDK tests. These must pass
+  before the unpublished release draft is created.
+- Manual package dry-runs and historical backfills retain their package
+  validation without running release CI against the default branch.
 
 ## Fork Rust Releases
 
-`fork-rust-release.yml` owns releases in `dkropachev/codex`. The sync process
-must push a stable `rust-vX.Y.Z` tag only after the fork changes have been
-merged to `main`; it must not create a GitHub Release. A tag push creates an
+`fork-rust-release.yml` owns releases in `dkropachev/codex`. Push a stable
+`rust-vX.Y.Z` tag only after the changes have been merged to `main`; do not
+create a GitHub Release first. A tag push creates an
 unpublished draft, builds and verifies the four supported Unix packages, and
 publishes the draft as the latest release only after every package succeeds.
 The previous out-of-repository source-only release publisher must therefore be

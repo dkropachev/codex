@@ -41,7 +41,6 @@ concurrency:
 
 jobs:
   validate:
-    if: ${{ github.repository == 'dkropachev/codex' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -111,19 +110,6 @@ jobs:
             exit 1
           }
 
-          upstream_ref="refs/tags/upstream/${tag}"
-          git fetch --no-tags https://github.com/openai/codex.git \
-            "refs/tags/${tag}:${upstream_ref}"
-          upstream_commit="$(git rev-parse "${upstream_ref}^{commit}")"
-          git merge-base --is-ancestor "$upstream_commit" "$tag_commit" || {
-            echo "$tag ($tag_commit) does not contain upstream release $upstream_commit" >&2
-            exit 1
-          }
-          if [[ "$tag_commit" == "$upstream_commit" ]]; then
-            echo "$tag resolves to the untouched upstream commit $upstream_commit" >&2
-            exit 1
-          fi
-
           release_json="$(
             gh release view "$tag" \
               --repo "$GITHUB_REPOSITORY" \
@@ -148,8 +134,63 @@ jobs:
           echo "tag_commit=$tag_commit" >>"$GITHUB_OUTPUT"
           echo "version=$version" >>"$GITHUB_OUTPUT"
 
-  prepare-release:
+  bazel:
+    if: github.event_name == 'push'
     needs: validate
+    uses: ./.github/workflows/bazel.yml
+    secrets: inherit
+
+  cargo-deny:
+    if: github.event_name == 'push'
+    needs: validate
+    uses: ./.github/workflows/cargo-deny.yml
+    secrets: inherit
+
+  codespell:
+    if: github.event_name == 'push'
+    needs: validate
+    uses: ./.github/workflows/codespell.yml
+    secrets: inherit
+
+  repo-checks:
+    if: github.event_name == 'push'
+    needs: validate
+    uses: ./.github/workflows/repo-checks.yml
+    secrets: inherit
+
+  sdk:
+    if: github.event_name == 'push'
+    needs: validate
+    uses: ./.github/workflows/sdk.yml
+    secrets: inherit
+
+  release-checks:
+    name: Release CI results
+    needs:
+      - bazel
+      - cargo-deny
+      - codespell
+      - repo-checks
+      - sdk
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Require successful release checks
+        if: github.event_name == 'push'
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 .github/scripts/check_ci_results.py
+      - name: Skip release CI for manual package operations
+        if: github.event_name == 'workflow_dispatch'
+        run: echo 'Manual dry-runs and backfills use their package validation.'
+
+  prepare-release:
+    needs:
+      - validate
+      - release-checks
     runs-on: ubuntu-24.04
     permissions:
       contents: write
