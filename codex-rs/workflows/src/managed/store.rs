@@ -5,6 +5,7 @@ mod copy;
 mod fs;
 mod journal;
 mod lock;
+mod prepare;
 mod receipt;
 mod stage;
 
@@ -14,9 +15,12 @@ use anyhow::Context;
 use anyhow::bail;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+use crate::managed::fetch::VerificationLimits;
+use crate::managed::integrity::VerifiedWorkflowRelease;
 use fs::SecureDirectory;
 use lock::LockMode;
 use lock::ManagedFileLock;
+use prepare::PreparedWorkflowRelease;
 use receipt::ManagedWorkflowReceipt;
 
 /// Owns the private, same-filesystem metadata layout for managed workflows.
@@ -46,6 +50,28 @@ pub(in crate::managed) struct ManagedWorkflowRecoveryGuard {
 }
 
 impl ManagedWorkflowStore {
+    /// Copies a verified release into operation-private staging and binds it to a journal marker.
+    pub(in crate::managed) fn prepare_release(
+        &self,
+        locked: &LockedManagedWorkflow,
+        verified: VerifiedWorkflowRelease,
+        previous_receipt: Option<ManagedWorkflowReceipt>,
+        next_receipt: ManagedWorkflowReceipt,
+        limits: VerificationLimits,
+        deadline: crate::runner::CommandDeadline,
+        cancelled: Option<&AtomicBool>,
+    ) -> anyhow::Result<PreparedWorkflowRelease<'_>> {
+        prepare::prepare_release(
+            &self.staging,
+            locked,
+            verified,
+            previous_receipt,
+            next_receipt,
+            limits,
+            deadline,
+            cancelled,
+        )
+    }
     /// Reads a consistent receipt catalog after active workflow mutations finish.
     pub(in crate::managed) fn list_receipts(
         &self,
