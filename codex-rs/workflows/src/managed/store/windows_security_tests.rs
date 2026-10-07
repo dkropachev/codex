@@ -70,8 +70,9 @@ fn creates_and_reopens_a_private_non_reparse_directory() {
     drop((first, second, third));
 
     let private_file = path.join("private.json");
-    create_private_file(&private_file).expect("create private file");
+    let created_file = create_private_file(&private_file).expect("create private file");
     open_private_file(&private_file).expect("reopen private file");
+    drop(created_file);
     let inherited_file = path.join("inherited.json");
     std::fs::write(&inherited_file, b"inherited").expect("write inherited file");
     assert!(open_private_file(&inherited_file).is_err());

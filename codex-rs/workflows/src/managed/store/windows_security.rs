@@ -46,8 +46,10 @@ use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
 use windows_sys::Win32::Storage::FileSystem::FILE_LIST_DIRECTORY;
 use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
+use windows_sys::Win32::Storage::FileSystem::FILE_READ_DATA;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
+use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
 use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
@@ -80,11 +82,7 @@ pub(super) fn create_private_directory(path: &Path) -> io::Result<(OwnedHandle, 
         return Err(error);
     }
     Ok((
-        open_directory(
-            path,
-            /*private*/ true,
-            /*desired_access*/ FILE_ALL_ACCESS,
-        )?,
+        open_directory(path, /*private*/ true, /*desired_access*/ 0)?,
         created,
     ))
 }
@@ -181,7 +179,7 @@ pub(super) fn create_private_file(path: &Path) -> io::Result<std::fs::File> {
     let raw = unsafe {
         CreateFileW(
             wide.as_ptr(),
-            FILE_ALL_ACCESS,
+            READ_CONTROL | FILE_READ_DATA | FILE_WRITE_DATA,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             &attributes,
             CREATE_NEW,
@@ -210,7 +208,7 @@ pub(super) fn open_private_file(path: &Path) -> io::Result<std::fs::File> {
     let raw = unsafe {
         CreateFileW(
             wide.as_ptr(),
-            FILE_ALL_ACCESS,
+            READ_CONTROL | FILE_READ_DATA | FILE_WRITE_DATA,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             ptr::null(),
             OPEN_EXISTING,
