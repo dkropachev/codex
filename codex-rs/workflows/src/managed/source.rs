@@ -25,6 +25,7 @@ pub struct WorkflowGitSource(WorkflowGitSourceKind);
 
 impl WorkflowGitSource {
     /// Returns a credential-free remote spelling suitable for receipt v1.
+    #[allow(dead_code, reason = "used by managed receipt publication")]
     pub(in crate::managed) fn receipt_source(&self) -> anyhow::Result<&str> {
         match &self.0 {
             WorkflowGitSourceKind::Https(source) | WorkflowGitSourceKind::Ssh(source) => Ok(source),

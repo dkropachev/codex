@@ -19,6 +19,10 @@ pub(in crate::managed) struct PreparedWorkflowRelease<'a> {
     pub(super) journal: ManagedWorkflowJournal,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "keep transaction inputs explicit across the staging boundary"
+)]
 pub(super) fn prepare_release<'a>(
     staging_root: &'a SecureDirectory,
     locked: &LockedManagedWorkflow,
