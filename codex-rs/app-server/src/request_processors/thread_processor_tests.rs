@@ -15,6 +15,8 @@ mod retired_review_item_tests {
                 item_id: format!("item-{item_type}"),
                 updated_at_ordinal: 1,
                 created_at_ms: 1,
+                started_at_ms: None,
+                completed_at_ms: None,
                 item_json: serde_json::to_vec(&serde_json::json!({
                     "type": item_type,
                     "id": format!("item-{item_type}"),
