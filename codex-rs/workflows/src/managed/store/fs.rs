@@ -592,7 +592,6 @@ impl SecureDirectory {
         }
         #[cfg(windows)]
         {
-            use std::ffi::OsStr;
             use std::os::windows::ffi::OsStrExt;
             use std::os::windows::io::AsRawHandle;
             use windows_sys::Win32::Storage::FileSystem::DELETE;
@@ -606,7 +605,15 @@ impl SecureDirectory {
                 /*private*/ true,
                 /*desired_access*/ DELETE,
             )?;
-            let target_name = OsStr::new(target_name).encode_wide().collect::<Vec<_>>();
+            // The validated target parent stays pinned while Windows resolves
+            // the absolute name. RootDirectory plus a relative name is not
+            // accepted by all supported Windows builds.
+            let target_path = target_parent.path.join(target_name);
+            let target_name = target_path
+                .as_path()
+                .as_os_str()
+                .encode_wide()
+                .collect::<Vec<_>>();
             let filename_bytes = target_name
                 .len()
                 .checked_mul(std::mem::size_of::<u16>())
@@ -623,8 +630,7 @@ impl SecureDirectory {
             unsafe {
                 std::ptr::addr_of_mut!((*information).Anonymous)
                     .write(FILE_RENAME_INFO_0 { ReplaceIfExists: 0 });
-                std::ptr::addr_of_mut!((*information).RootDirectory)
-                    .write(target_parent.guard.handle.as_raw_handle() as _);
+                std::ptr::addr_of_mut!((*information).RootDirectory).write(0);
                 std::ptr::addr_of_mut!((*information).FileNameLength).write(filename_size);
                 target_name.as_ptr().copy_to_nonoverlapping(
                     std::ptr::addr_of_mut!((*information).FileName).cast::<u16>(),
