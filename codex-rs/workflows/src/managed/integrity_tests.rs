@@ -47,6 +47,14 @@ fn payload_scan_is_sorted_and_limits_are_inclusive() {
     assert!(scan(root.path(), limits, PayloadKind::Source).is_err());
 }
 
+#[test]
+fn payload_byte_counter_rejects_overflow() {
+    let mut limits = super::super::fetch::VERIFICATION_LIMITS;
+    limits.post_install_bytes = u64::MAX;
+    let error = add_bytes(u64::MAX, /*added*/ 1, limits).expect_err("reject overflow");
+    assert!(error.to_string().contains("overflow"));
+}
+
 #[cfg(unix)]
 #[test]
 fn scan_rejects_special_files_and_dependency_root_alias() {
@@ -67,6 +75,18 @@ fn scan_rejects_special_files_and_dependency_root_alias() {
         .is_err()
     );
     fs::remove_file(root.path().join("fifo")).expect("remove FIFO");
+    let socket =
+        std::os::unix::net::UnixListener::bind(root.path().join("socket")).expect("create socket");
+    assert!(
+        scan(
+            root.path(),
+            super::super::fetch::VERIFICATION_LIMITS,
+            PayloadKind::Source
+        )
+        .is_err()
+    );
+    drop(socket);
+    fs::remove_file(root.path().join("socket")).expect("remove socket");
     fs::create_dir(root.path().join("external")).expect("external directory");
     symlink("external", root.path().join("node_modules")).expect("alias dependency root");
     assert!(

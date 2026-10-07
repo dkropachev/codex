@@ -231,3 +231,160 @@ fn evidence_is_canonical_and_binds_every_entry_property() {
         );
     }
 }
+
+#[test]
+fn verified_release_and_byte_identical_copy_share_evidence() {
+    let (_staging, staged) = staged(/*with_dependencies*/ false);
+    let verified = verify(staged).expect("verify source-only release");
+    let evidence = verified.evidence().clone();
+    assert_eq!(evidence.format_version, 1);
+    assert_eq!(evidence.sha256.len(), 64);
+    let copy = tempfile::tempdir().expect("copy root");
+    fs::create_dir(copy.path().join("src")).expect("copy source directory");
+    for name in [
+        "workflow.yaml",
+        "package.json",
+        ".gitignore",
+        "src/workflow.ts",
+    ] {
+        fs::copy(verified.staged.root().join(name), copy.path().join(name)).expect("copy file");
+    }
+    verify_materialized_copy(
+        copy.path(),
+        &evidence,
+        crate::managed::fetch::VERIFICATION_LIMITS,
+        crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
+        /*cancelled*/ None,
+    )
+    .expect("identical copy");
+    fs::write(copy.path().join("src/workflow.ts"), "changed").expect("tamper copy");
+    let error = verify_materialized_copy(
+        copy.path(),
+        &evidence,
+        crate::managed::fetch::VERIFICATION_LIMITS,
+        crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
+        /*cancelled*/ None,
+    )
+    .expect_err("tampered copy");
+    assert!(
+        error.to_string().contains("differs from verified release"),
+        "{error:#}"
+    );
+    fs::remove_file(copy.path().join("src/workflow.ts")).expect("remove copied file");
+    let error = verify_materialized_copy(
+        copy.path(),
+        &evidence,
+        crate::managed::fetch::VERIFICATION_LIMITS,
+        crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
+        /*cancelled*/ None,
+    )
+    .expect_err("missing copied file");
+    assert!(
+        error.to_string().contains("differs from verified release"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn dependency_release_requires_node_modules_and_includes_it_in_evidence() {
+    let (_missing_staging, missing) = staged(/*with_dependencies*/ true);
+    assert!(verify(missing).is_err());
+    let (_staging, staged) = staged(/*with_dependencies*/ true);
+    let root = staged.root().as_path();
+    assert!(!root.join("node_modules").exists());
+    fs::create_dir(root.join("node_modules")).expect("dependency root");
+    fs::write(root.join("node_modules/dep.js"), "dependency").expect("dependency file");
+    #[cfg(unix)]
+    {
+        fs::create_dir(root.join("node_modules/.bin")).expect("bin directory");
+        std::os::unix::fs::symlink("../dep.js", root.join("node_modules/.bin/dep"))
+            .expect("contained dependency link");
+    }
+    let verified = verify(staged).expect("verify dependency tree");
+    assert!(
+        verified.evidence().entry_count > verified.staged.baseline().source.entries.len() as u64
+    );
+    #[cfg(unix)]
+    {
+        let copy = tempfile::tempdir().expect("dependency copy");
+        for directory in ["src", "node_modules", "node_modules/.bin"] {
+            fs::create_dir(copy.path().join(directory)).expect("copy directory");
+        }
+        for name in [
+            "workflow.yaml",
+            "package.json",
+            ".gitignore",
+            "bun.lock",
+            "src/workflow.ts",
+            "node_modules/dep.js",
+        ] {
+            fs::copy(verified.staged.root().join(name), copy.path().join(name))
+                .expect("copy payload file");
+        }
+        std::os::unix::fs::symlink("../dep.js", copy.path().join("node_modules/.bin/dep"))
+            .expect("copy dependency link");
+        verify_materialized_copy(
+            copy.path(),
+            verified.evidence(),
+            crate::managed::fetch::VERIFICATION_LIMITS,
+            crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
+            /*cancelled*/ None,
+        )
+        .expect("copied dependency link");
+        fs::remove_file(copy.path().join("node_modules/.bin/dep")).expect("remove copied link");
+        let error = verify_materialized_copy(
+            copy.path(),
+            verified.evidence(),
+            crate::managed::fetch::VERIFICATION_LIMITS,
+            crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
+            /*cancelled*/ None,
+        )
+        .expect_err("missing copied link");
+        assert!(
+            error.to_string().contains("differs from verified release"),
+            "{error:#}"
+        );
+    }
+    fs::write(
+        verified.staged.root().join("node_modules/dep.js"),
+        "changed dependency",
+    )
+    .expect("change installed dependency");
+    let changed = scan_payload(
+        verified.staged.root().as_path(),
+        PayloadKind::Staged,
+        crate::managed::fetch::VERIFICATION_LIMITS,
+        crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
+        /*cancelled*/ None,
+    )
+    .expect("rescan changed dependency");
+    assert_ne!(
+        evidence_for_inventory(&changed).expect("changed evidence"),
+        *verified.evidence()
+    );
+}
+
+#[test]
+fn verification_observes_cancellation_and_deadline() {
+    let (_staging, cancelled_stage) = staged(/*with_dependencies*/ false);
+    let cancelled = AtomicBool::new(true);
+    assert!(
+        verify_post_install(
+            cancelled_stage,
+            crate::managed::fetch::VERIFICATION_LIMITS,
+            crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
+            Some(&cancelled),
+        )
+        .is_err()
+    );
+    let (_staging, expired_stage) = staged(/*with_dependencies*/ false);
+    assert!(
+        verify_post_install(
+            expired_stage,
+            crate::managed::fetch::VERIFICATION_LIMITS,
+            crate::runner::CommandDeadline::after(Duration::ZERO),
+            /*cancelled*/ None,
+        )
+        .is_err()
+    );
+}
