@@ -145,13 +145,50 @@ pub(super) fn read_receipt(
 ) -> anyhow::Result<ManagedWorkflowReceipt> {
     let directory = receipt_directory(receipts, id, ReceiptDirectoryMode::Existing)?;
     let bytes = directory.read_file("receipt.json", MAX_RECEIPT_BYTES as u64)?;
-    let receipt = serde_json::from_slice::<ManagedWorkflowReceipt>(&bytes)
+    parse_receipt(&bytes, id)
+}
+
+fn parse_receipt(bytes: &[u8], id: &str) -> anyhow::Result<ManagedWorkflowReceipt> {
+    let receipt = serde_json::from_slice::<ManagedWorkflowReceipt>(bytes)
         .context("failed to parse managed workflow receipt")?;
     receipt.validate()?;
     if receipt.id != id {
         bail!("managed workflow receipt id does not match its directory");
     }
     Ok(receipt)
+}
+
+#[cfg(unix)]
+pub(super) fn read_optional_receipt(
+    receipts: &SecureDirectory,
+    id: &str,
+) -> anyhow::Result<Option<ManagedWorkflowReceipt>> {
+    use rustix::fs::AtFlags;
+    use rustix::fs::statat;
+    use rustix::io::Errno;
+
+    validate_id(id)?;
+    let mut directory = None;
+    for component in id.split('/') {
+        let parent = directory.as_ref().unwrap_or(receipts);
+        directory = match parent.optional_existing_child(component)? {
+            Some(child) => Some(child),
+            None => return Ok(None),
+        };
+    }
+    let directory = directory.context("receipt id is empty")?;
+    match statat(
+        directory.handle(),
+        "receipt.json",
+        AtFlags::SYMLINK_NOFOLLOW,
+    ) {
+        Ok(_) => {
+            let bytes = directory.read_file("receipt.json", MAX_RECEIPT_BYTES as u64)?;
+            parse_receipt(&bytes, id).map(Some)
+        }
+        Err(Errno::NOENT) => bail!("managed workflow receipt directory has no receipt file"),
+        Err(error) => Err(error).context("failed to inspect managed workflow receipt"),
+    }
 }
 
 pub(super) fn write_receipt(
