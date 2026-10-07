@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
 use std::path::Component;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::bail;
@@ -11,6 +13,144 @@ use sha2::Digest;
 use sha2::Sha256;
 
 use super::fetch::VerificationLimits;
+
+mod link;
+
+use link::validate_dependency_link;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct IndexEntry {
+    pub(super) path: String,
+    pub(super) mode: String,
+    pub(super) oid: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct SourceIntegrityBaseline {
+    pub(super) commit: String,
+    pub(super) index: Vec<IndexEntry>,
+    pub(super) source: PayloadInventory,
+}
+
+pub(super) fn capture_source_baseline(
+    git: &OsStr,
+    root: &Path,
+    expected_commit: &str,
+    limits: VerificationLimits,
+    cancelled: Option<&AtomicBool>,
+) -> anyhow::Result<SourceIntegrityBaseline> {
+    let working_directory = root.parent().context("workflow checkout has no parent")?;
+    let mut head = super::fetch::repository_command(git, working_directory, root);
+    head.args(["rev-parse", "--verify", "HEAD^{commit}"]);
+    let head = super::fetch::run_git(head, "Git workflow baseline HEAD", cancelled)?;
+    let head = std::str::from_utf8(&head)
+        .context("Git HEAD was not UTF-8")?
+        .trim();
+    if !head.eq_ignore_ascii_case(expected_commit) {
+        bail!("workflow checkout HEAD changed before baseline capture");
+    }
+    let mut index = super::fetch::repository_command(git, working_directory, root);
+    index.args(["ls-files", "--stage", "-z", "--cached", "--full-name"]);
+    let index = super::fetch::run_git(index, "Git workflow index baseline", cancelled)?;
+    let index = parse_index(&index, expected_commit.len())?;
+    let source = scan_payload(
+        root,
+        PayloadKind::Source,
+        limits,
+        crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 60)),
+        cancelled,
+    )?;
+    let files = source
+        .entries
+        .iter()
+        .filter_map(|entry| match entry.kind {
+            PayloadEntryKind::File { executable, .. } => Some((&entry.path, executable)),
+            PayloadEntryKind::Directory | PayloadEntryKind::DependencyLink { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    if files.len() != index.len()
+        || files
+            .iter()
+            .zip(&index)
+            .any(|((path, executable), indexed)| {
+                *path != &indexed.path || unix_mode_mismatch(*executable, &indexed.mode)
+            })
+    {
+        bail!("workflow checkout files or executable modes do not match Git index");
+    }
+    let mut diff = super::fetch::repository_command(git, working_directory, root);
+    diff.args(["diff", "--quiet", "--no-ext-diff", "--no-textconv", "--"]);
+    super::fetch::run_git(diff, "Git workflow source baseline", cancelled)?;
+    let mut staged_diff = super::fetch::repository_command(git, working_directory, root);
+    staged_diff.args([
+        "diff",
+        "--cached",
+        "--quiet",
+        "--no-ext-diff",
+        "--no-textconv",
+        "HEAD",
+        "--",
+    ]);
+    super::fetch::run_git(staged_diff, "Git workflow index baseline", cancelled)?;
+    Ok(SourceIntegrityBaseline {
+        commit: expected_commit.to_ascii_lowercase(),
+        index,
+        source,
+    })
+}
+
+#[cfg(unix)]
+fn unix_mode_mismatch(executable: bool, mode: &str) -> bool {
+    executable != (mode == "100755")
+}
+
+#[cfg(windows)]
+fn unix_mode_mismatch(_executable: bool, _mode: &str) -> bool {
+    false
+}
+
+fn parse_index(bytes: &[u8], oid_length: usize) -> anyhow::Result<Vec<IndexEntry>> {
+    if !bytes.is_empty() && bytes.last() != Some(&0) {
+        bail!("Git index output was unterminated");
+    }
+    let mut entries = Vec::new();
+    for record in bytes
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+    {
+        let separator = record
+            .iter()
+            .position(|byte| *byte == b'\t')
+            .context("malformed Git index entry")?;
+        let metadata =
+            std::str::from_utf8(&record[..separator]).context("invalid Git index metadata")?;
+        let mut parts = metadata.split(' ');
+        let (Some(mode), Some(oid), Some("0"), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            bail!("Git index contains a malformed or unmerged entry");
+        };
+        if !matches!(mode, "100644" | "100755")
+            || oid.len() != oid_length
+            || !oid.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            bail!("Git index contains an unsupported entry");
+        }
+        let path = std::str::from_utf8(&record[separator + 1..])
+            .context("Git index path must be UTF-8")?;
+        super::fetch::portable_path(path)?;
+        entries.push(IndexEntry {
+            path: path.to_owned(),
+            mode: mode.to_owned(),
+            oid: oid.to_ascii_lowercase(),
+        });
+    }
+    entries.sort_by(|left, right| left.path.cmp(&right.path));
+    if entries.windows(2).any(|pair| pair[0].path == pair[1].path) {
+        bail!("Git index contains duplicate paths");
+    }
+    Ok(entries)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PayloadKind {
@@ -22,6 +162,7 @@ pub(super) enum PayloadKind {
 pub(super) enum PayloadEntryKind {
     Directory,
     File { executable: bool, sha256: [u8; 32] },
+    DependencyLink { target: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -114,7 +255,21 @@ pub(super) fn scan_payload(
             let metadata = fs::symlink_metadata(&path)
                 .with_context(|| format!("failed to inspect workflow payload entry {portable}"))?;
             let entry_kind = if metadata.file_type().is_symlink() {
-                bail!("workflow payload contains an unsupported symbolic link");
+                if kind != PayloadKind::Installed
+                    || relative == Path::new("node_modules")
+                    || !relative.starts_with("node_modules")
+                {
+                    bail!("workflow payload contains an unsupported symbolic link");
+                }
+                let target = fs::read_link(&path).context("failed to read dependency link")?;
+                validate_dependency_link(&root.join("node_modules"), &path, &target)?;
+                let target = target
+                    .to_str()
+                    .context("dependency link target must be UTF-8")?;
+                logical_bytes = add_bytes(logical_bytes, target.len() as u64, limits)?;
+                PayloadEntryKind::DependencyLink {
+                    target: target.to_owned(),
+                }
             } else if is_windows_reparse_point(&metadata) {
                 bail!("workflow payload contains a reparse point");
             } else if metadata.is_dir() {
