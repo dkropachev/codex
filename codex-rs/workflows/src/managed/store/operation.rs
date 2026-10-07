@@ -47,7 +47,17 @@ impl ManagedBunOperationDirectory {
         management_root: &AbsolutePathBuf,
         bunfig: &[u8],
     ) -> anyhow::Result<Self> {
-        let management = SecureDirectory::open_root(management_root)?;
+        let management_parent = management_root
+            .as_path()
+            .parent()
+            .context("managed Bun root has no parent directory")?;
+        let management_name = management_root
+            .as_path()
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .context("managed Bun root has no UTF-8 name")?;
+        let management_parent = AbsolutePathBuf::from_absolute_path_checked(management_parent)?;
+        let management = SecureDirectory::open_root(&management_parent)?.child(management_name)?;
         let global = management.open_lock_file("managed.lock")?;
         let _layout_lock =
             ManagedFileLock::acquire(global, LockMode::Shared, /*cancelled*/ None)?;

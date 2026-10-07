@@ -157,3 +157,16 @@ fn windows_bun_layout_waits_for_global_recovery_lock() {
     drop(worker.join().expect("Bun layout worker"));
     assert!(store.management.path().join("bun/cache").is_dir());
 }
+
+#[test]
+fn windows_bun_layout_creates_an_absent_private_management_root() {
+    let root = tempfile::tempdir().expect("root");
+    let management = absolute(&root.path().join(".workflow-management"));
+    assert!(!management.as_path().exists());
+    let operation = ManagedBunOperationDirectory::create_with_layout(&management, b"trusted")
+        .expect("create missing management root and Bun layout");
+    assert!(management.join("bun/cache").is_dir());
+    assert!(operation.path().join("bunfig.toml").is_file());
+    drop(operation);
+    assert!(management.join("managed.lock").is_file());
+}
