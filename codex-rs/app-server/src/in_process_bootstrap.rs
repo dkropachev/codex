@@ -150,13 +150,6 @@ pub(super) async fn configure(
     )
     .await
     .map_err(IoError::other)?;
-    let auth_manager = if enable_codex_api_key_env {
-        AuthManager::shared_from_auth_config(auth_config, /*enable_codex_api_key_env*/ true)
-            .await
-            .map_err(IoError::other)?
-    } else {
-        policy_auth_manager.clone()
-    };
     let config = Arc::make_mut(config);
     config.chatgpt_base_url = policy_config.chatgpt_base_url;
     config.enforce_residency = policy_config.enforce_residency;
@@ -164,6 +157,21 @@ pub(super) async fn configure(
     config.application_auth_route_config = policy_config.application_auth_route_config;
     config.forced_login_method = policy_config.forced_login_method;
     config.forced_chatgpt_workspace_id = policy_config.forced_chatgpt_workspace_id;
+    let auth_manager = if config
+        .account_pool
+        .as_ref()
+        .is_some_and(|pool| pool.enabled)
+    {
+        AuthManager::shared_from_config(config, enable_codex_api_key_env)
+            .await
+            .map_err(IoError::other)?
+    } else if enable_codex_api_key_env {
+        AuthManager::shared_from_auth_config(auth_config, /*enable_codex_api_key_env*/ true)
+            .await
+            .map_err(IoError::other)?
+    } else {
+        policy_auth_manager.clone()
+    };
     config_manager.replace_cloud_config_bundle_loader(
         policy_auth_manager,
         config.chatgpt_base_url.clone(),
