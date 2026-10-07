@@ -17,6 +17,21 @@ checks. Stable release tags run the broader platform checks before publication.
   - `argument-comment-lint` on Linux
   - `tools/argument-comment-lint` package tests when the lint or its workflow wiring changes
 
+### Optional pre-release CI
+
+Add the `pre-release-ci` label to a pull request to run the same validation
+that gates stable release tags before packaging. The workflow runs on the PR's
+synthetic merge commit and repeats when the labeled PR receives new commits.
+Adding the label also starts a run immediately. Removing the label stops future
+full-suite runs; the regular required PR checks still run.
+
+This includes full Bazel `//...` tests on Linux x86_64 and ARM64 (GNU and musl)
+and macOS x86_64 and ARM64, Clippy and release-build checks, native Windows
+x86_64 and ARM64 sandbox/protocol smoke tests, cargo-deny, codespell,
+repository checks, and SDK tests. `Pre-release CI results` fails if any of
+those checks fail. This opt-in workflow validates a PR but does not build or
+publish release packages.
+
 ## Stable Release Tags
 
 - `fork-rust-release.yml` runs full Bazel `//...` tests on Linux x86_64 and
