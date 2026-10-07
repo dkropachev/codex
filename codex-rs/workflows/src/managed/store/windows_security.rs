@@ -37,6 +37,7 @@ use windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION;
 use windows_sys::Win32::Storage::FileSystem::CREATE_NEW;
 use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
+use windows_sys::Win32::Storage::FileSystem::DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_ACCESS_RIGHTS;
 use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
@@ -45,6 +46,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_TAG_INFO;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_WRITE_THROUGH;
 use windows_sys::Win32::Storage::FileSystem::FILE_LIST_DIRECTORY;
 use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
 use windows_sys::Win32::Storage::FileSystem::FILE_READ_DATA;
@@ -135,6 +137,13 @@ pub(super) fn open_directory(
         .encode_wide()
         .chain(Some(0))
         .collect::<Vec<_>>();
+    let flags = FILE_FLAG_BACKUP_SEMANTICS
+        | FILE_FLAG_OPEN_REPARSE_POINT
+        | if desired_access & DELETE != 0 {
+            FILE_FLAG_WRITE_THROUGH
+        } else {
+            0
+        };
     let raw = unsafe {
         CreateFileW(
             wide.as_ptr(),
@@ -142,7 +151,7 @@ pub(super) fn open_directory(
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             ptr::null(),
             OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            flags,
             /*htemplatefile*/ 0,
         )
     };
