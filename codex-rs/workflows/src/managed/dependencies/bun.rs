@@ -29,6 +29,7 @@ use codex_sandboxing::select_local_sandbox;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::ValidatedDependencySources;
+use crate::managed::store::ManagedBunOperationDirectory;
 
 mod paths;
 
@@ -74,7 +75,7 @@ pub(in crate::managed) struct ManagedBunEnvironment {
     pub(in crate::managed) local_app_data_dir: AbsolutePathBuf,
     pub(in crate::managed) bunfig: AbsolutePathBuf,
     pub(in crate::managed) npmrc: AbsolutePathBuf,
-    operation: Arc<tempfile::TempDir>,
+    operation: Arc<ManagedBunOperationDirectory>,
 }
 
 /// An unspawned Bun command together with the exact sandbox permissions it requires.
@@ -85,7 +86,7 @@ pub(in crate::managed) struct ManagedBunCommandPlan {
     cwd: AbsolutePathBuf,
     env: BTreeMap<OsString, OsString>,
     permissions: PermissionProfile,
-    operation: Arc<tempfile::TempDir>,
+    operation: Arc<ManagedBunOperationDirectory>,
 }
 
 /// Mandatory-sandbox preparation for a managed Bun command.
@@ -98,7 +99,7 @@ pub(in crate::managed) enum ManagedBunSandboxPreparation {
 pub(in crate::managed) struct PreparedManagedBunCommand {
     command: Command,
     sandbox: SandboxType,
-    _operation: Arc<tempfile::TempDir>,
+    _operation: Arc<ManagedBunOperationDirectory>,
 }
 
 impl PreparedManagedBunCommand {
@@ -185,20 +186,7 @@ pub(in crate::managed) fn materialize_bun_environment(
         .context("failed to create managed Bun cache")?;
     super::install::ensure_regular_directory_tree(management_root, &operations_dir)
         .context("failed to create managed Bun operation root")?;
-    let mut operation_builder = tempfile::Builder::new();
-    operation_builder.prefix("operation-");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let private = fs::Permissions::from_mode(0o700);
-        fs::set_permissions(operations_dir.as_path(), private.clone())
-            .context("failed to secure managed Bun operation root")?;
-        operation_builder.permissions(private);
-    }
-    let operation = operation_builder
-        .tempdir_in(operations_dir.as_path())
-        .context("failed to create private managed Bun operation directory")?;
+    let operation = ManagedBunOperationDirectory::create(&operations_dir)?;
     let operation_root = AbsolutePathBuf::from_absolute_path_checked(operation.path())
         .context("managed Bun operation directory was not absolute")?;
     let scratch_dir = operation_root.join("scratch");
