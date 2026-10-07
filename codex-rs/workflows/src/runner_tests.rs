@@ -341,7 +341,8 @@ fn bounded_capture_can_stop_an_open_windows_pipe() {
     let started = Instant::now();
 
     let error = finish_captures(stdout, stderr, Duration::from_millis(/*millis*/ 50))
-        .expect_err("open pipes must not leak capture threads");
+        .err()
+        .expect("open pipes must not leak capture threads");
     let _ = child.kill();
     let _ = child.wait();
 
