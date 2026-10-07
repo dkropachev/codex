@@ -9,6 +9,7 @@ fn parses_existing_local_path_and_file_url() {
         .and_then(|path| path.canonicalize())
         .expect("canonical temp dir");
     let local = WorkflowGitSource(WorkflowGitSourceKind::Local(canonical));
+    assert!(local.receipt_source().is_err());
 
     assert_eq!(
         WorkflowGitSource::parse(&format!("  {}  ", temp.path().display())).expect("local source"),
@@ -68,6 +69,10 @@ fn parses_supported_remote_forms_for_command_args() {
         let parsed = WorkflowGitSource::parse(input).expect("remote source");
         assert_eq!(parsed, WorkflowGitSource(kind));
         assert_eq!(parsed.as_os_str(), OsStr::new(input));
+        assert_eq!(
+            parsed.receipt_source().expect("persistable remote source"),
+            input
+        );
     }
 }
 

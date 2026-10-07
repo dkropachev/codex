@@ -24,6 +24,16 @@ enum WorkflowGitSourceKind {
 pub struct WorkflowGitSource(WorkflowGitSourceKind);
 
 impl WorkflowGitSource {
+    /// Returns a credential-free remote spelling suitable for receipt v1.
+    pub(in crate::managed) fn receipt_source(&self) -> anyhow::Result<&str> {
+        match &self.0 {
+            WorkflowGitSourceKind::Https(source) | WorkflowGitSourceKind::Ssh(source) => Ok(source),
+            WorkflowGitSourceKind::Local(_) => {
+                anyhow::bail!("local workflow source cannot be persisted without an absolute path")
+            }
+        }
+    }
+
     /// Parses and validates a Git source before it is passed to Git.
     pub fn parse(input: &str) -> Result<Self> {
         ensure!(
