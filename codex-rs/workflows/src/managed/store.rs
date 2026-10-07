@@ -34,6 +34,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use crate::managed::fetch::VerificationLimits;
 use crate::managed::integrity::VerifiedWorkflowRelease;
 use fs::SecureDirectory;
+#[cfg(any(unix, windows))]
 use lock::LockMode;
 use lock::ManagedFileLock;
 use prepare::PreparedWorkflowRelease;
@@ -134,6 +135,10 @@ impl ManagedWorkflowStore {
     }
 
     /// Copies a verified release into operation-private staging and binds it to a journal marker.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "keep transaction inputs explicit across the staging boundary"
+    )]
     pub(in crate::managed) fn prepare_release(
         &self,
         locked: &LockedManagedWorkflow,

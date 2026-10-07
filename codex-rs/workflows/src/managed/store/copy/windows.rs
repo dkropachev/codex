@@ -79,8 +79,9 @@ pub(super) fn copy_verified_payload(
             let source_path = source.path().join(&name);
             let metadata = fs::symlink_metadata(source_path.as_path())?;
             if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-                if !metadata.file_type().is_symlink()
-                    || !relative_path.starts_with("node_modules")
+                if !super::super::windows_security::is_symbolic_link_reparse_point(
+                    source_path.as_path(),
+                )? || !relative_path.starts_with("node_modules")
                     || relative_path == Path::new("node_modules")
                 {
                     bail!("verified workflow payload contains an unsupported reparse point");

@@ -26,7 +26,9 @@ pub(super) fn move_current_aside(
         verify_old_active(&active, journal)?;
         drop(active);
         if store.backups.child_exists(&record_name)? {
-            if store.backups.read_file(&record_name, 256)? != cleanup::reservation_record(name) {
+            if store.backups.read_file(&record_name, /*maximum_bytes*/ 256)?
+                != cleanup::reservation_record(name)
+            {
                 bail!("workflow backup reservation conflicts with transaction");
             }
         } else {
@@ -42,7 +44,7 @@ pub(super) fn move_current_aside(
     verify_backup(&backup, journal)?;
     let (device, inode) = backup.identity()?;
     let bound = cleanup::bound_record(name, device, inode);
-    let current_record = store.backups.read_file(&record_name, 256)?;
+    let current_record = store.backups.read_file(&record_name, /*maximum_bytes*/ 256)?;
     if current_record == cleanup::reservation_record(name) {
         store
             .backups
@@ -51,7 +53,7 @@ pub(super) fn move_current_aside(
         bail!("workflow backup ownership record does not match directory");
     }
     if backup.child_exists(".codex-managed-operation")? {
-        if backup.read_file(".codex-managed-operation", 128)? != name.as_bytes() {
+        if backup.read_file(".codex-managed-operation", /*maximum_bytes*/ 128)? != name.as_bytes() {
             bail!("workflow backup operation marker does not match transaction");
         }
     } else {
@@ -138,7 +140,7 @@ pub(super) fn restore_previous(
     let backup = store.backups.existing_child(name)?;
     verify_backup(&backup, journal)?;
     if backup.child_exists(".codex-managed-operation")? {
-        if backup.read_file(".codex-managed-operation", 128)? != name.as_bytes() {
+        if backup.read_file(".codex-managed-operation", /*maximum_bytes*/ 128)? != name.as_bytes() {
             bail!("workflow backup operation marker does not match transaction");
         }
         backup.remove_regular_file(".codex-managed-operation")?;

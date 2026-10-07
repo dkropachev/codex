@@ -205,18 +205,18 @@ pub(super) fn finish_replace(
         journal.next_action = ManagedWorkflowNextAction::WriteReceipt;
         write_journal(&store.journals, &journal, /*replace*/ true)?;
     }
-    if receipt != journal.next_receipt {
-        if let Err(error) = write_receipt(
+    if receipt != journal.next_receipt
+        && let Err(error) = write_receipt(
             &store.receipts,
             &journal.next_receipt,
             /*replace*/ true,
-        ) {
-            if matches!(read_pending_receipt(&store.receipts, &journal.id), Ok(Some(next)) if next == journal.next_receipt)
-            {
-                return Ok(ManagedWorkflowCommitOutcome::CommittedCleanupPending);
-            }
-            return Err(error);
+        )
+    {
+        if matches!(read_pending_receipt(&store.receipts, &journal.id), Ok(Some(next)) if next == journal.next_receipt)
+        {
+            return Ok(ManagedWorkflowCommitOutcome::CommittedCleanupPending);
         }
+        return Err(error);
     }
     if journal.next_action != ManagedWorkflowNextAction::Cleanup {
         journal.next_action = ManagedWorkflowNextAction::Cleanup;

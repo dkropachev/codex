@@ -39,6 +39,70 @@ fn windows_copy_preserves_payload_and_excludes_checkout_git() {
 }
 
 #[test]
+fn windows_copy_preserves_contained_dependency_symlink_and_evidence() {
+    let root = tempfile::tempdir().expect("root");
+    let source = root.path().join("source");
+    let modules = source.join("node_modules");
+    fs::create_dir_all(modules.join(".bin")).expect("dependency bin");
+    fs::create_dir(modules.join("package")).expect("dependency package");
+    fs::write(source.join("workflow.yaml"), b"workflow").expect("manifest");
+    fs::write(modules.join("package/tool.js"), b"tool").expect("dependency file");
+    let target = Path::new(r"..\package\tool.js");
+    let source_link = modules.join(".bin/tool");
+    match std::os::windows::fs::symlink_file(target, &source_link) {
+        Ok(()) => {}
+        Err(error)
+            if error.raw_os_error()
+                == Some(windows_sys::Win32::Foundation::ERROR_PRIVILEGE_NOT_HELD as i32) =>
+        {
+            return;
+        }
+        Err(error) => panic!("create contained dependency link: {error}"),
+    }
+    let source = AbsolutePathBuf::from_absolute_path_checked(&source).expect("source path");
+    let root_path = AbsolutePathBuf::from_absolute_path_checked(root.path()).expect("root path");
+    let destination = SecureDirectory::open_root(&root_path)
+        .expect("open root")
+        .child("managed")
+        .expect("private managed directory");
+    let limits = crate::managed::fetch::VERIFICATION_LIMITS;
+    copy_verified_payload(
+        &source,
+        &destination,
+        limits,
+        crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
+        /*cancelled*/ None,
+    )
+    .expect("copy payload with contained link");
+    let copied_root = destination.path().join("payload");
+    let copied_link = copied_root.join("node_modules/.bin/tool");
+    assert!(
+        fs::symlink_metadata(&copied_link)
+            .expect("copied link metadata")
+            .file_type()
+            .is_symlink()
+    );
+    let copied_target = fs::read_link(&copied_link).expect("copied link target");
+    assert_eq!(copied_target.as_path(), target);
+    assert_eq!(
+        crate::managed::integrity::published_payload_evidence(
+            source.as_path(),
+            limits,
+            crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
+            /*cancelled*/ None,
+        )
+        .expect("source evidence"),
+        crate::managed::integrity::published_payload_evidence(
+            copied_root.as_path(),
+            limits,
+            crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
+            /*cancelled*/ None,
+        )
+        .expect("copied evidence")
+    );
+}
+
+#[test]
 fn windows_copy_enforces_logical_byte_limit() {
     let root = tempfile::tempdir().expect("root");
     let source = root.path().join("source");
@@ -74,10 +138,15 @@ fn windows_copy_rejects_junction_entries() {
     fs::create_dir(&outside).expect("outside directory");
     fs::write(outside.join("secret"), b"outside").expect("outside file");
     let junction = modules.join("junction");
-    let output = std::process::Command::new("cmd")
-        .args(["/C", "mklink", "/J"])
-        .arg(&junction)
-        .arg(&outside)
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$ErrorActionPreference = 'Stop'; New-Item -ItemType Junction -Path $env:CODEX_TEST_LINK -Target $env:CODEX_TEST_TARGET | Out-Null",
+        ])
+        .env("CODEX_TEST_LINK", &junction)
+        .env("CODEX_TEST_TARGET", &outside)
         .output()
         .expect("create junction");
     assert!(
@@ -114,10 +183,15 @@ fn windows_copy_rejects_nested_links_through_a_junction() {
     fs::create_dir(&outside).expect("outside directory");
     fs::write(outside.join("secret"), b"outside").expect("outside file");
     let junction = modules.join("-aliasdir/junction");
-    let output = std::process::Command::new("cmd")
-        .args(["/C", "mklink", "/J"])
-        .arg(&junction)
-        .arg(&outside)
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$ErrorActionPreference = 'Stop'; New-Item -ItemType Junction -Path $env:CODEX_TEST_LINK -Target $env:CODEX_TEST_TARGET | Out-Null",
+        ])
+        .env("CODEX_TEST_LINK", &junction)
+        .env("CODEX_TEST_TARGET", &outside)
         .output()
         .expect("create nested junction");
     assert!(
@@ -145,9 +219,10 @@ fn windows_copy_rejects_nested_links_through_a_junction() {
     )
     .expect_err("nested junction must be rejected");
     assert!(
-        error
-            .to_string()
-            .contains("dependency link resolves through a reparse point"),
+        error.to_string().contains("absolute nested target")
+            || error
+                .to_string()
+                .contains("resolves through a reparse point"),
         "{error:#}"
     );
 }
