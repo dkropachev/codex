@@ -95,6 +95,10 @@ impl ManagedWorkflowStore {
     }
 
     /// Copies a verified release into operation-private staging and binds it to a journal marker.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "keep transaction inputs explicit across the staging boundary"
+    )]
     pub(in crate::managed) fn prepare_release(
         &self,
         locked: &LockedManagedWorkflow,
