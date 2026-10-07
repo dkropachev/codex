@@ -17,28 +17,33 @@ mod checkout;
 mod tree;
 
 pub(super) use checkout::StagedWorkflowRelease;
+pub(super) use tree::portable_path;
 
 const RELEASE_REF: &str = "refs/codex/workflow-release";
 const SOURCE_REMOTE: &str = "codex-workflow-source";
 const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy)]
-struct VerificationLimits {
+pub(in crate::managed) struct VerificationLimits {
     blob_bytes: u64,
     object_entries: usize,
     object_bytes: u64,
     worktree_entries: usize,
     staging_entries: usize,
     staging_bytes: u64,
+    pub(in crate::managed) post_install_entries: usize,
+    pub(in crate::managed) post_install_bytes: u64,
 }
 
-const VERIFICATION_LIMITS: VerificationLimits = VerificationLimits {
+pub(super) const VERIFICATION_LIMITS: VerificationLimits = VerificationLimits {
     blob_bytes: 128 * 1024 * 1024,
     object_entries: 16_384, // Keeps `cat-file` metadata below the 1 MiB output cap.
     object_bytes: 256 * 1024 * 1024,
     worktree_entries: 8_192,
     staging_entries: 200_000,
     staging_bytes: 256 * 1024 * 1024,
+    post_install_entries: 250_000,
+    post_install_bytes: 2 * 1024 * 1024 * 1024,
 };
 #[allow(dead_code, reason = "used by the managed installation stage")]
 pub(super) struct FetchedWorkflowRelease {
