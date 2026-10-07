@@ -33,12 +33,7 @@ pub(super) fn commit_replace(
     }
     publish::validate_prepared(store, &prepared)?;
     if publish::journal_exists(&store.journals, &locked.id)? {
-        let existing = read_journal(&store.journals, &locked.id)?;
-        if existing.previous_receipt.is_some() {
-            recover_replace(store, locked)?;
-        } else {
-            publish::recover_fresh(store, locked)?;
-        }
+        store.recover_locked(locked)?;
         if publish::journal_exists(&store.journals, &locked.id)? {
             bail!("managed workflow has an unresolved transaction journal");
         }
@@ -78,7 +73,7 @@ pub(super) fn recover_replace(
     finish_replace(store, journal).map(Some)
 }
 
-fn finish_replace(
+pub(super) fn finish_replace(
     store: &ManagedWorkflowStore,
     mut journal: ManagedWorkflowJournal,
 ) -> anyhow::Result<ManagedWorkflowCommitOutcome> {

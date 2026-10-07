@@ -14,6 +14,8 @@ mod prepare;
 mod publish;
 mod receipt;
 #[cfg(unix)]
+mod recovery;
+#[cfg(unix)]
 mod replace;
 mod stage;
 
@@ -78,6 +80,14 @@ pub(in crate::managed) struct ManagedWorkflowRecoveryGuard {
 }
 
 impl ManagedWorkflowStore {
+    #[cfg(unix)]
+    pub(in crate::managed) fn recover_locked(
+        &self,
+        locked: &LockedManagedWorkflow,
+    ) -> anyhow::Result<Option<ManagedWorkflowCommitOutcome>> {
+        recovery::recover_locked(self, locked)
+    }
+
     #[cfg(unix)]
     pub(in crate::managed) fn commit_fresh(
         &self,
@@ -208,7 +218,7 @@ impl ManagedWorkflowStore {
         if backups.device_id()? != active_root.device_id()? {
             bail!("managed workflow metadata crossed a filesystem boundary");
         }
-        Ok(Self {
+        let store = Self {
             management,
             locks,
             receipts,
@@ -216,7 +226,10 @@ impl ManagedWorkflowStore {
             staging,
             backups,
             active_root,
-        })
+        };
+        #[cfg(unix)]
+        recovery::recover_all(&store, /*cancelled*/ None)?;
+        Ok(store)
     }
 
     pub(in crate::managed) fn lock_install(

@@ -210,12 +210,31 @@ pub(super) fn read_journal(
     journals: &SecureDirectory,
     id: &str,
 ) -> anyhow::Result<ManagedWorkflowJournal> {
-    let bytes = journals.read_file(&journal_file_name(id)?, MAX_JOURNAL_BYTES as u64)?;
+    let journal = read_journal_named(journals, &journal_file_name(id)?)?;
+    if journal.id != id {
+        bail!("managed workflow journal id does not match requested workflow");
+    }
+    Ok(journal)
+}
+
+pub(super) fn read_journal_named(
+    journals: &SecureDirectory,
+    name: &str,
+) -> anyhow::Result<ManagedWorkflowJournal> {
+    if name.len() != 69
+        || !name.ends_with(".json")
+        || !name.as_bytes()[..64]
+            .iter()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        bail!("managed workflow journal file name is invalid");
+    }
+    let bytes = journals.read_file(name, MAX_JOURNAL_BYTES as u64)?;
     let journal = serde_json::from_slice::<ManagedWorkflowJournal>(&bytes)
         .context("failed to parse managed workflow journal")?;
     journal.validate()?;
-    if journal.id != id {
-        bail!("managed workflow journal id does not match its file");
+    if journal_file_name(&journal.id)? != name {
+        bail!("managed workflow journal id does not match its file name");
     }
     Ok(journal)
 }

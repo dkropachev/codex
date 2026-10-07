@@ -1,0 +1,69 @@
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+
+use anyhow::bail;
+
+use super::LockedManagedWorkflow;
+use super::ManagedWorkflowStore;
+use super::journal::read_journal;
+use super::journal::read_journal_named;
+use super::publish;
+use super::publish::ManagedWorkflowCommitOutcome;
+use super::replace;
+
+const MAX_JOURNAL_DIRECTORY_ENTRIES: usize = 4_096;
+const MAX_JOURNALS: usize = 1_024;
+
+/// Recovers all durable transactions while the global lock excludes operations.
+pub(super) fn recover_all(
+    store: &ManagedWorkflowStore,
+    cancelled: Option<&AtomicBool>,
+) -> anyhow::Result<()> {
+    let _global = store.lock_recovery(cancelled)?;
+    let mut names = store
+        .journals
+        .list_names(MAX_JOURNAL_DIRECTORY_ENTRIES, cancelled)?;
+    if names.len() > MAX_JOURNALS {
+        bail!("managed workflow journal count exceeds its limit");
+    }
+    names.sort();
+    let mut journals = Vec::with_capacity(names.len());
+    for name in names {
+        if cancelled.is_some_and(|signal| signal.load(Ordering::Relaxed)) {
+            bail!("managed workflow recovery was cancelled");
+        }
+        journals.push(read_journal_named(&store.journals, &name)?);
+    }
+    for journal in journals {
+        if cancelled.is_some_and(|signal| signal.load(Ordering::Relaxed)) {
+            bail!("managed workflow recovery was cancelled");
+        }
+        if journal.previous_receipt.is_some() {
+            replace::finish_replace(store, journal)?;
+        } else {
+            publish::finish_fresh(store, journal)?;
+        }
+    }
+    Ok(())
+}
+
+/// Resumes a journal for one ID while its exclusive workflow lock is retained.
+pub(super) fn recover_locked(
+    store: &ManagedWorkflowStore,
+    locked: &LockedManagedWorkflow,
+) -> anyhow::Result<Option<ManagedWorkflowCommitOutcome>> {
+    locked.ensure_store(store)?;
+    if !publish::journal_exists(&store.journals, &locked.id)? {
+        return Ok(None);
+    }
+    let journal = read_journal(&store.journals, &locked.id)?;
+    if journal.previous_receipt.is_some() {
+        replace::finish_replace(store, journal).map(Some)
+    } else {
+        publish::finish_fresh(store, journal).map(Some)
+    }
+}
+
+#[cfg(test)]
+#[path = "recovery_tests.rs"]
+mod tests;
