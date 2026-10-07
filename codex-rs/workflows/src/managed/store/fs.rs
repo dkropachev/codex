@@ -469,6 +469,21 @@ impl SecureDirectory {
         }
     }
 
+    #[cfg(unix)]
+    pub(super) fn remove_regular_file(&self, name: &str) -> anyhow::Result<()> {
+        use rustix::fs::AtFlags;
+        use rustix::fs::statat;
+        use rustix::fs::unlinkat;
+
+        validate_component(name)?;
+        let metadata = statat(&self.handle, name, AtFlags::SYMLINK_NOFOLLOW)?;
+        if metadata.st_mode & 0o170000 != 0o100000 {
+            bail!("managed metadata target must be a regular file");
+        }
+        unlinkat(&self.handle, name, AtFlags::empty())?;
+        self.sync()
+    }
+
     #[cfg(not(windows))]
     fn open_regular_file(&self, name: &str) -> anyhow::Result<fs::File> {
         #[cfg(unix)]
