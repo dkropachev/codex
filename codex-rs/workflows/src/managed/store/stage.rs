@@ -14,7 +14,7 @@ static NEXT_TRANSACTION_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Owns one private staging directory until a journal takes responsibility for it.
 pub(super) struct TransactionStaging<'a> {
-    parent: &'a SecureDirectory,
+    pub(super) parent: &'a SecureDirectory,
     directory: SecureDirectory,
     name: String,
     #[cfg(unix)]

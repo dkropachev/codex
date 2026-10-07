@@ -32,7 +32,7 @@ fn git(root: &Path, args: &[&str]) {
     );
 }
 
-fn verified_release(
+pub(in crate::managed::store) fn verified_release(
     with_dependencies: bool,
     synthetic_remote: bool,
 ) -> (
@@ -131,7 +131,7 @@ fn verified_release(
     (staging, verified, receipt, staged_path)
 }
 
-fn store(root: &Path) -> ManagedWorkflowStore {
+pub(in crate::managed::store) fn store(root: &Path) -> ManagedWorkflowStore {
     fs::create_dir(root.join("workflows")).expect("workflow root");
     ManagedWorkflowStore::create(&absolute(root), &absolute(&root.join("workflows")))
         .expect("managed store")

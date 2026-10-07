@@ -8,6 +8,8 @@ mod fs;
 mod journal;
 mod lock;
 mod prepare;
+#[cfg(unix)]
+mod publish;
 mod receipt;
 mod stage;
 
@@ -24,6 +26,11 @@ use lock::LockMode;
 use lock::ManagedFileLock;
 use prepare::PreparedWorkflowRelease;
 use receipt::ManagedWorkflowReceipt;
+
+#[cfg(unix)]
+pub(in crate::managed) use expected::ExpectedCurrent;
+#[cfg(unix)]
+pub(in crate::managed) use publish::ManagedWorkflowCommitOutcome;
 
 /// Owns the private, same-filesystem metadata layout for managed workflows.
 pub(in crate::managed) struct ManagedWorkflowStore {
@@ -65,6 +72,26 @@ pub(in crate::managed) struct ManagedWorkflowRecoveryGuard {
 }
 
 impl ManagedWorkflowStore {
+    #[cfg(unix)]
+    pub(in crate::managed) fn commit_fresh(
+        &self,
+        locked: &LockedManagedWorkflow,
+        expected: &ExpectedCurrent,
+        prepared: PreparedWorkflowRelease<'_>,
+    ) -> anyhow::Result<ManagedWorkflowCommitOutcome> {
+        locked.ensure_store(self)?;
+        publish::commit_fresh(self, locked, expected, prepared)
+    }
+
+    #[cfg(unix)]
+    pub(in crate::managed) fn recover_fresh(
+        &self,
+        locked: &LockedManagedWorkflow,
+    ) -> anyhow::Result<Option<ManagedWorkflowCommitOutcome>> {
+        locked.ensure_store(self)?;
+        publish::recover_fresh(self, locked)
+    }
+
     /// Copies a verified release into operation-private staging and binds it to a journal marker.
     pub(in crate::managed) fn prepare_release(
         &self,
