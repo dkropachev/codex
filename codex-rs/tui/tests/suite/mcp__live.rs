@@ -173,11 +173,21 @@ async fn mcp_startup_warning_interaction_works_in_live_tui() -> Result<()> {
         contents.contains("GPT-5.6-Terra default")
     })
     .await?;
-    wait_for_screen(&mut output_rx, &mut screen, "warning footer", |contents| {
-        contents.contains("f2 to view")
-    })
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "MCP warning footer",
+        |contents| contents.contains("2 warnings") && contents.contains("f2 to view"),
+    )
     .await?;
     writer.send(b"\x1bOQ".to_vec()).await?;
+    let warning = wait_for_screen(&mut output_rx, &mut screen, "warning page", |contents| {
+        contents.contains("Warnings ·")
+    })
+    .await?;
+    if !warning.contains("MCP client for `broken` failed to start") {
+        writer.send(b"\x1b[C".to_vec()).await?;
+    }
     wait_for_screen(
         &mut output_rx,
         &mut screen,

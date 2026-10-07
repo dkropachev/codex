@@ -71,6 +71,16 @@ impl ManagedWorkflowReceipt {
         }
         Ok(())
     }
+
+    pub(super) fn serialized_bytes(&self) -> anyhow::Result<Vec<u8>> {
+        self.validate()?;
+        let mut bytes = serde_json::to_vec_pretty(self)?;
+        bytes.push(b'\n');
+        if bytes.len() > MAX_RECEIPT_BYTES {
+            bail!("managed workflow receipt exceeds its size limit");
+        }
+        Ok(bytes)
+    }
 }
 
 impl WorkflowRelease {
@@ -149,12 +159,7 @@ pub(super) fn write_receipt(
     receipt: &ManagedWorkflowReceipt,
     replace: bool,
 ) -> anyhow::Result<()> {
-    receipt.validate()?;
-    let mut bytes = serde_json::to_vec_pretty(receipt)?;
-    bytes.push(b'\n');
-    if bytes.len() > MAX_RECEIPT_BYTES {
-        bail!("managed workflow receipt exceeds its size limit");
-    }
+    let bytes = receipt.serialized_bytes()?;
     let directory = receipt_directory(receipts, &receipt.id, ReceiptDirectoryMode::Create)?;
     directory.write_file("receipt.json", &bytes, replace)
 }
