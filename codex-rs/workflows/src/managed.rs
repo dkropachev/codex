@@ -11,6 +11,8 @@ mod integrity;
 mod jsonc;
 mod release;
 mod source;
+#[allow(dead_code, reason = "used by managed lifecycle stages")]
+mod store;
 
 pub use release::ResolvedWorkflowRelease;
 pub use source::WorkflowGitSource;
