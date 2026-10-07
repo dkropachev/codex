@@ -48,10 +48,37 @@ impl ManagedFileLock {
                 }
             }
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            use std::fs::TryLockError;
+
+            loop {
+                if cancelled.is_some_and(|signal| signal.load(Ordering::Relaxed)) {
+                    bail!("managed workflow lock acquisition was cancelled");
+                }
+                let result = match mode {
+                    LockMode::Shared => file.try_lock_shared(),
+                    LockMode::Exclusive => file.try_lock(),
+                };
+                match result {
+                    Ok(()) => return Ok(Self { _file: file }),
+                    Err(TryLockError::WouldBlock) => {
+                        std::thread::sleep(Duration::from_millis(/*millis*/ 10));
+                    }
+                    Err(TryLockError::Error(error)) => {
+                        return Err(error).context("failed to acquire managed workflow lock");
+                    }
+                }
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = (file, mode, cancelled);
             bail!("managed workflow locking is not yet available on this platform");
         }
     }
 }
+
+#[cfg(all(test, windows))]
+#[path = "lock_tests.rs"]
+mod tests;
