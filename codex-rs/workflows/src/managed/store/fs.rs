@@ -105,6 +105,43 @@ impl SecureDirectory {
         &self.path
     }
 
+    /// Opens an existing private child without creating metadata during reads.
+    pub(super) fn existing_child(&self, name: &str) -> anyhow::Result<Self> {
+        validate_component(name)?;
+        #[cfg(unix)]
+        {
+            use rustix::fs::Mode;
+            use rustix::fs::OFlags;
+            use rustix::fs::openat;
+
+            let handle = openat(
+                &self.handle,
+                name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW,
+                Mode::empty(),
+            )
+            .context("failed to open existing managed workflow directory")?;
+            if rustix::fs::fstat(&handle)?.st_mode & 0o077 != 0 {
+                bail!("managed workflow directory is accessible to other users");
+            }
+            Ok(Self {
+                path: self.path.join(name),
+                handle,
+            })
+        }
+        #[cfg(windows)]
+        bail!("Windows managed store directories require protected ACL support");
+        #[cfg(not(any(unix, windows)))]
+        {
+            let path = self.path.join(name);
+            let metadata = fs::symlink_metadata(path.as_path())?;
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                bail!("managed workflow directory must not be aliased");
+            }
+            Ok(Self { path })
+        }
+    }
+
     /// Opens an existing regular metadata file without following an alias.
     pub(super) fn read_file(&self, name: &str, maximum_bytes: u64) -> anyhow::Result<Vec<u8>> {
         #[cfg(windows)]
