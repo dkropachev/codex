@@ -7,7 +7,7 @@ mod cleanup;
 #[path = "store/cleanup/windows.rs"]
 mod cleanup;
 mod copy;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod expected;
 mod fs;
 mod journal;
@@ -41,7 +41,7 @@ use receipt::ManagedWorkflowReceipt;
 
 pub(in crate::managed) use operation::ManagedBunOperationDirectory;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(in crate::managed) use expected::ExpectedCurrent;
 #[cfg(unix)]
 pub(in crate::managed) use publish::ManagedWorkflowCommitOutcome;
