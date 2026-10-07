@@ -10,6 +10,7 @@ use super::cleanup;
 use super::expected::ExpectedCurrent;
 use super::expected::compare_current;
 use super::fs::SecureDirectory;
+use super::fs::device_id_from_stat;
 use super::journal::ManagedWorkflowJournal;
 use super::journal::ManagedWorkflowNextAction;
 use super::journal::journal_file_name;
@@ -214,7 +215,10 @@ pub(super) fn verify_published(
 
     let retained = rustix::fs::fstat(directory.handle())?;
     let named = std::fs::symlink_metadata(directory.path().as_path())?;
-    if !named.is_dir() || named.dev() != retained.st_dev || named.ino() != retained.st_ino {
+    if !named.is_dir()
+        || named.dev() != device_id_from_stat(retained.st_dev)
+        || named.ino() != retained.st_ino
+    {
         bail!("managed workflow publication changed directory identity");
     }
     if !read_marker(directory)?.matches_journal(journal) {
@@ -228,7 +232,10 @@ pub(super) fn verify_published(
         /*cancelled*/ None,
     )?;
     let named = std::fs::symlink_metadata(directory.path().as_path())?;
-    if !named.is_dir() || named.dev() != retained.st_dev || named.ino() != retained.st_ino {
+    if !named.is_dir()
+        || named.dev() != device_id_from_stat(retained.st_dev)
+        || named.ino() != retained.st_ino
+    {
         bail!("managed workflow publication changed directory identity during verification");
     }
     Ok(())
@@ -254,7 +261,7 @@ pub(super) fn cleanup_stage(
         AtFlags::SYMLINK_NOFOLLOW,
     );
     let (device, inode) = match root {
-        Ok(metadata) => (metadata.st_dev, metadata.st_ino),
+        Ok(metadata) => (device_id_from_stat(metadata.st_dev), metadata.st_ino),
         Err(Errno::NOENT) => (0, 0),
         Err(error) => return Err(error).context("failed to inspect transaction cleanup root"),
     };

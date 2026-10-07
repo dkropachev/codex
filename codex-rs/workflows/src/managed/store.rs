@@ -28,6 +28,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use crate::managed::fetch::VerificationLimits;
 use crate::managed::integrity::VerifiedWorkflowRelease;
 use fs::SecureDirectory;
+#[cfg(unix)]
+use fs::device_id_from_stat;
 use lock::LockMode;
 use lock::ManagedFileLock;
 use prepare::PreparedWorkflowRelease;
@@ -61,7 +63,7 @@ pub(in crate::managed) struct LockedManagedWorkflow {
 impl LockedManagedWorkflow {
     fn ensure_store(&self, store: &ManagedWorkflowStore) -> anyhow::Result<()> {
         let metadata = rustix::fs::fstat(store.management.handle())?;
-        if self.management_identity != (metadata.st_dev, metadata.st_ino) {
+        if self.management_identity != (device_id_from_stat(metadata.st_dev), metadata.st_ino) {
             bail!("managed workflow lock belongs to a different store");
         }
         Ok(())
@@ -127,6 +129,10 @@ impl ManagedWorkflowStore {
     }
 
     /// Copies a verified release into operation-private staging and binds it to a journal marker.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "keep transaction inputs explicit across the staging boundary"
+    )]
     pub(in crate::managed) fn prepare_release(
         &self,
         locked: &LockedManagedWorkflow,
@@ -239,7 +245,7 @@ impl ManagedWorkflowStore {
         #[cfg(unix)]
         let management_identity = {
             let metadata = rustix::fs::fstat(self.management.handle())?;
-            (metadata.st_dev, metadata.st_ino)
+            (device_id_from_stat(metadata.st_dev), metadata.st_ino)
         };
         Ok(LockedManagedWorkflow {
             id: id.to_owned(),
