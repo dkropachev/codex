@@ -17,6 +17,7 @@ pub(in crate::managed) struct StagedWorkflowRelease {
     root: AbsolutePathBuf,
     release: super::ResolvedWorkflowRelease,
     dependencies: crate::managed::dependencies::ValidatedManagedDependencies,
+    baseline: crate::managed::integrity::SourceIntegrityBaseline,
 }
 
 #[allow(dead_code, reason = "used by the managed installation stage")]
@@ -33,6 +34,12 @@ impl StagedWorkflowRelease {
         &self,
     ) -> &crate::managed::dependencies::ValidatedManagedDependencies {
         &self.dependencies
+    }
+
+    pub(in crate::managed) fn baseline(
+        &self,
+    ) -> &crate::managed::integrity::SourceIntegrityBaseline {
+        &self.baseline
     }
 }
 
@@ -67,12 +74,20 @@ pub(super) fn checkout_fetched_release(
     let package = crate::WorkflowPackage::load(&repository)?;
     validate_package_version(&package, &release)?;
     let dependencies = crate::managed::dependencies::validate_managed_dependencies(&package)?;
+    let baseline = crate::managed::integrity::capture_source_baseline(
+        git,
+        repository.as_path(),
+        commit,
+        limits,
+        cancelled,
+    )?;
     super::ensure_not_cancelled(cancelled)?;
     Ok(StagedWorkflowRelease {
         temporary,
         root: repository,
         release,
         dependencies,
+        baseline,
     })
 }
 

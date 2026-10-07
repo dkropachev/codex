@@ -99,6 +99,21 @@ fn checks_out_detached_tag_and_snapshot_packages() {
         .expect("stage release");
 
         assert_eq!(staged.release(), &expected);
+        assert_eq!(staged.baseline().commit, expected.advertised_object_id);
+        assert_eq!(
+            staged
+                .baseline()
+                .index
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "package.json",
+                "src/workflow.ts",
+                "state/.gitkeep",
+                "workflow.yaml"
+            ]
+        );
         assert_eq!(
             staged.dependencies(),
             &crate::managed::dependencies::ValidatedManagedDependencies {
@@ -119,6 +134,28 @@ fn checks_out_detached_tag_and_snapshot_packages() {
             !git_output(staged.root(), ["symbolic-ref", "-q", "HEAD"])
                 .status
                 .success()
+        );
+        fs::write(staged.root().join("workflow.yaml"), "modified").expect("modify tracked source");
+        assert!(
+            crate::managed::integrity::capture_source_baseline(
+                OsStr::new("git"),
+                staged.root().as_path(),
+                &expected.advertised_object_id,
+                VERIFICATION_LIMITS,
+                /*cancelled*/ None,
+            )
+            .is_err()
+        );
+        git(staged.root(), ["add", "workflow.yaml"]);
+        assert!(
+            crate::managed::integrity::capture_source_baseline(
+                OsStr::new("git"),
+                staged.root().as_path(),
+                &expected.advertised_object_id,
+                VERIFICATION_LIMITS,
+                /*cancelled*/ None,
+            )
+            .is_err()
         );
     }
 }

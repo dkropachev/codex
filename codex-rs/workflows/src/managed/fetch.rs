@@ -404,7 +404,11 @@ fn inspect_staging(
     Ok(())
 }
 
-fn repository_command(git: &OsStr, working_directory: &Path, repository: &Path) -> Command {
+pub(super) fn repository_command(
+    git: &OsStr,
+    working_directory: &Path,
+    repository: &Path,
+) -> Command {
     let mut command = super::git_command::trusted_git_command(git, working_directory);
     command
         .arg("--no-replace-objects")
@@ -429,7 +433,7 @@ fn is_windows_reparse_point(_metadata: &fs::Metadata) -> bool {
     false
 }
 
-fn run_git(
+pub(super) fn run_git(
     command: Command,
     description: &str,
     cancelled: Option<&AtomicBool>,
