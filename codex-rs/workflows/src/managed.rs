@@ -3,6 +3,11 @@ use std::sync::atomic::AtomicBool;
 mod dependencies;
 mod fetch;
 mod git_command;
+#[allow(
+    dead_code,
+    reason = "consumed by post-install verification in the next slice"
+)]
+mod integrity;
 mod jsonc;
 mod release;
 mod source;
