@@ -1,4 +1,4 @@
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod backup;
 mod catalog;
 #[cfg(unix)]
@@ -14,12 +14,12 @@ mod journal;
 mod lock;
 mod operation;
 mod prepare;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod publish;
 mod receipt;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod recovery;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod replace;
 mod stage;
 #[cfg(windows)]
@@ -43,7 +43,7 @@ pub(in crate::managed) use operation::ManagedBunOperationDirectory;
 
 #[cfg(any(unix, windows))]
 pub(in crate::managed) use expected::ExpectedCurrent;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(in crate::managed) use publish::ManagedWorkflowCommitOutcome;
 
 /// Owns the private, same-filesystem metadata layout for managed workflows.
@@ -59,17 +59,16 @@ pub(in crate::managed) struct ManagedWorkflowStore {
 
 pub(in crate::managed) struct LockedManagedWorkflow {
     pub(in crate::managed) id: String,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     management_identity: (u64, u64),
     _global: ManagedFileLock,
     _workflow: ManagedFileLock,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl LockedManagedWorkflow {
     fn ensure_store(&self, store: &ManagedWorkflowStore) -> anyhow::Result<()> {
-        let metadata = rustix::fs::fstat(store.management.handle())?;
-        if self.management_identity != (metadata.st_dev, metadata.st_ino) {
+        if self.management_identity != store.management.identity()? {
             bail!("managed workflow lock belongs to a different store");
         }
         Ok(())
@@ -86,7 +85,7 @@ pub(in crate::managed) struct ManagedWorkflowRecoveryGuard {
 }
 
 impl ManagedWorkflowStore {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(in crate::managed) fn recover_locked(
         &self,
         locked: &LockedManagedWorkflow,
@@ -94,7 +93,7 @@ impl ManagedWorkflowStore {
         recovery::recover_locked(self, locked)
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(in crate::managed) fn commit_fresh(
         &self,
         locked: &LockedManagedWorkflow,
@@ -105,7 +104,7 @@ impl ManagedWorkflowStore {
         publish::commit_fresh(self, locked, expected, prepared)
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(in crate::managed) fn recover_fresh(
         &self,
         locked: &LockedManagedWorkflow,
@@ -114,7 +113,7 @@ impl ManagedWorkflowStore {
         publish::recover_fresh(self, locked)
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(in crate::managed) fn commit_replace(
         &self,
         locked: &LockedManagedWorkflow,
@@ -125,7 +124,7 @@ impl ManagedWorkflowStore {
         replace::commit_replace(self, locked, expected, prepared)
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(in crate::managed) fn recover_replace(
         &self,
         locked: &LockedManagedWorkflow,
@@ -145,7 +144,7 @@ impl ManagedWorkflowStore {
         deadline: crate::runner::CommandDeadline,
         cancelled: Option<&AtomicBool>,
     ) -> anyhow::Result<PreparedWorkflowRelease<'_>> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         locked.ensure_store(self)?;
         prepare::prepare_release(
             &self.staging,
@@ -229,7 +228,7 @@ impl ManagedWorkflowStore {
             backups,
             active_root,
         };
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         recovery::recover_all(&store, /*cancelled*/ None)?;
         Ok(store)
     }
@@ -244,14 +243,11 @@ impl ManagedWorkflowStore {
         let global = ManagedFileLock::acquire(global, LockMode::Shared, cancelled)?;
         let workflow = self.workflow_lock_file(id)?;
         let workflow = ManagedFileLock::acquire(workflow, LockMode::Exclusive, cancelled)?;
-        #[cfg(unix)]
-        let management_identity = {
-            let metadata = rustix::fs::fstat(self.management.handle())?;
-            (metadata.st_dev, metadata.st_ino)
-        };
+        #[cfg(any(unix, windows))]
+        let management_identity = self.management.identity()?;
         Ok(LockedManagedWorkflow {
             id: id.to_owned(),
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             management_identity,
             _global: global,
             _workflow: workflow,
@@ -302,3 +298,7 @@ impl ManagedWorkflowStore {
 #[cfg(all(test, unix))]
 #[path = "store_tests.rs"]
 mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "store/windows_lifecycle_tests.rs"]
+mod windows_tests;

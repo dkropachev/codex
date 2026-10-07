@@ -1,8 +1,5 @@
 use anyhow::Context;
 use anyhow::bail;
-use rustix::fs::AtFlags;
-use rustix::fs::statat;
-use rustix::io::Errno;
 
 use super::ManagedWorkflowStore;
 use super::cleanup;
@@ -28,30 +25,23 @@ pub(super) fn move_current_aside(
         let active = active_parent.existing_child(active_name)?;
         verify_old_active(&active, journal)?;
         drop(active);
-        match statat(
-            store.backups.handle(),
-            record_name.as_str(),
-            AtFlags::SYMLINK_NOFOLLOW,
-        ) {
-            Ok(_) => {
-                if store.backups.read_file(&record_name, 256)? != cleanup::reservation_record(name)
-                {
-                    bail!("workflow backup reservation conflicts with transaction");
-                }
+        if store.backups.child_exists(&record_name)? {
+            if store.backups.read_file(&record_name, 256)? != cleanup::reservation_record(name) {
+                bail!("workflow backup reservation conflicts with transaction");
             }
-            Err(Errno::NOENT) => store.backups.write_file(
+        } else {
+            store.backups.write_file(
                 &record_name,
                 &cleanup::reservation_record(name),
                 /*replace*/ false,
-            )?,
-            Err(error) => return Err(error).context("failed to inspect workflow backup record"),
+            )?;
         }
         active_parent.rename_child_noreplace(active_name, &store.backups, name)?;
         store.backups.existing_child(name)?
     };
     verify_backup(&backup, journal)?;
-    let metadata = rustix::fs::fstat(backup.handle())?;
-    let bound = cleanup::bound_record(name, metadata.st_dev, metadata.st_ino);
+    let (device, inode) = backup.identity()?;
+    let bound = cleanup::bound_record(name, device, inode);
     let current_record = store.backups.read_file(&record_name, 256)?;
     if current_record == cleanup::reservation_record(name) {
         store
@@ -60,22 +50,16 @@ pub(super) fn move_current_aside(
     } else if current_record != bound {
         bail!("workflow backup ownership record does not match directory");
     }
-    match statat(
-        backup.handle(),
-        ".codex-managed-operation",
-        AtFlags::SYMLINK_NOFOLLOW,
-    ) {
-        Ok(_) => {
-            if backup.read_file(".codex-managed-operation", 128)? != name.as_bytes() {
-                bail!("workflow backup operation marker does not match transaction");
-            }
+    if backup.child_exists(".codex-managed-operation")? {
+        if backup.read_file(".codex-managed-operation", 128)? != name.as_bytes() {
+            bail!("workflow backup operation marker does not match transaction");
         }
-        Err(Errno::NOENT) => backup.write_file(
+    } else {
+        backup.write_file(
             ".codex-managed-operation",
             name.as_bytes(),
             /*replace*/ false,
-        )?,
-        Err(error) => return Err(error).context("failed to inspect workflow backup marker"),
+        )?;
     }
     Ok(())
 }
@@ -104,13 +88,12 @@ fn verify_old_release(
     journal: &ManagedWorkflowJournal,
     location: OldReleaseLocation,
 ) -> anyhow::Result<()> {
-    use std::os::unix::fs::MetadataExt;
-
-    let retained = rustix::fs::fstat(directory.handle())?;
-    let named = std::fs::symlink_metadata(directory.path().as_path())?;
-    if !named.is_dir() || named.dev() != retained.st_dev || named.ino() != retained.st_ino {
+    let retained = directory.identity()?;
+    let named = SecureDirectory::open_root(directory.path())?;
+    if named.identity()? != retained {
         bail!("previous workflow release changed directory identity");
     }
+    drop(named);
     let previous = journal
         .previous_receipt
         .as_ref()
@@ -138,8 +121,8 @@ fn verify_old_release(
     if evidence.sha256 != marker.evidence_digest {
         bail!("previous managed workflow payload differs from its marker");
     }
-    let named = std::fs::symlink_metadata(directory.path().as_path())?;
-    if !named.is_dir() || named.dev() != retained.st_dev || named.ino() != retained.st_ino {
+    let named = SecureDirectory::open_root(directory.path())?;
+    if named.identity()? != retained {
         bail!("previous workflow release changed directory identity during verification");
     }
     Ok(())
@@ -154,19 +137,11 @@ pub(super) fn restore_previous(
     let name = journal.transaction_id.as_str();
     let backup = store.backups.existing_child(name)?;
     verify_backup(&backup, journal)?;
-    match statat(
-        backup.handle(),
-        ".codex-managed-operation",
-        AtFlags::SYMLINK_NOFOLLOW,
-    ) {
-        Ok(_) => {
-            if backup.read_file(".codex-managed-operation", 128)? != name.as_bytes() {
-                bail!("workflow backup operation marker does not match transaction");
-            }
-            backup.remove_regular_file(".codex-managed-operation")?;
+    if backup.child_exists(".codex-managed-operation")? {
+        if backup.read_file(".codex-managed-operation", 128)? != name.as_bytes() {
+            bail!("workflow backup operation marker does not match transaction");
         }
-        Err(Errno::NOENT) => {}
-        Err(error) => return Err(error).context("failed to inspect backup operation marker"),
+        backup.remove_regular_file(".codex-managed-operation")?;
     }
     drop(backup);
     store
@@ -180,11 +155,9 @@ pub(super) fn cleanup_backup(
     journal: &ManagedWorkflowJournal,
 ) -> anyhow::Result<()> {
     let name = journal.transaction_id.as_str();
-    let root = statat(store.backups.handle(), name, AtFlags::SYMLINK_NOFOLLOW);
-    let (device, inode) = match root {
-        Ok(metadata) => (metadata.st_dev, metadata.st_ino),
-        Err(Errno::NOENT) => (0, 0),
-        Err(error) => return Err(error).context("failed to inspect workflow backup cleanup root"),
+    let (device, inode) = match store.backups.optional_existing_child(name)? {
+        Some(root) => root.identity()?,
+        None => (0, 0),
     };
     cleanup::remove_tree(
         &store.backups,
@@ -196,6 +169,6 @@ pub(super) fn cleanup_backup(
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "backup_tests.rs"]
 mod tests;

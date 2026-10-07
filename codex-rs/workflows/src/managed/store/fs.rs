@@ -240,7 +240,13 @@ impl SecureDirectory {
 
     #[cfg(unix)]
     pub(super) fn device_id(&self) -> anyhow::Result<u64> {
-        Ok(rustix::fs::fstat(&self.handle)?.st_dev)
+        Ok(self.identity()?.0)
+    }
+
+    #[cfg(unix)]
+    pub(super) fn identity(&self) -> anyhow::Result<(u64, u64)> {
+        let metadata = rustix::fs::fstat(&self.handle)?;
+        Ok((metadata.st_dev, metadata.st_ino))
     }
 
     #[cfg(windows)]
@@ -264,6 +270,23 @@ impl SecureDirectory {
             u64::from(info.dwVolumeSerialNumber),
             (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
         ))
+    }
+
+    #[cfg(any(unix, windows))]
+    pub(super) fn child_exists(&self, name: &str) -> anyhow::Result<bool> {
+        validate_component(name)?;
+        #[cfg(unix)]
+        return match rustix::fs::statat(&self.handle, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(_) => Ok(true),
+            Err(rustix::io::Errno::NOENT) => Ok(false),
+            Err(error) => Err(error).context("failed to inspect managed workflow child"),
+        };
+        #[cfg(windows)]
+        match fs::symlink_metadata(self.path.join(name).as_path()) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error).context("failed to inspect managed workflow child"),
+        }
     }
 
     /// Opens or creates a permanent, owner-private advisory lock file.
