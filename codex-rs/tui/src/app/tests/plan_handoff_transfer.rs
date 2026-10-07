@@ -6,7 +6,7 @@ use crate::slash_command::SlashCommand;
 use codex_app_server_protocol::ItemCompletedNotification;
 
 struct PreparedHandoffApp {
-    app: App,
+    app: Box<App>,
     events: tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     tui: crate::tui::Tui,
     app_server: AppServerSession,

@@ -177,7 +177,7 @@ impl Session {
             model_info,
             self.features.enabled(Feature::FastMode),
         ));
-        let environments = previous.next_step_input.load().environments.clone();
+        let environments = previous.initial_environments.clone();
         let skills_snapshot = previous.skills_snapshot().as_ref().clone();
         let mut rebuilt = Self::make_turn_context(
             self.thread_id(),

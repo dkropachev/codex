@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/plan_mode.rs
+assertion_line: 146
 expression: popup
 ---
   Implement this plan?
@@ -7,7 +8,7 @@ expression: popup
 
 › 1. Yes, implement this plan          Switch to Config edit mode and apply the
                                        plan.
-  2. Yes, clear context and implement  Fresh thread with this plan.
+  2. Yes, clear context and implement  Fresh thread with this plan
   3. No, stay in Config mode           Continue configuring with the model.
 
   enter select · esc back
