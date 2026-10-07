@@ -13,6 +13,18 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 pub(super) mod list;
 
+/// Normalizes the platform-specific device ID for durable ownership records.
+#[cfg(target_os = "macos")]
+pub(super) fn device_id_from_stat(device: rustix::fs::Dev) -> u64 {
+    device as u64
+}
+
+/// Normalizes the platform-specific device ID for durable ownership records.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(super) fn device_id_from_stat(device: rustix::fs::Dev) -> u64 {
+    device
+}
+
 /// A retained, non-aliased directory used as the parent of managed metadata.
 pub(super) struct SecureDirectory {
     path: AbsolutePathBuf,
