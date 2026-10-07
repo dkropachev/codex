@@ -43,6 +43,19 @@ pub(in crate::managed::store) fn verified_release(
     ManagedWorkflowReceipt,
     AbsolutePathBuf,
 ) {
+    verified_release_with_source(with_dependencies, synthetic_remote, "export default {};\n")
+}
+
+pub(in crate::managed::store) fn verified_release_with_source(
+    with_dependencies: bool,
+    synthetic_remote: bool,
+    source_contents: &str,
+) -> (
+    tempfile::TempDir,
+    crate::managed::integrity::VerifiedWorkflowRelease,
+    ManagedWorkflowReceipt,
+    AbsolutePathBuf,
+) {
     let source = tempfile::tempdir().expect("source");
     fs::create_dir(source.path().join("src")).expect("source directory");
     fs::write(source.path().join("workflow.yaml"), MANIFEST).expect("manifest");
@@ -62,11 +75,7 @@ pub(in crate::managed::store) fn verified_release(
         )
         .expect("lockfile");
     }
-    fs::write(
-        source.path().join("src/workflow.ts"),
-        "export default {};\n",
-    )
-    .expect("source file");
+    fs::write(source.path().join("src/workflow.ts"), source_contents).expect("source file");
     git(source.path(), &["init", "-q"]);
     git(source.path(), &["add", "--all"]);
     git(
