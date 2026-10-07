@@ -33,7 +33,10 @@ pub(super) fn move_current_aside(
             AtFlags::SYMLINK_NOFOLLOW,
         ) {
             Ok(_) => {
-                if store.backups.read_file(&record_name, 256)? != cleanup::reservation_record(name)
+                if store
+                    .backups
+                    .read_file(&record_name, /*maximum_bytes*/ 256)?
+                    != cleanup::reservation_record(name)
                 {
                     bail!("workflow backup reservation conflicts with transaction");
                 }
@@ -51,7 +54,9 @@ pub(super) fn move_current_aside(
     verify_backup(&backup, journal)?;
     let metadata = rustix::fs::fstat(backup.handle())?;
     let bound = cleanup::bound_record(name, metadata.st_dev, metadata.st_ino);
-    let current_record = store.backups.read_file(&record_name, 256)?;
+    let current_record = store
+        .backups
+        .read_file(&record_name, /*maximum_bytes*/ 256)?;
     if current_record == cleanup::reservation_record(name) {
         store
             .backups
@@ -65,7 +70,9 @@ pub(super) fn move_current_aside(
         AtFlags::SYMLINK_NOFOLLOW,
     ) {
         Ok(_) => {
-            if backup.read_file(".codex-managed-operation", 128)? != name.as_bytes() {
+            if backup.read_file(".codex-managed-operation", /*maximum_bytes*/ 128)?
+                != name.as_bytes()
+            {
                 bail!("workflow backup operation marker does not match transaction");
             }
         }
@@ -159,7 +166,9 @@ pub(super) fn restore_previous(
         AtFlags::SYMLINK_NOFOLLOW,
     ) {
         Ok(_) => {
-            if backup.read_file(".codex-managed-operation", 128)? != name.as_bytes() {
+            if backup.read_file(".codex-managed-operation", /*maximum_bytes*/ 128)?
+                != name.as_bytes()
+            {
                 bail!("workflow backup operation marker does not match transaction");
             }
             backup.remove_regular_file(".codex-managed-operation")?;
