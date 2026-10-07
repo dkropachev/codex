@@ -252,3 +252,75 @@ fn windows_startup_rolls_forward_each_replacement_crash_point_twice() {
         .expect("idempotent replacement recovery");
     }
 }
+
+#[test]
+fn windows_startup_preserves_corrupt_journal_and_marker() {
+    let root = tempfile::tempdir().expect("root");
+    let first_store = store(root.path());
+    let journal_name = journal::journal_file_name("team/build").expect("journal name");
+    first_store
+        .journals
+        .write_file(&journal_name, b"{broken", /*replace*/ false)
+        .expect("corrupt journal");
+    drop(first_store);
+    assert!(
+        ManagedWorkflowStore::create(
+            &absolute(root.path()),
+            &absolute(&root.path().join("workflows")),
+        )
+        .is_err()
+    );
+    assert!(
+        root.path()
+            .join(".workflow-management/journals")
+            .join(journal_name)
+            .is_file()
+    );
+
+    let second = tempfile::tempdir().expect("second root");
+    let second_store = store(second.path());
+    let lock = second_store
+        .lock_install("team/build", /*cancelled*/ None)
+        .expect("workflow lock");
+    let mut pending = prepared(
+        &second_store,
+        'c',
+        "export default {};",
+        /*previous*/ None,
+    );
+    journal::write_journal(
+        &second_store.journals,
+        &pending.journal,
+        /*replace*/ false,
+    )
+    .expect("persist journal");
+    pending.staging.retain_for_recovery();
+    let payload = pending
+        .staging
+        .directory()
+        .existing_child("payload")
+        .expect("pending payload");
+    let mut marker = pending.journal.marker();
+    marker.transaction_id = "tx-different".into();
+    payload
+        .write_file(
+            "codex-managed-workflow",
+            &serde_json::to_vec(&marker).expect("marker JSON"),
+            /*replace*/ true,
+        )
+        .expect("mismatched marker");
+    let pending_path = pending.staging.directory().path().to_path_buf();
+    drop(payload);
+    drop(pending);
+    drop(lock);
+    drop(second_store);
+    assert!(
+        ManagedWorkflowStore::create(
+            &absolute(second.path()),
+            &absolute(&second.path().join("workflows")),
+        )
+        .is_err()
+    );
+    assert!(pending_path.join("payload").is_dir());
+    assert!(!second.path().join("workflows/team/build").exists());
+}
