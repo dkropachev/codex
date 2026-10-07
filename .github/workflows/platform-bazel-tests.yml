@@ -9,6 +9,10 @@ on:
       target:
         required: true
         type: string
+      test_suite:
+        required: false
+        default: full
+        type: string
 
 jobs:
   test:
@@ -42,18 +46,32 @@ jobs:
         shell: bash
         run: ./scripts/check-module-bazel-lock.sh
 
-      - name: bazel test //...
+      - name: Run Bazel tests
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+          TEST_SUITE: ${{ inputs.test_suite }}
         shell: bash
         run: |
-          bazel_targets=(
-            //...
-            # Standalone V8 library targets stay out of ordinary Bazel CI.
-            # V8 consumers under `//codex-rs/...` participate transitively.
-            -//third_party/v8:all
-            -//codex-rs/v8-poc:v8-poc-unit-tests
-          )
+          case "$TEST_SUITE" in
+            pr)
+              bazel_targets=(
+                //codex-rs/core:core-all-test
+                //codex-rs/tui:tui-unit-tests
+                //codex-rs/protocol:protocol-unit-tests
+                //codex-rs/app-server-protocol:app-server-protocol-unit-tests
+              )
+              ;;
+            full)
+              bazel_targets=(
+                //...
+                # Standalone V8 library targets stay out of ordinary Bazel CI.
+                # V8 consumers under `//codex-rs/...` participate transitively.
+                -//third_party/v8:all
+                -//codex-rs/v8-poc:v8-poc-unit-tests
+              )
+              ;;
+            *) echo "Unknown test suite: $TEST_SUITE" >&2; exit 1 ;;
+          esac
           ./.github/scripts/run-bazel-ci.sh \
             --print-failed-action-summary \
             --print-failed-test-logs \

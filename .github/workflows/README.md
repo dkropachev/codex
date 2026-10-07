@@ -9,7 +9,8 @@ checks. Stable release tags run the broader platform checks before publication.
   request head alone. This includes changes already on `main` and catches
   conflicts before they reach the branch.
 - `blocking-ci.yml` requires the changed-blob policy, `rust-ci.yml`, and the
-  Linux x86_64 and ARM64 Bazel test suites.
+  Linux x86_64 and ARM64 Bazel suites covering Core integration tests and TUI,
+  protocol, and app-server-protocol unit tests.
 - `rust-ci.yml` runs the fast Rust checks:
   - `cargo fmt --check`
   - `cargo shear`
@@ -18,9 +19,9 @@ checks. Stable release tags run the broader platform checks before publication.
 
 ## Stable Release Tags
 
-- `fork-rust-release.yml` runs Bazel tests on Linux x86_64 and ARM64 (GNU and
-  musl) and macOS x86_64 and ARM64, plus Clippy and release-build checks,
-  Windows x86_64 and ARM64 sandbox/protocol tests, cargo-deny, codespell,
+- `fork-rust-release.yml` runs full Bazel `//...` tests on Linux x86_64 and
+  ARM64 (GNU and musl) and macOS x86_64 and ARM64, plus Clippy and release-build
+  checks, Windows x86_64 and ARM64 sandbox/protocol tests, cargo-deny, codespell,
   repository checks, and SDK tests. These must pass before the unpublished
   release draft is created.
 - The Windows hosted-runner suite omits sandbox subprocess tests that need a
