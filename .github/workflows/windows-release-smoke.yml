@@ -45,17 +45,20 @@ jobs:
           tool: nextest
           version: 0.9.103
 
-      - name: Test Windows sandbox, protocol, and workflow crates
+      - name: Test Windows sandbox and protocol crates
         shell: bash
         run: |
           # These subprocess tests need a provisioned sandbox account with
           # PowerShell modules available to that account.
           just test \
             -p codex-windows-sandbox \
-            -p codex-workflows \
             -p codex-protocol \
             -p codex-app-server-protocol \
             -E 'not (package(codex-windows-sandbox) and test(unified_exec::tests::))'
+
+      - name: Test managed workflow lifecycle on Windows
+        shell: bash
+        run: just test -p codex-workflows -E 'test(managed::store::)'
 
       - name: Check for a clean worktree
         if: always() && !cancelled()
