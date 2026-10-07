@@ -46,7 +46,7 @@ fn compare_current_requires_the_exact_observed_receipt() {
         Some(first.clone())
     );
 
-    let mut second = first.clone();
+    let mut second = first;
     second.policy = WorkflowUpdatePolicy::Manual;
     write_receipt(&receipts, &second, /*replace*/ true).expect("replace receipt");
     assert!(compare_current(&receipts, "team/build", &expected).is_err());
