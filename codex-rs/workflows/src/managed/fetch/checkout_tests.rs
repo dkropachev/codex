@@ -99,6 +99,7 @@ fn checks_out_detached_tag_and_snapshot_packages() {
         .expect("stage release");
 
         assert_eq!(staged.release(), &expected);
+        assert_eq!(staged.source(), &source);
         assert_eq!(staged.baseline().commit, expected.advertised_object_id);
         assert_eq!(
             staged

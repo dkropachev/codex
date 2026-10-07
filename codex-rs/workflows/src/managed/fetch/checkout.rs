@@ -16,6 +16,7 @@ pub(in crate::managed) struct StagedWorkflowRelease {
     temporary: tempfile::TempDir,
     root: AbsolutePathBuf,
     release: super::ResolvedWorkflowRelease,
+    source: crate::managed::WorkflowGitSource,
     dependencies: crate::managed::dependencies::ValidatedManagedDependencies,
     baseline: crate::managed::integrity::SourceIntegrityBaseline,
 }
@@ -28,6 +29,10 @@ impl StagedWorkflowRelease {
 
     pub(in crate::managed) fn release(&self) -> &super::ResolvedWorkflowRelease {
         &self.release
+    }
+
+    pub(in crate::managed) fn source(&self) -> &crate::managed::WorkflowGitSource {
+        &self.source
     }
 
     pub(in crate::managed) fn dependencies(
@@ -54,6 +59,7 @@ pub(super) fn checkout_fetched_release(
         temporary,
         repository,
         release,
+        source,
     } = fetched;
     let commit = &release.advertised_object_id;
     let checkout = checkout_command(git, temporary.path(), &repository, commit);
@@ -86,6 +92,7 @@ pub(super) fn checkout_fetched_release(
         temporary,
         root: repository,
         release,
+        source,
         dependencies,
         baseline,
     })
