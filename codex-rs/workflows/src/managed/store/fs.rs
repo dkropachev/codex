@@ -17,6 +17,18 @@ struct WindowsDirectoryGuard {
     _parent: Option<std::sync::Arc<WindowsDirectoryGuard>>,
 }
 
+/// Normalizes the platform-specific device ID for durable ownership records.
+#[cfg(target_os = "macos")]
+pub(super) fn device_id_from_stat(device: rustix::fs::Dev) -> u64 {
+    device as u64
+}
+
+/// Normalizes the platform-specific device ID for durable ownership records.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(super) fn device_id_from_stat(device: rustix::fs::Dev) -> u64 {
+    device
+}
+
 /// A retained, non-aliased directory used as the parent of managed metadata.
 pub(super) struct SecureDirectory {
     path: AbsolutePathBuf,
@@ -188,7 +200,7 @@ impl SecureDirectory {
     }
 
     #[cfg(unix)]
-    pub(super) fn device_id(&self) -> anyhow::Result<u64> {
+    pub(super) fn device_id(&self) -> anyhow::Result<rustix::fs::Dev> {
         Ok(rustix::fs::fstat(&self.handle)?.st_dev)
     }
 
