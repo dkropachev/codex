@@ -148,7 +148,7 @@ impl SecureDirectory {
     }
 
     #[cfg(unix)]
-    pub(super) fn device_id(&self) -> anyhow::Result<u64> {
+    pub(super) fn device_id(&self) -> anyhow::Result<rustix::fs::Dev> {
         Ok(rustix::fs::fstat(&self.handle)?.st_dev)
     }
 
