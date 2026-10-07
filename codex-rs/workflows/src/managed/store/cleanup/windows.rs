@@ -133,7 +133,7 @@ pub(super) fn remove_tree(
             let child_path = frame.path.join(&child_name);
             let metadata = fs::symlink_metadata(&child_path)?;
             if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-                if !metadata.file_type().is_symlink() {
+                if !super::windows_security::is_symbolic_link_reparse_point(&child_path)? {
                     bail!("transaction cleanup contains an unknown reparse point");
                 }
                 if metadata.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0 {
