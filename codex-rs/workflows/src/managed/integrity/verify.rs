@@ -113,6 +113,26 @@ pub(in crate::managed) fn verify_published_copy(
     )
 }
 
+pub(in crate::managed) fn backup_payload_evidence(
+    root: &Path,
+    limits: VerificationLimits,
+    deadline: crate::runner::CommandDeadline,
+    cancelled: Option<&AtomicBool>,
+) -> anyhow::Result<ActivationPayloadEvidence> {
+    let inventory = scan_payload(root, PayloadKind::Backup, limits, deadline, cancelled)?;
+    evidence_for_inventory(&inventory)
+}
+
+pub(in crate::managed) fn published_payload_evidence(
+    root: &Path,
+    limits: VerificationLimits,
+    deadline: crate::runner::CommandDeadline,
+    cancelled: Option<&AtomicBool>,
+) -> anyhow::Result<ActivationPayloadEvidence> {
+    let inventory = scan_payload(root, PayloadKind::Published, limits, deadline, cancelled)?;
+    evidence_for_inventory(&inventory)
+}
+
 fn verify_copy(
     root: &Path,
     expected: &ActivationPayloadEvidence,
