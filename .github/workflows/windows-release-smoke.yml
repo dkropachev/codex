@@ -58,7 +58,9 @@ jobs:
 
       - name: Test managed workflow lifecycle on Windows
         shell: bash
-        run: just test -p codex-workflows -E 'test(managed::store::)'
+        run: |
+          just test -p codex-workflows \
+            -E 'test(managed::store::) or test(managed::dependencies::bun::tests::materializes_private_configuration_and_isolated_directories)'
 
       - name: Check for a clean worktree
         if: always() && !cancelled()
