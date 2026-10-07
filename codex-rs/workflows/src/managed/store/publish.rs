@@ -42,7 +42,7 @@ pub(super) fn commit_fresh(
     }
     validate_prepared(store, &prepared)?;
     if journal_exists(&store.journals, &locked.id)? {
-        recover_fresh(store, locked)?;
+        store.recover_locked(locked)?;
         if journal_exists(&store.journals, &locked.id)? {
             bail!("managed workflow has an unresolved transaction journal");
         }
@@ -100,7 +100,7 @@ pub(super) fn recover_fresh(
     finish_fresh(store, journal).map(Some)
 }
 
-fn finish_fresh(
+pub(super) fn finish_fresh(
     store: &ManagedWorkflowStore,
     mut journal: ManagedWorkflowJournal,
 ) -> anyhow::Result<ManagedWorkflowCommitOutcome> {
