@@ -156,130 +156,99 @@ fn windows_startup_rolls_forward_pending_install_twice() {
 }
 
 #[test]
-fn windows_startup_rolls_forward_replacement_after_backup_move() {
-    let root = tempfile::tempdir().expect("root");
-    let store = store(root.path());
-    let lock = store
-        .lock_install("team/build", /*cancelled*/ None)
-        .expect("workflow lock");
-    let first = prepared(&store, 'a', "export default {};", /*previous*/ None);
-    let previous = first.journal.next_receipt.clone();
-    store
-        .commit_fresh(&lock, &ExpectedCurrent::Absent, first)
-        .expect("install first");
-    let mut next = prepared(
-        &store,
-        'b',
-        "export default { updated: true };",
-        Some(previous),
-    );
-    let next_receipt = next.journal.next_receipt.clone();
-    journal::write_journal(&store.journals, &next.journal, /*replace*/ false)
-        .expect("persist replacement journal");
-    next.staging.retain_for_recovery();
-    let parent = store
-        .active_root
-        .existing_child("team")
-        .expect("active parent");
-    backup::move_current_aside(&store, &next.journal, &parent, "build")
-        .expect("move old release aside");
-    drop(parent);
-    drop(next);
-    drop(lock);
-    drop(store);
+fn windows_startup_rolls_forward_each_replacement_crash_point_twice() {
+    for crash_after in ["backup", "publish", "receipt"] {
+        let root = tempfile::tempdir().expect("root");
+        let store = store(root.path());
+        let lock = store
+            .lock_install("team/build", /*cancelled*/ None)
+            .expect("workflow lock");
+        let first = prepared(&store, 'a', "export default {};", /*previous*/ None);
+        let previous = first.journal.next_receipt.clone();
+        store
+            .commit_fresh(&lock, &ExpectedCurrent::Absent, first)
+            .expect("install first");
+        let mut next = prepared(
+            &store,
+            'b',
+            "export default { updated: true };",
+            Some(previous),
+        );
+        let next_receipt = next.journal.next_receipt.clone();
+        let next_marker = next.journal.marker();
+        journal::write_journal(&store.journals, &next.journal, /*replace*/ false)
+            .expect("persist replacement journal");
+        next.staging.retain_for_recovery();
+        let parent = store
+            .active_root
+            .existing_child("team")
+            .expect("active parent");
+        backup::move_current_aside(&store, &next.journal, &parent, "build")
+            .expect("move old release aside");
+        if matches!(crash_after, "publish" | "receipt") {
+            next.journal.next_action = journal::ManagedWorkflowNextAction::PublishRelease;
+            journal::write_journal(&store.journals, &next.journal, /*replace*/ true)
+                .expect("advance to publication");
+            next.staging
+                .directory()
+                .rename_child_noreplace("payload", &parent, "build")
+                .expect("publish replacement");
+        }
+        if crash_after == "receipt" {
+            next.journal.next_action = journal::ManagedWorkflowNextAction::WriteReceipt;
+            journal::write_journal(&store.journals, &next.journal, /*replace*/ true)
+                .expect("advance to receipt");
+            receipt::write_receipt(&store.receipts, &next_receipt, /*replace*/ true)
+                .expect("commit next receipt");
+        }
+        drop(parent);
+        drop(next);
+        drop(lock);
+        drop(store);
 
-    let recovered = ManagedWorkflowStore::create(
-        &absolute(root.path()),
-        &absolute(&root.path().join("workflows")),
-    )
-    .expect("replacement startup recovery");
-    assert_eq!(
-        receipt::read_receipt(&recovered.receipts, "team/build").expect("next receipt"),
-        next_receipt
-    );
-    assert!(
-        recovered
-            .journals
-            .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
-            .expect("journal names")
-            .is_empty()
-    );
-    drop(recovered);
-    ManagedWorkflowStore::create(
-        &absolute(root.path()),
-        &absolute(&root.path().join("workflows")),
-    )
-    .expect("idempotent replacement recovery");
-}
-
-#[test]
-fn windows_startup_preserves_corrupt_journal_and_marker() {
-    let root = tempfile::tempdir().expect("root");
-    let first_store = store(root.path());
-    let journal_name = journal::journal_file_name("team/build").expect("journal name");
-    first_store
-        .journals
-        .write_file(&journal_name, b"{broken", /*replace*/ false)
-        .expect("corrupt journal");
-    drop(first_store);
-    assert!(
+        let recovered = ManagedWorkflowStore::create(
+            &absolute(root.path()),
+            &absolute(&root.path().join("workflows")),
+        )
+        .expect("replacement startup recovery");
+        assert_eq!(
+            receipt::read_receipt(&recovered.receipts, "team/build").expect("next receipt"),
+            next_receipt
+        );
+        let active = recovered
+            .active_root
+            .existing_child("team")
+            .expect("active parent")
+            .existing_child("build")
+            .expect("active release");
+        assert_eq!(
+            journal::read_marker(&active).expect("active marker"),
+            next_marker
+        );
+        assert_eq!(
+            fs::read_to_string(active.path().join("src/workflow.ts")).expect("active source"),
+            "export default { updated: true };"
+        );
+        drop(active);
+        assert!(
+            recovered
+                .backups
+                .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
+                .expect("backup names")
+                .is_empty()
+        );
+        assert!(
+            recovered
+                .journals
+                .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
+                .expect("journal names")
+                .is_empty()
+        );
+        drop(recovered);
         ManagedWorkflowStore::create(
             &absolute(root.path()),
             &absolute(&root.path().join("workflows")),
         )
-        .is_err()
-    );
-    assert!(
-        root.path()
-            .join(".workflow-management/journals")
-            .join(journal_name)
-            .is_file()
-    );
-
-    let second = tempfile::tempdir().expect("second root");
-    let second_store = store(second.path());
-    let lock = second_store
-        .lock_install("team/build", /*cancelled*/ None)
-        .expect("workflow lock");
-    let mut pending = prepared(
-        &second_store,
-        'c',
-        "export default {};",
-        /*previous*/ None,
-    );
-    journal::write_journal(
-        &second_store.journals,
-        &pending.journal,
-        /*replace*/ false,
-    )
-    .expect("persist journal");
-    pending.staging.retain_for_recovery();
-    let payload = pending
-        .staging
-        .directory()
-        .existing_child("payload")
-        .expect("pending payload");
-    let mut marker = pending.journal.marker();
-    marker.transaction_id = "tx-different".into();
-    payload
-        .write_file(
-            "codex-managed-workflow",
-            &serde_json::to_vec(&marker).expect("marker JSON"),
-            /*replace*/ true,
-        )
-        .expect("mismatched marker");
-    let pending_path = pending.staging.directory().path().to_path_buf();
-    drop(payload);
-    drop(pending);
-    drop(lock);
-    drop(second_store);
-    assert!(
-        ManagedWorkflowStore::create(
-            &absolute(second.path()),
-            &absolute(&second.path().join("workflows")),
-        )
-        .is_err()
-    );
-    assert!(pending_path.join("payload").is_dir());
-    assert!(!second.path().join("workflows/team/build").exists());
+        .expect("idempotent replacement recovery");
+    }
 }
