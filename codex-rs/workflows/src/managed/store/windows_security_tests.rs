@@ -54,6 +54,7 @@ fn rejects_directory_junctions() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(open_directory(&junction, /*private*/ false, /*desired_access*/ 0).is_err());
+    assert!(!is_symbolic_link_reparse_point(&junction).expect("junction reparse tag"));
     std::fs::remove_dir(&junction).expect("remove junction");
 }
 

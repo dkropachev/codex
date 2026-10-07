@@ -13,6 +13,7 @@ use rustix::fs::statat;
 use rustix::fs::unlinkat;
 
 use super::fs::SecureDirectory;
+use super::fs::device_id_from_stat;
 use super::fs::list::list_raw_names;
 
 // Activation payload limit plus transaction-owned directories and markers.
@@ -89,7 +90,7 @@ pub(super) fn remove_tree(
         {
             if let OwnershipMarker::CreationIncomplete(original) = ownership {
                 let opened = rustix::fs::fstat(original)?;
-                if opened.st_dev != device || opened.st_ino != inode {
+                if device_id_from_stat(opened.st_dev) != device || opened.st_ino != inode {
                     bail!("transaction creation proof does not match directory identity");
                 }
             }
@@ -99,7 +100,7 @@ pub(super) fn remove_tree(
         }
     }
     if metadata.st_mode & 0o170000 != 0o040000
-        || metadata.st_dev != device
+        || device_id_from_stat(metadata.st_dev) != device
         || metadata.st_ino != inode
     {
         bail!("workflow transaction staging changed identity before cleanup");
@@ -111,7 +112,7 @@ pub(super) fn remove_tree(
         Mode::empty(),
     )?;
     let opened = rustix::fs::fstat(&root)?;
-    if opened.st_dev != device || opened.st_ino != inode {
+    if device_id_from_stat(opened.st_dev) != device || opened.st_ino != inode {
         bail!("workflow transaction staging changed identity while opening cleanup root");
     }
     if matches!(ownership, OwnershipMarker::Required) {
@@ -187,12 +188,17 @@ pub(super) fn remove_tree(
                 stack.push(Frame {
                     directory,
                     name: child_name,
-                    device: child.st_dev,
+                    device: device_id_from_stat(child.st_dev),
                     inode: child.st_ino,
                     remaining,
                 });
             } else {
-                ensure_named_identity(&frame.directory, &child_name, child.st_dev, child.st_ino)?;
+                ensure_named_identity(
+                    &frame.directory,
+                    &child_name,
+                    device_id_from_stat(child.st_dev),
+                    child.st_ino,
+                )?;
                 unlinkat(&frame.directory, child_name.as_str(), AtFlags::empty())?;
             }
         } else {
@@ -286,7 +292,11 @@ fn read_ownership_record(
         }
         _ => bail!("transaction ownership record does not match directory"),
     };
-    Ok(Some((metadata.st_dev, metadata.st_ino, recorded_root)))
+    Ok(Some((
+        device_id_from_stat(metadata.st_dev),
+        metadata.st_ino,
+        recorded_root,
+    )))
 }
 
 fn restore_marker(directory: &OwnedFd, name: &str) -> anyhow::Result<()> {
@@ -310,7 +320,7 @@ fn ensure_named_identity(
     inode: u64,
 ) -> anyhow::Result<()> {
     let named = statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)?;
-    if named.st_dev != device || named.st_ino != inode {
+    if device_id_from_stat(named.st_dev) != device || named.st_ino != inode {
         bail!("transaction cleanup entry changed identity");
     }
     Ok(())

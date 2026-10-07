@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 use std::path::Path;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
