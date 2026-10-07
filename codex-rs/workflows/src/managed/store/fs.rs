@@ -11,7 +11,7 @@ use anyhow::Context;
 use anyhow::bail;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
-mod list;
+pub(super) mod list;
 
 /// A retained, non-aliased directory used as the parent of managed metadata.
 pub(super) struct SecureDirectory {
@@ -21,6 +21,10 @@ pub(super) struct SecureDirectory {
 }
 
 impl SecureDirectory {
+    #[cfg(unix)]
+    pub(super) fn handle(&self) -> &std::os::fd::OwnedFd {
+        &self.handle
+    }
     /// Opens an existing trusted root without following its final component.
     pub(super) fn open_root(path: &AbsolutePathBuf) -> anyhow::Result<Self> {
         #[cfg(unix)]
