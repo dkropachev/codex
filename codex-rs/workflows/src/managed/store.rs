@@ -1,4 +1,6 @@
 mod catalog;
+#[cfg(unix)]
+mod cleanup;
 mod copy;
 mod fs;
 mod journal;
