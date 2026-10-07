@@ -70,7 +70,7 @@ pub(super) fn validate_text_lock_file(
     path: &Path,
 ) -> anyhow::Result<()> {
     let contents = crate::manifest::read_bounded_utf8(path, MAX_BUN_LOCK_BYTES)?;
-    validate_text_lock(package, sources, &contents)
+    validate_text_lock_contents(package, sources, &contents)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,7 +91,7 @@ fn root_lock_metadata(root: &Path, name: &str) -> anyhow::Result<Option<fs::Meta
     }
 }
 
-fn validate_text_lock(
+pub(super) fn validate_text_lock_contents(
     package: &crate::WorkflowPackage,
     sources: &ValidatedDependencySources,
     contents: &str,

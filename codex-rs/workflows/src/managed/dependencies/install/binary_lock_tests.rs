@@ -21,6 +21,13 @@ impl Fixture {
         let temporary = tempfile::tempdir().expect("temporary fixture");
         let candidate = temporary.path().join("candidate");
         fs::create_dir(&candidate).expect("create candidate");
+        fs::create_dir(candidate.join("src")).expect("create source directory");
+        fs::write(candidate.join("src/workflow.ts"), "export default {};\n").expect("write source");
+        fs::write(
+            candidate.join("workflow.yaml"),
+            "apiVersion: 1\nid: test/workflow\ntitle: Test workflow\ncallableName: test-workflow\ndescription: Test package\nvalidation:\n  commands: []\n  coverage:\n    positive: true\n    load: true\n    autocomplete: true\n    negative: true\n",
+        )
+        .expect("write manifest");
         fs::write(candidate.join("package.json"), PACKAGE_JSON).expect("write package.json");
         fs::write(candidate.join("bun.lockb"), BINARY_LOCK).expect("write bun.lockb");
         let management = absolute(&temporary.path().join("management"));
@@ -34,7 +41,7 @@ impl Fixture {
     }
 
     fn stage(&self) -> anyhow::Result<()> {
-        stage_binary_lock_inputs(&self.candidate, &self.environment)
+        stage_binary_lock_inputs(&self.candidate, &self.environment).map(|_| ())
     }
 
     fn input(&self, name: &str) -> AbsolutePathBuf {
@@ -57,6 +64,140 @@ impl Fixture {
             })
             .collect()
     }
+}
+
+fn valid_generated_lock() -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "lockfileVersion": 1,
+        "workspaces": {"": {"dependencies": {"dep": "1.0.0"}}},
+        "packages": {"dep": ["dep@1.0.0", "", {}, ""]}
+    }))
+    .expect("serialize generated lock")
+}
+
+fn validate_inspection(fixture: &Fixture, staged: &StagedBinaryLockInputs) -> anyhow::Result<()> {
+    let package = crate::WorkflowPackage::load(fixture.candidate.as_path())?;
+    let sources = super::super::super::ValidatedDependencySources {
+        has_dependencies: true,
+        local_packages: Vec::new(),
+    };
+    validate_binary_lock_inspection(staged, &fixture.environment, &package, &sources)
+}
+
+#[test]
+fn accepts_only_valid_generated_lock_and_original_inputs() {
+    let fixture = Fixture::new();
+    let staged = stage_binary_lock_inputs(&fixture.candidate, &fixture.environment)
+        .expect("stage binary inputs");
+    fs::write(
+        fixture.scratch("bun.lock").as_path(),
+        valid_generated_lock(),
+    )
+    .expect("write generated lock");
+    validate_inspection(&fixture, &staged).expect("validate inspection");
+    assert!(!fixture.input("bun.lock").as_path().exists());
+}
+
+#[test]
+fn rejects_missing_extra_or_modified_inspection_files() {
+    for change in [
+        "missing",
+        "extra",
+        "extra-directory",
+        "package",
+        "binary",
+        "package-directory",
+        "generated-directory",
+        "invalid",
+        "oversized",
+    ] {
+        let fixture = Fixture::new();
+        let staged = stage_binary_lock_inputs(&fixture.candidate, &fixture.environment)
+            .expect("stage binary inputs");
+        if change != "missing" {
+            fs::write(
+                fixture.scratch("bun.lock").as_path(),
+                valid_generated_lock(),
+            )
+            .expect("write generated lock");
+        }
+        match change {
+            "missing" => {}
+            "extra" => fs::write(fixture.scratch("extra").as_path(), b"extra").expect("extra"),
+            "extra-directory" => {
+                fs::create_dir(fixture.scratch("extra").as_path()).expect("extra directory")
+            }
+            "package" => {
+                fs::write(fixture.scratch("package.json").as_path(), b"{}").expect("edit package")
+            }
+            "binary" => {
+                fs::write(fixture.scratch("bun.lockb").as_path(), b"changed").expect("edit binary")
+            }
+            "package-directory" => {
+                fs::remove_file(fixture.scratch("package.json").as_path()).expect("remove package");
+                fs::create_dir(fixture.scratch("package.json").as_path())
+                    .expect("replace package with directory");
+            }
+            "generated-directory" => {
+                fs::remove_file(fixture.scratch("bun.lock").as_path()).expect("remove lock");
+                fs::create_dir(fixture.scratch("bun.lock").as_path())
+                    .expect("replace lock with directory");
+            }
+            "invalid" => {
+                fs::write(fixture.scratch("bun.lock").as_path(), b"{}").expect("edit lock")
+            }
+            "oversized" => fs::File::create(fixture.scratch("bun.lock").as_path())
+                .expect("open lock")
+                .set_len(MAX_BUN_LOCK_BYTES + 1)
+                .expect("extend lock"),
+            _ => unreachable!(),
+        }
+        assert!(validate_inspection(&fixture, &staged).is_err(), "{change}");
+    }
+}
+
+#[test]
+fn rejects_generated_lock_dependency_mismatch() {
+    let fixture = Fixture::new();
+    let staged = stage_binary_lock_inputs(&fixture.candidate, &fixture.environment)
+        .expect("stage binary inputs");
+    let mut lock: serde_json::Value =
+        serde_json::from_slice(&valid_generated_lock()).expect("parse generated lock");
+    lock["workspaces"][""]["dependencies"]["dep"] = "2.0.0".into();
+    fs::write(
+        fixture.scratch("bun.lock").as_path(),
+        serde_json::to_vec(&lock).expect("serialize lock"),
+    )
+    .expect("write generated lock");
+    let error = validate_inspection(&fixture, &staged).expect_err("reject dependency mismatch");
+    assert!(error.to_string().contains("invalid bun.lock"), "{error:#}");
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_aliased_generated_lock() {
+    let fixture = Fixture::new();
+    let staged = stage_binary_lock_inputs(&fixture.candidate, &fixture.environment)
+        .expect("stage binary inputs");
+    let target = fixture.input("generated-lock-target");
+    fs::write(target.as_path(), valid_generated_lock()).expect("write target");
+    std::os::unix::fs::symlink(target.as_path(), fixture.scratch("bun.lock").as_path())
+        .expect("alias generated lock");
+    assert!(validate_inspection(&fixture, &staged).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_generated_lock_fifo_without_blocking() {
+    let fixture = Fixture::new();
+    let staged = stage_binary_lock_inputs(&fixture.candidate, &fixture.environment)
+        .expect("stage binary inputs");
+    let status = std::process::Command::new("mkfifo")
+        .arg(fixture.scratch("bun.lock").as_path())
+        .status()
+        .expect("create FIFO");
+    assert!(status.success(), "mkfifo failed");
+    assert!(validate_inspection(&fixture, &staged).is_err());
 }
 
 fn absolute(path: &Path) -> AbsolutePathBuf {
