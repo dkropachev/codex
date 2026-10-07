@@ -1,5 +1,6 @@
 mod catalog;
 mod fs;
+mod journal;
 mod lock;
 mod receipt;
 
