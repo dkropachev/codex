@@ -6,7 +6,7 @@ use std::time::UNIX_EPOCH;
 use anyhow::Context;
 use anyhow::bail;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use super::cleanup;
 use super::fs::SecureDirectory;
 
@@ -15,11 +15,11 @@ static NEXT_TRANSACTION_ID: AtomicU64 = AtomicU64::new(0);
 /// Owns one private staging directory until a journal takes responsibility for it.
 pub(super) struct TransactionStaging<'a> {
     pub(super) parent: &'a SecureDirectory,
-    directory: SecureDirectory,
+    directory: Option<SecureDirectory>,
     name: String,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     device: u64,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     inode: u64,
     armed: bool,
 }
@@ -44,6 +44,36 @@ impl Drop for CreationCleanup<'_> {
                 self.device,
                 self.inode,
                 cleanup::OwnershipMarker::CreationIncomplete(self.directory.handle()),
+                cleanup::CleanupEntryLimit::STANDARD,
+            );
+        }
+    }
+}
+
+#[cfg(windows)]
+struct WindowsCreationCleanup<'a> {
+    parent: &'a SecureDirectory,
+    directory: Option<SecureDirectory>,
+    name: String,
+    device: u64,
+    inode: u64,
+    armed: bool,
+}
+
+#[cfg(windows)]
+impl Drop for WindowsCreationCleanup<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            drop(self.directory.take());
+            let _ = cleanup::remove_tree(
+                self.parent,
+                &self.name,
+                self.device,
+                self.inode,
+                cleanup::OwnershipMarker::CreationIncomplete {
+                    original_device: self.device,
+                    original_inode: self.inode,
+                },
                 cleanup::CleanupEntryLimit::STANDARD,
             );
         }
@@ -116,7 +146,7 @@ impl<'a> TransactionStaging<'a> {
                 drop(creation);
                 return Ok(Self {
                     parent,
-                    directory,
+                    directory: Some(directory),
                     name,
                     device: metadata.st_dev,
                     inode: metadata.st_ino,
@@ -125,7 +155,64 @@ impl<'a> TransactionStaging<'a> {
             }
             bail!("failed to allocate workflow transaction staging directory");
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            let clock = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .context("system clock predates Unix epoch")?
+                .as_nanos();
+            for _ in 0..128 {
+                let sequence = NEXT_TRANSACTION_ID.fetch_add(1, Ordering::Relaxed);
+                let name = format!("tx-{}-{clock}-{sequence}", std::process::id());
+                if parent.optional_existing_child(&name)?.is_some() {
+                    continue;
+                }
+                let record_name = cleanup::ownership_record_name(&name);
+                parent.write_file(
+                    &record_name,
+                    &cleanup::reservation_record(&name),
+                    /*replace*/ false,
+                )?;
+                let directory = parent
+                    .create_new_child(&name)
+                    .context("new transaction staging remains reserved for recovery")?;
+                let (device, inode) = directory.identity()?;
+                let mut creation = WindowsCreationCleanup {
+                    parent,
+                    directory: Some(directory),
+                    name: name.clone(),
+                    device,
+                    inode,
+                    armed: true,
+                };
+                parent.write_file(
+                    &record_name,
+                    &cleanup::bound_record(&name, device, inode),
+                    /*replace*/ true,
+                )?;
+                creation
+                    .directory
+                    .as_ref()
+                    .context("transaction creation lost directory handle")?
+                    .write_file(
+                        ".codex-managed-operation",
+                        name.as_bytes(),
+                        /*replace*/ false,
+                    )?;
+                creation.armed = false;
+                let directory = creation.directory.take();
+                return Ok(Self {
+                    parent,
+                    directory,
+                    name,
+                    device,
+                    inode,
+                    armed: true,
+                });
+            }
+            bail!("failed to allocate workflow transaction staging directory");
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = parent;
             bail!("secure workflow transaction staging is unavailable on this platform");
@@ -133,7 +220,9 @@ impl<'a> TransactionStaging<'a> {
     }
 
     pub(super) fn directory(&self) -> &SecureDirectory {
-        &self.directory
+        self.directory
+            .as_ref()
+            .expect("transaction staging directory remains retained")
     }
 
     pub(super) fn name(&self) -> &str {
@@ -158,6 +247,18 @@ impl<'a> TransactionStaging<'a> {
                     cleanup::CleanupEntryLimit::STANDARD,
                 )?;
             }
+            #[cfg(windows)]
+            {
+                drop(self.directory.take());
+                cleanup::remove_tree(
+                    self.parent,
+                    &self.name,
+                    self.device,
+                    self.inode,
+                    cleanup::OwnershipMarker::Required,
+                    cleanup::CleanupEntryLimit::STANDARD,
+                )?;
+            }
             self.armed = false;
         }
         Ok(())
@@ -173,3 +274,7 @@ impl Drop for TransactionStaging<'_> {
 #[cfg(all(test, unix))]
 #[path = "stage/stage_tests.rs"]
 mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "stage/stage_windows_tests.rs"]
+mod windows_tests;

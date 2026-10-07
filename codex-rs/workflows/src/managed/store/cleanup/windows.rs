@@ -22,9 +22,12 @@ impl CleanupEntryLimit {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum OwnershipMarker<'a> {
+pub(super) enum OwnershipMarker {
     Required,
-    CreationIncomplete(&'a SecureDirectory),
+    CreationIncomplete {
+        original_device: u64,
+        original_inode: u64,
+    },
 }
 
 pub(super) fn ownership_record_name(name: &str) -> String {
@@ -57,7 +60,7 @@ pub(super) fn remove_tree(
     name: &str,
     device: u64,
     inode: u64,
-    ownership: OwnershipMarker<'_>,
+    ownership: OwnershipMarker,
     maximum_entries: CleanupEntryLimit,
 ) -> anyhow::Result<()> {
     crate::managed::fetch::portable_path(name)?;
@@ -81,8 +84,13 @@ pub(super) fn remove_tree(
             inode: recorded_inode,
         } if recorded_device == device && recorded_inode == inode => {}
         RecordedRoot::Reservation => {
-            if let OwnershipMarker::CreationIncomplete(original) = ownership {
-                if original.identity()? != (device, inode) {
+            if let OwnershipMarker::CreationIncomplete {
+                original_device,
+                original_inode,
+                ..
+            } = ownership
+            {
+                if (original_device, original_inode) != (device, inode) {
                     bail!("transaction creation proof does not match directory identity");
                 }
             } else {
