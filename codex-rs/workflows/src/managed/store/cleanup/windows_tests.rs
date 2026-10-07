@@ -76,6 +76,46 @@ fn removes_only_marked_tree_and_preserves_external_files() {
 }
 
 #[test]
+fn interrupted_cleanup_removes_only_the_stale_record_on_retry() {
+    let root = tempfile::tempdir().expect("root");
+    let parent = staging(root.path());
+    let neighbor = marked(&parent, "tx-neighbor");
+    neighbor
+        .write_file("keep", b"keep", /*replace*/ false)
+        .expect("neighbor file");
+    let owned = marked(&parent, "tx-interrupted");
+    let (device, inode) = owned.identity().expect("identity");
+    let owned_path = owned.path().as_path().to_path_buf();
+    drop(owned);
+    fs::remove_file(owned_path.join(".codex-managed-operation")).expect("remove marker");
+    fs::remove_dir(&owned_path).expect("remove owned root before record");
+    let record = parent.path().join(ownership_record_name("tx-interrupted"));
+    assert!(record.is_file());
+    for _ in 0..2 {
+        remove_tree(
+            &parent,
+            "tx-interrupted",
+            device,
+            inode,
+            OwnershipMarker::Required,
+            CleanupEntryLimit::STANDARD,
+        )
+        .expect("repeat cleanup");
+    }
+    assert!(!record.exists());
+    assert_eq!(
+        fs::read(neighbor.path().join("keep")).expect("neighbor file"),
+        b"keep"
+    );
+    assert!(
+        parent
+            .path()
+            .join(ownership_record_name("tx-neighbor"))
+            .is_file()
+    );
+}
+
+#[test]
 fn stale_bound_record_cannot_delete_replacement_directory() {
     let root = tempfile::tempdir().expect("root");
     let parent = staging(root.path());
