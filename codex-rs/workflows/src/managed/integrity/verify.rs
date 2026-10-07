@@ -86,10 +86,45 @@ pub(in crate::managed) fn verify_materialized_copy(
     deadline: crate::runner::CommandDeadline,
     cancelled: Option<&AtomicBool>,
 ) -> anyhow::Result<()> {
+    verify_copy(
+        root,
+        expected,
+        PayloadKind::Installed,
+        limits,
+        deadline,
+        cancelled,
+    )
+}
+
+pub(in crate::managed) fn verify_published_copy(
+    root: &Path,
+    expected: &ActivationPayloadEvidence,
+    limits: VerificationLimits,
+    deadline: crate::runner::CommandDeadline,
+    cancelled: Option<&AtomicBool>,
+) -> anyhow::Result<()> {
+    verify_copy(
+        root,
+        expected,
+        PayloadKind::Published,
+        limits,
+        deadline,
+        cancelled,
+    )
+}
+
+fn verify_copy(
+    root: &Path,
+    expected: &ActivationPayloadEvidence,
+    kind: PayloadKind,
+    limits: VerificationLimits,
+    deadline: crate::runner::CommandDeadline,
+    cancelled: Option<&AtomicBool>,
+) -> anyhow::Result<()> {
     if expected.format_version != EVIDENCE_FORMAT_VERSION {
         bail!("unsupported workflow payload evidence version");
     }
-    let inventory = scan_payload(root, PayloadKind::Installed, limits, deadline, cancelled)?;
+    let inventory = scan_payload(root, kind, limits, deadline, cancelled)?;
     let actual = evidence_for_inventory(&inventory)?;
     if &actual != expected {
         bail!("copied workflow payload differs from verified release");

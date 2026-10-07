@@ -315,3 +315,79 @@ fn prepare_rejects_local_source_before_creating_staging() {
             .is_empty()
     );
 }
+
+#[test]
+fn published_payload_evidence_excludes_the_validated_manager_marker() {
+    let root = tempfile::tempdir().expect("root");
+    let store = store(root.path());
+    let lock = store
+        .lock_install("team/build", /*cancelled*/ None)
+        .expect("lock workflow");
+    let (_source_staging, verified, receipt, _) = verified_release(
+        /*with_dependencies*/ false, /*synthetic_remote*/ true,
+    );
+    let prepared = store
+        .prepare_release(
+            &lock,
+            verified,
+            /*previous_receipt*/ None,
+            receipt,
+            crate::managed::fetch::VERIFICATION_LIMITS,
+            crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
+            /*cancelled*/ None,
+        )
+        .expect("prepare release");
+    let payload = prepared.staging.directory().path().join("payload");
+    crate::managed::integrity::verify_published_copy(
+        payload.as_path(),
+        &prepared.journal.evidence,
+        crate::managed::fetch::VERIFICATION_LIMITS,
+        crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
+        /*cancelled*/ None,
+    )
+    .expect("published payload evidence");
+    assert!(
+        crate::managed::integrity::verify_materialized_copy(
+            payload.as_path(),
+            &prepared.journal.evidence,
+            crate::managed::fetch::VERIFICATION_LIMITS,
+            crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
+            /*cancelled*/ None,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn preparation_requires_a_lock_from_the_same_store() {
+    let first = tempfile::tempdir().expect("first store root");
+    let second = tempfile::tempdir().expect("second store root");
+    let first_store = store(first.path());
+    let second_store = store(second.path());
+    let first_lock = first_store
+        .lock_install("team/build", /*cancelled*/ None)
+        .expect("first store lock");
+    let (_source_staging, verified, receipt, _) = verified_release(
+        /*with_dependencies*/ false, /*synthetic_remote*/ true,
+    );
+    assert!(
+        second_store
+            .prepare_release(
+                &first_lock,
+                verified,
+                /*previous_receipt*/ None,
+                receipt,
+                crate::managed::fetch::VERIFICATION_LIMITS,
+                crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
+                /*cancelled*/ None,
+            )
+            .is_err()
+    );
+    assert!(
+        second_store
+            .staging
+            .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
+            .expect("second staging names")
+            .is_empty()
+    );
+}

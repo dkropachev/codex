@@ -28,6 +28,8 @@ pub(in crate::managed) use verify::VerifiedWorkflowRelease;
 pub(in crate::managed) use verify::verify_materialized_copy;
 #[allow(unused_imports, reason = "consumed by the managed lifecycle stage")]
 pub(in crate::managed) use verify::verify_post_install;
+#[allow(unused_imports, reason = "consumed by the managed publication stage")]
+pub(in crate::managed) use verify::verify_published_copy;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct IndexEntry {
@@ -177,6 +179,7 @@ pub(super) enum PayloadKind {
     Source,
     Staged,
     Installed,
+    Published,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -224,7 +227,10 @@ pub(super) fn scan_payload(
         {
             deadline.check(cancelled)?;
             let entry = entry.context("failed to read workflow payload entry")?;
-            if directory == root && entry.file_name() == ".git" && kind != PayloadKind::Installed {
+            if directory == root
+                && entry.file_name() == ".git"
+                && !matches!(kind, PayloadKind::Installed | PayloadKind::Published)
+            {
                 continue;
             }
             if directory == root
@@ -233,6 +239,9 @@ pub(super) fn scan_payload(
                     .to_str()
                     .is_some_and(|name| name.eq_ignore_ascii_case("codex-managed-workflow"))
             {
+                if kind == PayloadKind::Published && entry.file_name() == "codex-managed-workflow" {
+                    continue;
+                }
                 bail!("workflow payload contains reserved management marker");
             }
             if directory == root
