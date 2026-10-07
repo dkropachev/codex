@@ -1,9 +1,11 @@
 #[cfg(unix)]
 mod unix;
+#[cfg(windows)]
+mod windows;
 
 use std::sync::atomic::AtomicBool;
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 use anyhow::bail;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -20,7 +22,9 @@ pub(super) fn copy_verified_payload(
 ) -> anyhow::Result<()> {
     #[cfg(unix)]
     return unix::copy_verified_payload(source, destination, limits, deadline, cancelled);
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    return windows::copy_verified_payload(source, destination, limits, deadline, cancelled);
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (source, destination, limits, deadline, cancelled);
         bail!("secure managed workflow payload copy is unavailable on this platform")
@@ -30,3 +34,7 @@ pub(super) fn copy_verified_payload(
 #[cfg(all(test, unix))]
 #[path = "copy_tests.rs"]
 mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "copy/windows_tests.rs"]
+mod windows_tests;

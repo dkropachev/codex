@@ -19,7 +19,7 @@ const MAX_GIT_INDEX_BYTES: u64 = 32 * 1024 * 1024;
 mod link;
 mod verify;
 
-use link::validate_dependency_link;
+pub(in crate::managed) use link::validate_dependency_link;
 #[allow(unused_imports, reason = "consumed by the managed lifecycle stage")]
 pub(in crate::managed) use verify::ActivationPayloadEvidence;
 #[allow(unused_imports, reason = "consumed by the managed lifecycle stage")]
