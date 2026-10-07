@@ -37,7 +37,7 @@ async fn automatic_handoff_wraps_up_then_plans_and_transfers() -> Result<()> {
     let spawned = spawn_tui(&codex, codex_home.path(), log_dir.path(), workspace.path()).await?;
     let writer = spawned.session.writer_sender();
     let mut output_rx = combine_output_receivers(spawned.stdout_rx, spawned.stderr_rx);
-    let mut screen = vt100::Parser::new(/*rows*/ 60, /*cols*/ 100, /*scrollback*/ 0);
+    let mut screen = vt100::Parser::new(/*rows*/ 60, /*cols*/ 160, /*scrollback*/ 0);
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
         contents.contains("Ask Codex to do anything")
     })
@@ -137,7 +137,7 @@ async fn plan_handoff_default_transfers_to_fresh_thread_and_source_remains_resum
     let spawned = spawn_tui(&codex, codex_home.path(), log_dir.path(), workspace.path()).await?;
     let writer = spawned.session.writer_sender();
     let mut output_rx = combine_output_receivers(spawned.stdout_rx, spawned.stderr_rx);
-    let mut screen = vt100::Parser::new(/*rows*/ 60, /*cols*/ 100, /*scrollback*/ 0);
+    let mut screen = vt100::Parser::new(/*rows*/ 60, /*cols*/ 160, /*scrollback*/ 0);
 
     wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
         contents.contains("Ask Codex to do anything")
@@ -423,7 +423,7 @@ async fn spawn_tui(
         &None,
         TerminalSize {
             rows: 60,
-            cols: 100,
+            cols: 160,
         },
         /*inherited_fds*/ &[],
     )

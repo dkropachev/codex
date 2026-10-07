@@ -102,6 +102,12 @@ fn scan_rejects_special_files_and_dependency_root_alias() {
 #[cfg(unix)]
 #[test]
 fn scan_rejects_case_colliding_directory_prefixes() {
+    let case_probe = tempfile::tempdir().expect("case sensitivity probe");
+    fs::create_dir(case_probe.path().join("Case")).expect("probe directory");
+    if case_probe.path().join("case").exists() {
+        return;
+    }
+
     for (first, second) in [("Foo/a", "foo/b"), ("a", "A/b")] {
         let root = tempfile::tempdir().expect("root");
         if let Some(parent) = root.path().join(first).parent() {

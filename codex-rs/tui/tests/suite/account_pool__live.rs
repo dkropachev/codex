@@ -38,6 +38,23 @@ async fn account_pool_status_renders_in_live_tui() -> Result<()> {
         "access-work",
         "pro",
     )?;
+    let root_id_token = fake_jwt(json!({
+        "email": "work@example.com",
+        "exp": chrono::Utc::now().timestamp() + 3600,
+        "https://api.openai.com/auth": {"chatgpt_plan_type": "pro"},
+    }))?;
+    std::fs::write(
+        codex_home.path().join("auth.json"),
+        serde_json::to_vec(&json!({
+            "auth_mode": AuthMode::Chatgpt,
+            "tokens": {
+                "id_token": root_id_token,
+                "access_token": "access-work",
+                "refresh_token": "refresh-work-pro",
+            },
+            "last_refresh": chrono::Utc::now(),
+        }))?,
+    )?;
     write_chatgpt_auth(
         codex_home.path(),
         "personal-pro",
