@@ -139,10 +139,15 @@ fn unknown_junction_preserves_marked_root_and_external_target() {
     let parent = staging(root.path());
     let owned = marked(&parent, "tx-junction");
     let junction = owned.path().join("junction");
-    let output = std::process::Command::new("cmd")
-        .args(["/C", "mklink", "/J"])
-        .arg(junction.as_path())
-        .arg(external.path())
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$ErrorActionPreference = 'Stop'; New-Item -ItemType Junction -Path $env:CODEX_TEST_LINK -Target $env:CODEX_TEST_TARGET | Out-Null",
+        ])
+        .env("CODEX_TEST_LINK", junction.as_path())
+        .env("CODEX_TEST_TARGET", external.path())
         .output()
         .expect("create junction");
     assert!(
