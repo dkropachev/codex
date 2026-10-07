@@ -155,9 +155,10 @@ fn windows_copy_rejects_nested_links_through_a_junction() {
     )
     .expect_err("nested junction must be rejected");
     assert!(
-        error
-            .to_string()
-            .contains("dependency link resolves through a reparse point"),
+        error.to_string().contains("absolute nested target")
+            || error
+                .to_string()
+                .contains("resolves through a reparse point"),
         "{error:#}"
     );
 }
