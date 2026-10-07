@@ -222,6 +222,10 @@ impl<'a> TransactionStaging<'a> {
         }
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "staging retains its directory until Drop closes the Windows handle"
+    )]
     pub(super) fn directory(&self) -> &SecureDirectory {
         self.directory
             .as_ref()
