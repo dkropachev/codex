@@ -6,6 +6,7 @@ mod fs;
 mod journal;
 mod lock;
 mod receipt;
+mod stage;
 
 use std::sync::atomic::AtomicBool;
 
