@@ -359,7 +359,7 @@ fn recovery_rejects_conflicting_receipt() {
     let (_source, mut prepared, next) = prepare_next(&store, &lock, previous.clone());
     write_journal(&store.journals, &prepared.journal, /*replace*/ false).expect("persist journal");
     prepared.staging.retain_for_recovery();
-    let mut conflicting = previous.clone();
+    let mut conflicting = previous;
     conflicting.policy = super::super::receipt::WorkflowUpdatePolicy::Manual;
     write_receipt(&store.receipts, &conflicting, /*replace*/ true)
         .expect("write conflicting receipt");

@@ -54,6 +54,7 @@ fn rejects_directory_junctions() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(open_directory(&junction, /*private*/ false, /*desired_access*/ 0).is_err());
+    assert!(!is_symbolic_link_reparse_point(&junction).expect("junction reparse tag"));
     std::fs::remove_dir(&junction).expect("remove junction");
 }
 
@@ -70,8 +71,9 @@ fn creates_and_reopens_a_private_non_reparse_directory() {
     drop((first, second, third));
 
     let private_file = path.join("private.json");
-    create_private_file(&private_file).expect("create private file");
+    let created_file = create_private_file(&private_file).expect("create private file");
     open_private_file(&private_file).expect("reopen private file");
+    drop(created_file);
     let inherited_file = path.join("inherited.json");
     std::fs::write(&inherited_file, b"inherited").expect("write inherited file");
     assert!(open_private_file(&inherited_file).is_err());

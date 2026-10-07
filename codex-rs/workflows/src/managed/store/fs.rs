@@ -17,6 +17,18 @@ struct WindowsDirectoryGuard {
     _parent: Option<std::sync::Arc<WindowsDirectoryGuard>>,
 }
 
+/// Normalizes the platform-specific device ID for durable ownership records.
+#[cfg(target_os = "macos")]
+pub(super) fn device_id_from_stat(device: rustix::fs::Dev) -> u64 {
+    device as u64
+}
+
+/// Normalizes the platform-specific device ID for durable ownership records.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(super) fn device_id_from_stat(device: rustix::fs::Dev) -> u64 {
+    device
+}
+
 /// A retained, non-aliased directory used as the parent of managed metadata.
 pub(super) struct SecureDirectory {
     path: AbsolutePathBuf,
@@ -67,14 +79,7 @@ impl SecureDirectory {
                     bail!("managed workflow root must not contain parent components");
                 }
                 let handle = super::windows_security::open_directory(
-                    &current,
-                    /*private*/ false,
-                    /*desired_access*/
-                    if current == path.as_path() {
-                        windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS
-                    } else {
-                        0
-                    },
+                    &current, /*private*/ false, /*desired_access*/ 0,
                 )?;
                 guard = Some(Arc::new(WindowsDirectoryGuard {
                     handle,
@@ -239,7 +244,7 @@ impl SecureDirectory {
     }
 
     #[cfg(unix)]
-    pub(super) fn device_id(&self) -> anyhow::Result<u64> {
+    pub(super) fn device_id(&self) -> anyhow::Result<rustix::fs::Dev> {
         Ok(rustix::fs::fstat(&self.handle)?.st_dev)
     }
 
@@ -348,7 +353,7 @@ impl SecureDirectory {
             let handle = super::windows_security::open_directory(
                 path.as_path(),
                 /*private*/ true,
-                /*desired_access*/ windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS,
+                /*desired_access*/ 0,
             )?;
             Ok(Self {
                 path,
@@ -379,7 +384,7 @@ impl SecureDirectory {
             let handle = match super::windows_security::open_directory(
                 path.as_path(),
                 /*private*/ true,
-                /*desired_access*/ windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS,
+                /*desired_access*/ 0,
             ) {
                 Ok(handle) => handle,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -651,7 +656,6 @@ impl SecureDirectory {
         }
         #[cfg(windows)]
         {
-            use std::ffi::OsStr;
             use std::os::windows::ffi::OsStrExt;
             use std::os::windows::io::AsRawHandle;
             use windows_sys::Win32::Storage::FileSystem::DELETE;
@@ -665,7 +669,15 @@ impl SecureDirectory {
                 /*private*/ true,
                 /*desired_access*/ DELETE,
             )?;
-            let target_name = OsStr::new(target_name).encode_wide().collect::<Vec<_>>();
+            // The validated target parent stays pinned while Windows resolves
+            // the absolute name. RootDirectory plus a relative name is not
+            // accepted by all supported Windows builds.
+            let target_path = target_parent.path.join(target_name);
+            let target_name = target_path
+                .as_path()
+                .as_os_str()
+                .encode_wide()
+                .collect::<Vec<_>>();
             let filename_bytes = target_name
                 .len()
                 .checked_mul(std::mem::size_of::<u16>())
@@ -682,8 +694,7 @@ impl SecureDirectory {
             unsafe {
                 std::ptr::addr_of_mut!((*information).Anonymous)
                     .write(FILE_RENAME_INFO_0 { ReplaceIfExists: 0 });
-                std::ptr::addr_of_mut!((*information).RootDirectory)
-                    .write(target_parent.guard.handle.as_raw_handle() as _);
+                std::ptr::addr_of_mut!((*information).RootDirectory).write(0);
                 std::ptr::addr_of_mut!((*information).FileNameLength).write(filename_size);
                 target_name.as_ptr().copy_to_nonoverlapping(
                     std::ptr::addr_of_mut!((*information).FileName).cast::<u16>(),
