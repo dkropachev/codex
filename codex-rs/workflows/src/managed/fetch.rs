@@ -50,6 +50,7 @@ pub(super) struct FetchedWorkflowRelease {
     temporary: tempfile::TempDir,
     pub(super) repository: AbsolutePathBuf,
     pub(super) release: ResolvedWorkflowRelease,
+    pub(super) source: WorkflowGitSource,
 }
 
 #[allow(dead_code, reason = "used by the managed installation stage")]
@@ -171,6 +172,7 @@ fn fetch_with_options(
         repository: AbsolutePathBuf::from_absolute_path_checked(repository)
             .context("workflow Git staging path was not absolute")?,
         release: release.clone(),
+        source: source.clone(),
     })
 }
 
