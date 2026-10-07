@@ -68,7 +68,9 @@ pub(super) fn commit_fresh(
         return Err(error);
     }
     prepared.staging.retain_for_recovery();
-    finish_fresh(store, prepared.journal)
+    let journal = prepared.journal;
+    drop(prepared.staging);
+    finish_fresh(store, journal)
 }
 
 pub(super) fn validate_prepared(
@@ -160,6 +162,7 @@ pub(super) fn finish_fresh(
             .context("managed workflow has no pending payload or active release")?;
         let payload = stage.existing_child("payload")?;
         verify_published(&payload, &journal)?;
+        drop(payload);
         let parent = active_parent(&store.active_root, &journal.id, ParentMode::Create)?
             .context("active workflow parent could not be created")?;
         stage.rename_child_noreplace("payload", parent.directory(), leaf(&journal.id)?)?;
@@ -200,6 +203,7 @@ pub(super) fn finish_fresh(
             return Ok(ManagedWorkflowCommitOutcome::CommittedCleanupPending);
         }
     }
+    drop(staging);
     match cleanup_fresh(store, &journal) {
         Ok(()) => Ok(ManagedWorkflowCommitOutcome::Committed),
         Err(_) => Ok(ManagedWorkflowCommitOutcome::CommittedCleanupPending),

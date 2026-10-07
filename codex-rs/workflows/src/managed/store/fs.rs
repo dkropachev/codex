@@ -1,7 +1,5 @@
 use std::fs;
-#[cfg(not(windows))]
 use std::io::Read;
-#[cfg(not(windows))]
 use std::io::Write;
 use std::sync::atomic::AtomicBool;
 #[cfg(not(unix))]
@@ -13,11 +11,19 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 pub(super) mod list;
 
+#[cfg(windows)]
+struct WindowsDirectoryGuard {
+    handle: std::os::windows::io::OwnedHandle,
+    _parent: Option<std::sync::Arc<WindowsDirectoryGuard>>,
+}
+
 /// A retained, non-aliased directory used as the parent of managed metadata.
 pub(super) struct SecureDirectory {
     path: AbsolutePathBuf,
     #[cfg(unix)]
     handle: std::os::fd::OwnedFd,
+    #[cfg(windows)]
+    guard: std::sync::Arc<WindowsDirectoryGuard>,
 }
 
 impl SecureDirectory {
@@ -46,8 +52,39 @@ impl SecureDirectory {
         }
         #[cfg(windows)]
         {
-            let _ = path;
-            bail!("Windows managed store requires protected ACL and handle-relative support");
+            use std::path::Component;
+            use std::path::PathBuf;
+            use std::sync::Arc;
+
+            let mut current = PathBuf::new();
+            let mut guard = None;
+            for component in path.as_path().components() {
+                current.push(component.as_os_str());
+                if matches!(component, Component::Prefix(_) | Component::CurDir) {
+                    continue;
+                }
+                if matches!(component, Component::ParentDir) {
+                    bail!("managed workflow root must not contain parent components");
+                }
+                let handle = super::windows_security::open_directory(
+                    &current,
+                    /*private*/ false,
+                    /*desired_access*/
+                    if current == path.as_path() {
+                        windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS
+                    } else {
+                        0
+                    },
+                )?;
+                guard = Some(Arc::new(WindowsDirectoryGuard {
+                    handle,
+                    _parent: guard,
+                }));
+            }
+            Ok(Self {
+                path: path.clone(),
+                guard: guard.context("managed workflow root has no directory component")?,
+            })
         }
         #[cfg(not(any(unix, windows)))]
         {
@@ -96,8 +133,18 @@ impl SecureDirectory {
         }
         #[cfg(windows)]
         {
-            let _ = path;
-            bail!("Windows managed store directories require protected ACL support");
+            let (handle, created) =
+                super::windows_security::create_private_directory(path.as_path())?;
+            if created {
+                self.sync()?;
+            }
+            Ok(Self {
+                path,
+                guard: std::sync::Arc::new(WindowsDirectoryGuard {
+                    handle,
+                    _parent: Some(std::sync::Arc::clone(&self.guard)),
+                }),
+            })
         }
         #[cfg(not(any(unix, windows)))]
         {
@@ -152,6 +199,21 @@ impl SecureDirectory {
         Ok(rustix::fs::fstat(&self.handle)?.st_dev)
     }
 
+    #[cfg(windows)]
+    pub(super) fn device_id(&self) -> anyhow::Result<u64> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION;
+        use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle;
+
+        let raw = self.guard.handle.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        if unsafe { GetFileInformationByHandle(raw, &mut info) } == 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("failed to inspect managed volume");
+        }
+        Ok(u64::from(info.dwVolumeSerialNumber))
+    }
+
     /// Opens or creates a permanent, owner-private advisory lock file.
     pub(super) fn open_lock_file(&self, name: &str) -> anyhow::Result<fs::File> {
         validate_component(name)?;
@@ -189,7 +251,17 @@ impl SecureDirectory {
             Ok(fs::File::from(handle))
         }
         #[cfg(windows)]
-        bail!("Windows managed locks require protected ACL and handle-relative support");
+        {
+            let path = self.path.join(name);
+            match super::windows_security::create_private_file(path.as_path()) {
+                Ok(file) => Ok(file),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    super::windows_security::open_private_file(path.as_path())
+                        .context("failed to open private managed lock file")
+                }
+                Err(error) => Err(error).context("failed to create private managed lock file"),
+            }
+        }
         #[cfg(not(any(unix, windows)))]
         bail!("managed lock files are unsupported on this platform");
     }
@@ -219,7 +291,21 @@ impl SecureDirectory {
             })
         }
         #[cfg(windows)]
-        bail!("Windows managed store directories require protected ACL support");
+        {
+            let path = self.path.join(name);
+            let handle = super::windows_security::open_directory(
+                path.as_path(),
+                /*private*/ true,
+                /*desired_access*/ windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS,
+            )?;
+            Ok(Self {
+                path,
+                guard: std::sync::Arc::new(WindowsDirectoryGuard {
+                    handle,
+                    _parent: Some(std::sync::Arc::clone(&self.guard)),
+                }),
+            })
+        }
         #[cfg(not(any(unix, windows)))]
         {
             let path = self.path.join(name);
@@ -232,59 +318,75 @@ impl SecureDirectory {
     }
 
     /// Inspects a child without creating it, for pre-mutation volume checks.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(super) fn optional_existing_child(&self, name: &str) -> anyhow::Result<Option<Self>> {
-        use rustix::fs::Mode;
-        use rustix::fs::OFlags;
-        use rustix::fs::openat;
-        use rustix::io::Errno;
-
-        validate_component(name)?;
-        let handle = match openat(
-            &self.handle,
-            name,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        ) {
-            Ok(handle) => handle,
-            Err(Errno::NOENT) => return Ok(None),
-            Err(error) => {
-                return Err(error).context("failed to inspect managed workflow directory");
-            }
-        };
-        if rustix::fs::fstat(&handle)?.st_mode & 0o077 != 0 {
-            bail!("managed workflow directory is accessible to other users");
+        #[cfg(windows)]
+        {
+            validate_component(name)?;
+            let path = self.path.join(name);
+            let handle = match super::windows_security::open_directory(
+                path.as_path(),
+                /*private*/ true,
+                /*desired_access*/ windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS,
+            ) {
+                Ok(handle) => handle,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error).context("failed to inspect managed directory"),
+            };
+            return Ok(Some(Self {
+                path,
+                guard: std::sync::Arc::new(WindowsDirectoryGuard {
+                    handle,
+                    _parent: Some(std::sync::Arc::clone(&self.guard)),
+                }),
+            }));
         }
-        Ok(Some(Self {
-            path: self.path.join(name),
-            handle,
-        }))
+        #[cfg(unix)]
+        {
+            use rustix::fs::Mode;
+            use rustix::fs::OFlags;
+            use rustix::fs::openat;
+            use rustix::io::Errno;
+
+            validate_component(name)?;
+            let handle = match openat(
+                &self.handle,
+                name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            ) {
+                Ok(handle) => handle,
+                Err(Errno::NOENT) => return Ok(None),
+                Err(error) => {
+                    return Err(error).context("failed to inspect managed workflow directory");
+                }
+            };
+            if rustix::fs::fstat(&handle)?.st_mode & 0o077 != 0 {
+                bail!("managed workflow directory is accessible to other users");
+            }
+            Ok(Some(Self {
+                path: self.path.join(name),
+                handle,
+            }))
+        }
     }
 
     /// Opens an existing regular metadata file without following an alias.
     pub(super) fn read_file(&self, name: &str, maximum_bytes: u64) -> anyhow::Result<Vec<u8>> {
-        #[cfg(windows)]
-        {
-            let _ = (name, maximum_bytes);
-            bail!("Windows managed store file access requires handle-relative support");
+        validate_component(name)?;
+        let mut file = self.open_regular_file(name)?;
+        let metadata = file.metadata()?;
+        if metadata.len() > maximum_bytes {
+            bail!("managed workflow metadata exceeds {maximum_bytes} bytes");
         }
-        #[cfg(not(windows))]
-        {
-            validate_component(name)?;
-            let mut file = self.open_regular_file(name)?;
-            let metadata = file.metadata()?;
-            if metadata.len() > maximum_bytes {
-                bail!("managed workflow metadata exceeds {maximum_bytes} bytes");
-            }
-            let mut bytes = Vec::new();
-            Read::by_ref(&mut file)
-                .take(maximum_bytes + 1)
-                .read_to_end(&mut bytes)?;
-            if bytes.len() as u64 > maximum_bytes {
-                bail!("managed workflow metadata exceeds {maximum_bytes} bytes");
-            }
-            Ok(bytes)
+        let mut bytes = Vec::new();
+        Read::by_ref(&mut file)
+            .take(maximum_bytes + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > maximum_bytes {
+            bail!("managed workflow metadata exceeds {maximum_bytes} bytes");
         }
+        Ok(bytes)
     }
 
     /// Publishes a complete file and syncs both content and containing directory.
@@ -364,8 +466,65 @@ impl SecureDirectory {
         }
         #[cfg(windows)]
         {
-            let _ = (bytes, replace);
-            bail!("Windows managed store writes require protected ACL and handle-relative support");
+            use std::os::windows::ffi::OsStrExt;
+            use std::sync::atomic::AtomicU64;
+            use std::sync::atomic::Ordering;
+            use windows_sys::Win32::Storage::FileSystem::MOVEFILE_REPLACE_EXISTING;
+            use windows_sys::Win32::Storage::FileSystem::MOVEFILE_WRITE_THROUGH;
+            use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+
+            let target = self.path.join(name);
+            if replace {
+                self.open_regular_file(name)?;
+            } else if fs::symlink_metadata(target.as_path()).is_ok() {
+                bail!("managed workflow metadata already exists");
+            }
+            let target_wide = target
+                .as_path()
+                .as_os_str()
+                .encode_wide()
+                .chain(Some(0))
+                .collect::<Vec<_>>();
+            let flags = MOVEFILE_WRITE_THROUGH
+                | if replace {
+                    MOVEFILE_REPLACE_EXISTING
+                } else {
+                    0
+                };
+            static NEXT_FILE_ID: AtomicU64 = AtomicU64::new(0);
+            for _ in 0..128 {
+                let sequence = NEXT_FILE_ID.fetch_add(1, Ordering::Relaxed);
+                let temporary = self
+                    .path
+                    .join(format!(".managed-file-{}-{sequence}", std::process::id()));
+                let mut file =
+                    match super::windows_security::create_private_file(temporary.as_path()) {
+                        Ok(file) => file,
+                        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                        Err(error) => {
+                            return Err(error).context("failed to stage private managed metadata");
+                        }
+                    };
+                let written = file.write_all(bytes).and_then(|()| file.sync_all());
+                drop(file);
+                if let Err(error) = written {
+                    let _ = fs::remove_file(temporary.as_path());
+                    return Err(error).context("failed to write private managed metadata");
+                }
+                let source_wide = temporary
+                    .as_path()
+                    .as_os_str()
+                    .encode_wide()
+                    .chain(Some(0))
+                    .collect::<Vec<_>>();
+                if unsafe { MoveFileExW(source_wide.as_ptr(), target_wide.as_ptr(), flags) } == 0 {
+                    let error = std::io::Error::last_os_error();
+                    let _ = fs::remove_file(temporary.as_path());
+                    return Err(error).context("failed to publish managed metadata");
+                }
+                return Ok(());
+            }
+            bail!("failed to allocate a unique private managed metadata file");
         }
         #[cfg(not(any(unix, windows)))]
         {
@@ -401,9 +560,8 @@ impl SecureDirectory {
             use rustix::fs::fsync;
             fsync(&self.handle).context("failed to sync managed workflow directory")?;
         }
-        #[cfg(windows)]
-        bail!("Windows managed store durability support is not yet available");
-        #[cfg(not(windows))]
+        // Windows file contents are flushed through their file handles, and
+        // metadata renames use MOVEFILE_WRITE_THROUGH or FileRenameInfo.
         Ok(())
     }
 
@@ -441,8 +599,59 @@ impl SecureDirectory {
         }
         #[cfg(windows)]
         {
-            let _ = target_parent;
-            bail!("Windows managed store rename requires atomic handle-relative support");
+            use std::ffi::OsStr;
+            use std::os::windows::ffi::OsStrExt;
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Storage::FileSystem::DELETE;
+            use windows_sys::Win32::Storage::FileSystem::FILE_RENAME_INFO;
+            use windows_sys::Win32::Storage::FileSystem::FILE_RENAME_INFO_0;
+            use windows_sys::Win32::Storage::FileSystem::FileRenameInfo;
+            use windows_sys::Win32::Storage::FileSystem::SetFileInformationByHandle;
+
+            let source = super::windows_security::open_directory(
+                self.path.join(source_name).as_path(),
+                /*private*/ true,
+                /*desired_access*/ DELETE,
+            )?;
+            let target_name = OsStr::new(target_name).encode_wide().collect::<Vec<_>>();
+            let filename_bytes = target_name
+                .len()
+                .checked_mul(std::mem::size_of::<u16>())
+                .context("managed rename name length overflow")?;
+            let filename_size = u32::try_from(filename_bytes)?;
+            let information_bytes = std::mem::offset_of!(FILE_RENAME_INFO, FileName)
+                .checked_add(filename_bytes)
+                .and_then(|size| size.checked_add(std::mem::size_of::<u16>()))
+                .context("managed rename information length overflow")?;
+            let information_size = u32::try_from(information_bytes)?;
+            let mut storage =
+                vec![0_usize; information_bytes.div_ceil(std::mem::size_of::<usize>())];
+            let information = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+            unsafe {
+                std::ptr::addr_of_mut!((*information).Anonymous)
+                    .write(FILE_RENAME_INFO_0 { ReplaceIfExists: 0 });
+                std::ptr::addr_of_mut!((*information).RootDirectory)
+                    .write(target_parent.guard.handle.as_raw_handle() as _);
+                std::ptr::addr_of_mut!((*information).FileNameLength).write(filename_size);
+                target_name.as_ptr().copy_to_nonoverlapping(
+                    std::ptr::addr_of_mut!((*information).FileName).cast::<u16>(),
+                    target_name.len(),
+                );
+            }
+            if unsafe {
+                SetFileInformationByHandle(
+                    source.as_raw_handle() as _,
+                    FileRenameInfo,
+                    information.cast(),
+                    information_size,
+                )
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error())
+                    .context("failed to rename managed workflow directory");
+            }
+            self.sync()?;
+            target_parent.sync()
         }
         #[cfg(not(any(unix, windows)))]
         {
@@ -472,7 +681,6 @@ impl SecureDirectory {
         self.sync()
     }
 
-    #[cfg(not(windows))]
     fn open_regular_file(&self, name: &str) -> anyhow::Result<fs::File> {
         #[cfg(unix)]
         let file = {
@@ -486,7 +694,9 @@ impl SecureDirectory {
                 Mode::empty(),
             )?)
         };
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        let file = super::windows_security::open_private_file(self.path.join(name).as_path())?;
+        #[cfg(not(any(unix, windows)))]
         let file = {
             let path = self.path.join(name);
             let mut options = fs::OpenOptions::new();
@@ -516,3 +726,15 @@ fn validate_component(name: &str) -> anyhow::Result<()> {
 fn is_windows_reparse_point(_metadata: &fs::Metadata) -> bool {
     false
 }
+
+#[cfg(windows)]
+fn is_windows_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(all(test, windows))]
+#[path = "fs/windows_tests.rs"]
+mod windows_tests;
