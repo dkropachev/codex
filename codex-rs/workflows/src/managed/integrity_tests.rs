@@ -51,7 +51,7 @@ fn payload_scan_is_sorted_and_limits_are_inclusive() {
 fn payload_byte_counter_rejects_overflow() {
     let mut limits = super::super::fetch::VERIFICATION_LIMITS;
     limits.post_install_bytes = u64::MAX;
-    let error = add_bytes(u64::MAX, 1, limits).expect_err("reject overflow");
+    let error = add_bytes(u64::MAX, /*added*/ 1, limits).expect_err("reject overflow");
     assert!(error.to_string().contains("overflow"));
 }
 
