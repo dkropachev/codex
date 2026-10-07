@@ -1,3 +1,5 @@
+#[cfg(unix)]
+mod backup;
 mod catalog;
 #[cfg(unix)]
 mod cleanup;

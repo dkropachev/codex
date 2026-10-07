@@ -24,6 +24,8 @@ use link::validate_dependency_link;
 pub(in crate::managed) use verify::ActivationPayloadEvidence;
 #[allow(unused_imports, reason = "consumed by the managed lifecycle stage")]
 pub(in crate::managed) use verify::VerifiedWorkflowRelease;
+pub(in crate::managed) use verify::backup_payload_evidence;
+pub(in crate::managed) use verify::published_payload_evidence;
 #[allow(unused_imports, reason = "consumed by the managed lifecycle stage")]
 pub(in crate::managed) use verify::verify_materialized_copy;
 #[allow(unused_imports, reason = "consumed by the managed lifecycle stage")]
@@ -180,6 +182,7 @@ pub(super) enum PayloadKind {
     Staged,
     Installed,
     Published,
+    Backup,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -229,7 +232,10 @@ pub(super) fn scan_payload(
             let entry = entry.context("failed to read workflow payload entry")?;
             if directory == root
                 && entry.file_name() == ".git"
-                && !matches!(kind, PayloadKind::Installed | PayloadKind::Published)
+                && !matches!(
+                    kind,
+                    PayloadKind::Installed | PayloadKind::Published | PayloadKind::Backup
+                )
             {
                 continue;
             }
@@ -239,10 +245,18 @@ pub(super) fn scan_payload(
                     .to_str()
                     .is_some_and(|name| name.eq_ignore_ascii_case("codex-managed-workflow"))
             {
-                if kind == PayloadKind::Published && entry.file_name() == "codex-managed-workflow" {
+                if matches!(kind, PayloadKind::Published | PayloadKind::Backup)
+                    && entry.file_name() == "codex-managed-workflow"
+                {
                     continue;
                 }
                 bail!("workflow payload contains reserved management marker");
+            }
+            if directory == root
+                && kind == PayloadKind::Backup
+                && entry.file_name() == ".codex-managed-operation"
+            {
+                continue;
             }
             if directory == root
                 && entry
