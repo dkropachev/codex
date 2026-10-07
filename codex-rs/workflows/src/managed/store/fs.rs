@@ -67,14 +67,7 @@ impl SecureDirectory {
                     bail!("managed workflow root must not contain parent components");
                 }
                 let handle = super::windows_security::open_directory(
-                    &current,
-                    /*private*/ false,
-                    /*desired_access*/
-                    if current == path.as_path() {
-                        windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS
-                    } else {
-                        0
-                    },
+                    &current, /*private*/ false, /*desired_access*/ 0,
                 )?;
                 guard = Some(Arc::new(WindowsDirectoryGuard {
                     handle,
@@ -296,7 +289,7 @@ impl SecureDirectory {
             let handle = super::windows_security::open_directory(
                 path.as_path(),
                 /*private*/ true,
-                /*desired_access*/ windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS,
+                /*desired_access*/ 0,
             )?;
             Ok(Self {
                 path,
@@ -327,7 +320,7 @@ impl SecureDirectory {
             let handle = match super::windows_security::open_directory(
                 path.as_path(),
                 /*private*/ true,
-                /*desired_access*/ windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS,
+                /*desired_access*/ 0,
             ) {
                 Ok(handle) => handle,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
