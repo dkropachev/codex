@@ -2,6 +2,7 @@ use std::fs;
 use std::io::Read;
 use std::io::Write;
 use std::os::fd::OwnedFd;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
@@ -108,7 +109,7 @@ pub(super) fn copy_verified_payload(
                 )?,
                 0o120000
                     if path.starts_with("node_modules")
-                        && path != PathBuf::from("node_modules") =>
+                        && path.as_path() != Path::new("node_modules") =>
                 {
                     let target = rustix::fs::readlinkat(&source, name.as_str(), Vec::new())?;
                     if target.to_bytes().len() > 4096 {
