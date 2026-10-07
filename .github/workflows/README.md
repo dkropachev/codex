@@ -23,6 +23,8 @@ checks. Stable release tags run the broader platform checks before publication.
   Windows x86_64 and ARM64 sandbox/protocol tests, cargo-deny, codespell,
   repository checks, and SDK tests. These must pass before the unpublished
   release draft is created.
+- The Windows hosted-runner suite omits sandbox subprocess tests that need a
+  separately provisioned sandbox account and PowerShell module installation.
 - Manual package dry-runs and historical backfills retain their package
   validation without running release CI against the default branch.
 

@@ -46,7 +46,14 @@ jobs:
 
       - name: Test Windows sandbox and protocol crates
         shell: bash
-        run: just test -p codex-windows-sandbox -p codex-protocol -p codex-app-server-protocol
+        run: |
+          # These subprocess tests need a provisioned sandbox account with
+          # PowerShell modules available to that account.
+          just test \
+            -p codex-windows-sandbox \
+            -p codex-protocol \
+            -p codex-app-server-protocol \
+            -E 'not (package(codex-windows-sandbox) and test(unified_exec::tests::))'
 
       - name: Check for a clean worktree
         if: always() && !cancelled()
