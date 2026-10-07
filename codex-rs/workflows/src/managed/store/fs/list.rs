@@ -15,7 +15,20 @@ use anyhow::Context;
 use anyhow::bail;
 
 #[cfg(unix)]
-pub(super) fn list_names(
+pub(in crate::managed::store) fn list_names(
+    directory: &OwnedFd,
+    maximum_entries: usize,
+    cancelled: Option<&AtomicBool>,
+) -> anyhow::Result<Vec<String>> {
+    let names = list_raw_names(directory, maximum_entries, cancelled)?;
+    for name in &names {
+        super::validate_component(name)?;
+    }
+    Ok(names)
+}
+
+#[cfg(unix)]
+pub(in crate::managed::store) fn list_raw_names(
     directory: &OwnedFd,
     maximum_entries: usize,
     cancelled: Option<&AtomicBool>,
@@ -64,7 +77,6 @@ pub(super) fn list_names(
         }
         let name = std::str::from_utf8(name.to_bytes())
             .context("managed workflow directory entry must be UTF-8")?;
-        super::validate_component(name)?;
         names.push(name.to_owned());
         if names.len() > maximum_entries {
             bail!("managed workflow directory scan exceeds its entry limit");

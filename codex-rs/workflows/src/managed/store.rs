@@ -1,4 +1,5 @@
 mod catalog;
+mod copy;
 mod fs;
 mod journal;
 mod lock;
