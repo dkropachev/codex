@@ -24,6 +24,11 @@ fn compare_current_requires_the_exact_observed_receipt() {
         .child("orphan")
         .expect("orphan receipt directory");
     assert!(compare_current(&receipts, "team/orphan", &ExpectedCurrent::Absent).is_err());
+    assert_eq!(
+        super::super::receipt::read_pending_receipt(&receipts, "team/orphan")
+            .expect("pending transaction can observe empty receipt leaf"),
+        None
+    );
 
     let first = ManagedWorkflowReceipt::new(
         "team/build".into(),

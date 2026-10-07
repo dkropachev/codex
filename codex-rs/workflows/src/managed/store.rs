@@ -38,8 +38,21 @@ pub(in crate::managed) struct ManagedWorkflowStore {
 
 pub(in crate::managed) struct LockedManagedWorkflow {
     pub(in crate::managed) id: String,
+    #[cfg(unix)]
+    management_identity: (u64, u64),
     _global: ManagedFileLock,
     _workflow: ManagedFileLock,
+}
+
+#[cfg(unix)]
+impl LockedManagedWorkflow {
+    fn ensure_store(&self, store: &ManagedWorkflowStore) -> anyhow::Result<()> {
+        let metadata = rustix::fs::fstat(store.management.handle())?;
+        if self.management_identity != (metadata.st_dev, metadata.st_ino) {
+            bail!("managed workflow lock belongs to a different store");
+        }
+        Ok(())
+    }
 }
 
 pub(in crate::managed) struct ManagedWorkflowRunGuard {
@@ -63,6 +76,8 @@ impl ManagedWorkflowStore {
         deadline: crate::runner::CommandDeadline,
         cancelled: Option<&AtomicBool>,
     ) -> anyhow::Result<PreparedWorkflowRelease<'_>> {
+        #[cfg(unix)]
+        locked.ensure_store(self)?;
         prepare::prepare_release(
             &self.staging,
             locked,
@@ -157,8 +172,15 @@ impl ManagedWorkflowStore {
         let global = ManagedFileLock::acquire(global, LockMode::Shared, cancelled)?;
         let workflow = self.workflow_lock_file(id)?;
         let workflow = ManagedFileLock::acquire(workflow, LockMode::Exclusive, cancelled)?;
+        #[cfg(unix)]
+        let management_identity = {
+            let metadata = rustix::fs::fstat(self.management.handle())?;
+            (metadata.st_dev, metadata.st_ino)
+        };
         Ok(LockedManagedWorkflow {
             id: id.to_owned(),
+            #[cfg(unix)]
+            management_identity,
             _global: global,
             _workflow: workflow,
         })

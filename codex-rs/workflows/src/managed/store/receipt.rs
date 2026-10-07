@@ -163,6 +163,29 @@ pub(super) fn read_optional_receipt(
     receipts: &SecureDirectory,
     id: &str,
 ) -> anyhow::Result<Option<ManagedWorkflowReceipt>> {
+    read_optional_receipt_with_mode(receipts, id, MissingReceiptFile::Corrupt)
+}
+
+#[cfg(unix)]
+pub(super) fn read_pending_receipt(
+    receipts: &SecureDirectory,
+    id: &str,
+) -> anyhow::Result<Option<ManagedWorkflowReceipt>> {
+    read_optional_receipt_with_mode(receipts, id, MissingReceiptFile::PendingTransaction)
+}
+
+#[cfg(unix)]
+enum MissingReceiptFile {
+    Corrupt,
+    PendingTransaction,
+}
+
+#[cfg(unix)]
+fn read_optional_receipt_with_mode(
+    receipts: &SecureDirectory,
+    id: &str,
+    missing: MissingReceiptFile,
+) -> anyhow::Result<Option<ManagedWorkflowReceipt>> {
     use rustix::fs::AtFlags;
     use rustix::fs::statat;
     use rustix::io::Errno;
@@ -186,7 +209,12 @@ pub(super) fn read_optional_receipt(
             let bytes = directory.read_file("receipt.json", MAX_RECEIPT_BYTES as u64)?;
             parse_receipt(&bytes, id).map(Some)
         }
-        Err(Errno::NOENT) => bail!("managed workflow receipt directory has no receipt file"),
+        Err(Errno::NOENT) => match missing {
+            MissingReceiptFile::Corrupt => {
+                bail!("managed workflow receipt directory has no receipt file")
+            }
+            MissingReceiptFile::PendingTransaction => Ok(None),
+        },
         Err(error) => Err(error).context("failed to inspect managed workflow receipt"),
     }
 }
