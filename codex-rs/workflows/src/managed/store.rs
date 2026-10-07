@@ -9,6 +9,7 @@ mod expected;
 mod fs;
 mod journal;
 mod lock;
+mod operation;
 mod prepare;
 #[cfg(unix)]
 mod publish;
@@ -34,6 +35,8 @@ use lock::LockMode;
 use lock::ManagedFileLock;
 use prepare::PreparedWorkflowRelease;
 use receipt::ManagedWorkflowReceipt;
+
+pub(in crate::managed) use operation::ManagedBunOperationDirectory;
 
 #[cfg(unix)]
 pub(in crate::managed) use expected::ExpectedCurrent;

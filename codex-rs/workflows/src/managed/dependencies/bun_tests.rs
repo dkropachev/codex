@@ -349,7 +349,10 @@ fn required_sandbox_preparation_never_falls_back_to_unrestricted() {
 #[cfg(unix)]
 #[test]
 fn prepared_command_retains_private_environment_until_exit() {
-    let operation = tempfile::tempdir().expect("private operation");
+    let root = tempfile::tempdir().expect("private operation root");
+    let operations = absolute(&root.path().join("bun/operations"));
+    fs::create_dir_all(operations.as_path()).expect("operation directory");
+    let operation = ManagedBunOperationDirectory::create(&operations).expect("private operation");
     let operation_path = operation.path().to_path_buf();
     let marker = operation.path().join("marker");
     fs::write(&marker, "present").expect("write marker");

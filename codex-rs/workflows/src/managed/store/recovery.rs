@@ -7,6 +7,7 @@ use super::LockedManagedWorkflow;
 use super::ManagedWorkflowStore;
 use super::journal::read_journal;
 use super::journal::read_journal_named;
+use super::operation::recover_marked_bun_operations;
 use super::publish;
 use super::publish::ManagedWorkflowCommitOutcome;
 use super::replace;
@@ -44,6 +45,7 @@ pub(super) fn recover_all(
             publish::finish_fresh(store, journal)?;
         }
     }
+    recover_marked_bun_operations(&store.management, cancelled)?;
     Ok(())
 }
 
