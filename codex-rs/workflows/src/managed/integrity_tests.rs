@@ -185,13 +185,17 @@ fn windows_dependency_links_accept_contained_targets_and_reject_junctions() {
 fn index_parser_requires_stage_zero_and_valid_modes() {
     let oid = "a".repeat(40);
     assert_eq!(
-        parse_index(format!("100644 {oid} 0\ta\0").as_bytes(), 40).expect("valid index"),
+        parse_index(
+            format!("100644 {oid} 0\ta\0").as_bytes(),
+            /*oid_length*/ 40
+        )
+        .expect("valid index"),
         [IndexEntry {
             path: "a".into(),
             mode: "100644".into(),
             oid
         }]
     );
-    assert!(parse_index(b"100644 deadbeef 1\ta\0", 8).is_err());
-    assert!(parse_index(b"120000 deadbeef 0\ta\0", 8).is_err());
+    assert!(parse_index(b"100644 deadbeef 1\ta\0", /*oid_length*/ 8).is_err());
+    assert!(parse_index(b"120000 deadbeef 0\ta\0", /*oid_length*/ 8).is_err());
 }
