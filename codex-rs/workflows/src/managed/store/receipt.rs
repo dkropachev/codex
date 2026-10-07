@@ -6,7 +6,7 @@ use serde::Serialize;
 use super::fs::SecureDirectory;
 
 const RECEIPT_SCHEMA_VERSION: u32 = 1;
-const MAX_RECEIPT_BYTES: usize = 64 * 1024;
+pub(super) const MAX_RECEIPT_BYTES: usize = 64 * 1024;
 const MAX_SOURCE_BYTES: usize = 8 * 1024;
 const MAX_ID_BYTES: usize = 240;
 const MAX_ID_COMPONENTS: usize = 32;

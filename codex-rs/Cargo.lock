@@ -5319,6 +5319,7 @@ dependencies = [
  "codex-sandboxing",
  "codex-utils-absolute-path",
  "jsonschema",
+ "libc",
  "pretty_assertions",
  "rustix 1.1.4",
  "semver",

@@ -1,3 +1,4 @@
+mod catalog;
 mod fs;
 mod lock;
 mod receipt;
@@ -11,6 +12,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use fs::SecureDirectory;
 use lock::LockMode;
 use lock::ManagedFileLock;
+use receipt::ManagedWorkflowReceipt;
 
 /// Owns the private, same-filesystem metadata layout for managed workflows.
 pub(in crate::managed) struct ManagedWorkflowStore {
@@ -39,6 +41,15 @@ pub(in crate::managed) struct ManagedWorkflowRecoveryGuard {
 }
 
 impl ManagedWorkflowStore {
+    /// Reads a consistent receipt catalog after active workflow mutations finish.
+    pub(in crate::managed) fn list_receipts(
+        &self,
+        cancelled: Option<&AtomicBool>,
+    ) -> anyhow::Result<Vec<ManagedWorkflowReceipt>> {
+        let global = self.management.open_lock_file("managed.lock")?;
+        let _global = ManagedFileLock::acquire(global, LockMode::Exclusive, cancelled)?;
+        catalog::collect_receipts(&self.receipts, cancelled)
+    }
     pub(in crate::managed) fn create(
         codex_home: &AbsolutePathBuf,
         workflow_root: &AbsolutePathBuf,
