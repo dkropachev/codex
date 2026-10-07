@@ -13,6 +13,16 @@ use super::super::WorkflowGitSource;
 use super::super::fetch_with_options;
 use super::*;
 
+impl StagedWorkflowRelease {
+    pub(in crate::managed) fn with_synthetic_test_source(
+        mut self,
+        source: WorkflowGitSource,
+    ) -> Self {
+        self.source = source;
+        self
+    }
+}
+
 struct Repository(tempfile::TempDir);
 
 impl Repository {
