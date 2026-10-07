@@ -164,6 +164,12 @@ jobs:
     uses: ./.github/workflows/sdk.yml
     secrets: inherit
 
+  windows-smoke-tests:
+    if: github.event_name == 'push'
+    needs: validate
+    uses: ./.github/workflows/windows-release-smoke.yml
+    secrets: inherit
+
   release-checks:
     name: Release CI results
     needs:
@@ -172,6 +178,7 @@ jobs:
       - codespell
       - repo-checks
       - sdk
+      - windows-smoke-tests
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:

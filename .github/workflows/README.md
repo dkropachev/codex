@@ -1,14 +1,16 @@
 # Workflow Strategy
 
-Pull requests and `main` run a small required suite. Stable release tags run
-the slower checks before publication.
+Pull requests and `main` run Linux x86_64 and ARM64 Bazel tests plus fast
+checks. Stable release tags run the broader platform checks before publication.
 
 ## Pull Requests
 
 - Required checks run against GitHub's synthetic merge commit, not the pull
   request head alone. This includes changes already on `main` and catches
   conflicts before they reach the branch.
-- `blocking-ci.yml` requires the changed-blob policy and `rust-ci.yml`.
+- `blocking-ci.yml` requires the changed-blob policy, `rust-ci.yml`, and the
+  Linux x86_64 and ARM64 Bazel suites covering Core integration tests and TUI,
+  protocol, and app-server-protocol unit tests.
 - `rust-ci.yml` runs the fast Rust checks:
   - `cargo fmt --check`
   - `cargo shear`
@@ -17,9 +19,13 @@ the slower checks before publication.
 
 ## Stable Release Tags
 
-- `fork-rust-release.yml` runs Bazel tests, Clippy, and release-build checks,
-  plus cargo-deny, codespell, repository checks, and SDK tests. These must pass
-  before the unpublished release draft is created.
+- `fork-rust-release.yml` runs full Bazel `//...` tests on Linux x86_64 and
+  ARM64 (GNU and musl) and macOS x86_64 and ARM64, plus Clippy and release-build
+  checks, Windows x86_64 and ARM64 sandbox/protocol tests, cargo-deny, codespell,
+  repository checks, and SDK tests. These must pass before the unpublished
+  release draft is created.
+- The Windows hosted-runner suite omits sandbox subprocess tests that need a
+  separately provisioned sandbox account and PowerShell module installation.
 - Manual package dry-runs and historical backfills retain their package
   validation without running release CI against the default branch.
 

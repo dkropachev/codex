@@ -15,6 +15,24 @@ jobs:
     uses: ./.github/workflows/blob-size-policy.yml
     secrets: inherit
 
+  linux-arm64-tests:
+    name: Linux ARM64 tests
+    uses: ./.github/workflows/platform-bazel-tests.yml
+    with:
+      runner: ubuntu-24.04-arm
+      target: aarch64-unknown-linux-gnu
+      test_suite: pr
+    secrets: inherit
+
+  linux-x64-tests:
+    name: Linux x86_64 tests
+    uses: ./.github/workflows/platform-bazel-tests.yml
+    with:
+      runner: ubuntu-24.04
+      target: x86_64-unknown-linux-gnu
+      test_suite: pr
+    secrets: inherit
+
   rust-ci:
     name: rust-ci
     uses: ./.github/workflows/rust-ci.yml
@@ -27,6 +45,8 @@ jobs:
     if: ${{ always() }}
     needs:
       - blob-size-policy
+      - linux-arm64-tests
+      - linux-x64-tests
       - rust-ci
     runs-on: ubuntu-24.04
     steps:
