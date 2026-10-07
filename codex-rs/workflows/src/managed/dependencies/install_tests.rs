@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
 use std::process::ExitStatus;
@@ -123,8 +124,8 @@ type FakeRun<'a> = Box<
 >;
 
 struct FakeManagedBunExecutor<'a> {
-    preparation: Option<FakePreparation>,
-    run: Option<FakeRun<'a>>,
+    preparation: VecDeque<FakePreparation>,
+    runs: VecDeque<FakeRun<'a>>,
     events: Vec<FakeExecutorEvent>,
 }
 
@@ -141,16 +142,16 @@ impl<'a> FakeManagedBunExecutor<'a> {
 
     fn unavailable(reason: LocalSandboxUnavailableReason) -> Self {
         Self {
-            preparation: Some(FakePreparation::SandboxUnavailable(reason)),
-            run: None,
+            preparation: VecDeque::from([FakePreparation::SandboxUnavailable(reason)]),
+            runs: VecDeque::new(),
             events: Vec::new(),
         }
     }
 
     fn prepare_error(message: &'static str) -> Self {
         Self {
-            preparation: Some(FakePreparation::Error(message)),
-            run: None,
+            preparation: VecDeque::from([FakePreparation::Error(message)]),
+            runs: VecDeque::new(),
             events: Vec::new(),
         }
     }
@@ -165,8 +166,8 @@ impl<'a> FakeManagedBunExecutor<'a> {
         + 'a,
     ) -> Self {
         Self {
-            preparation: Some(FakePreparation::Prepared),
-            run: Some(Box::new(run)),
+            preparation: VecDeque::from([FakePreparation::Prepared]),
+            runs: VecDeque::from([Box::new(run) as FakeRun<'a>]),
             events: Vec::new(),
         }
     }
@@ -181,7 +182,7 @@ impl ManagedBunExecutor for FakeManagedBunExecutor<'_> {
         plan: ManagedBunCommandPlan,
     ) -> anyhow::Result<ManagedBunPreparation<Self::Prepared>> {
         self.events.push(FakeExecutorEvent::Prepare(phase));
-        match self.preparation.take().expect("prepare exactly once") {
+        match self.preparation.pop_front().expect("prepare exactly once") {
             FakePreparation::Prepared => Ok(ManagedBunPreparation::Prepared(FakePrepared(plan))),
             FakePreparation::SandboxUnavailable(reason) => {
                 Ok(ManagedBunPreparation::SandboxUnavailable(reason))
@@ -202,7 +203,7 @@ impl ManagedBunExecutor for FakeManagedBunExecutor<'_> {
         self.events.push(FakeExecutorEvent::Run(phase));
         let FakePrepared(plan) = prepared;
         drop(plan);
-        self.run.take().expect("run exactly once")(environment, deadline, limits, cancelled)
+        self.runs.pop_front().expect("run exactly once")(environment, deadline, limits, cancelled)
     }
 }
 
@@ -220,6 +221,266 @@ fn output(
     }
 }
 
+const VALID_GENERATED_LOCK: &str = r#"{"lockfileVersion":1,"workspaces":{"":{"dependencies":{"dep":"1.0.0"}}},"packages":{"dep":["dep@1.0.0","",{},"integrity"]}}"#;
+
+fn binary_executor<'a>(
+    inspect: impl FnOnce(&ManagedBunEnvironment) -> anyhow::Result<crate::runner::BoundedCommandOutput>
+    + 'a,
+    install: impl FnOnce(&ManagedBunEnvironment) -> anyhow::Result<crate::runner::BoundedCommandOutput>
+    + 'a,
+) -> FakeManagedBunExecutor<'a> {
+    FakeManagedBunExecutor {
+        preparation: VecDeque::from([FakePreparation::Prepared, FakePreparation::Prepared]),
+        runs: VecDeque::from([
+            Box::new(
+                move |environment: &ManagedBunEnvironment,
+                      _: crate::runner::CommandDeadline,
+                      _: crate::runner::CommandOutputLimits,
+                      _: Option<&AtomicBool>| inspect(environment),
+            ) as FakeRun<'a>,
+            Box::new(
+                move |environment: &ManagedBunEnvironment,
+                      _: crate::runner::CommandDeadline,
+                      _: crate::runner::CommandOutputLimits,
+                      _: Option<&AtomicBool>| install(environment),
+            ) as FakeRun<'a>,
+        ]),
+        events: Vec::new(),
+    }
+}
+
+#[test]
+fn binary_inspection_precedes_one_frozen_install() {
+    let fixture = Fixture::new(Lock::Binary);
+    let mut executor = binary_executor(
+        |environment| {
+            assert_eq!(
+                fs::read(environment.scratch_dir.join("package.json").as_path())?,
+                fs::read(fixture.package.root.join("package.json"))?
+            );
+            assert_eq!(
+                fs::read(environment.scratch_dir.join("bun.lockb").as_path())?,
+                [0]
+            );
+            fs::write(
+                environment.scratch_dir.join("bun.lock").as_path(),
+                VALID_GENERATED_LOCK,
+            )?;
+            Ok(output(
+                /*code*/ 0, /*stdout_oversized*/ false, /*stderr_oversized*/ false,
+            ))
+        },
+        |_| {
+            assert!(fixture.node_modules().is_dir());
+            assert!(!fixture.package.root.join("bun.lock").exists());
+            Ok(output(
+                /*code*/ 0, /*stdout_oversized*/ false, /*stderr_oversized*/ false,
+            ))
+        },
+    );
+    assert_eq!(
+        materialize_with_executor(fixture.normal_request(), &mut executor)
+            .expect("binary install succeeds"),
+        ManagedDependencyMaterializationOutcome::Materialized
+    );
+    assert_eq!(
+        executor.events,
+        [
+            FakeExecutorEvent::Prepare(ManagedBunPhase::Install),
+            FakeExecutorEvent::Prepare(ManagedBunPhase::InspectBinaryLockfile),
+            FakeExecutorEvent::Run(ManagedBunPhase::InspectBinaryLockfile),
+            FakeExecutorEvent::Run(ManagedBunPhase::Install),
+        ]
+    );
+    assert!(executor.preparation.is_empty() && executor.runs.is_empty());
+    assert!(fixture.node_modules().is_dir());
+}
+
+#[test]
+fn binary_inspection_failures_never_run_install_or_leave_node_modules() {
+    for failure in [
+        "missing",
+        "invalid",
+        "changed",
+        "oversized-lock",
+        "nonzero",
+        "stdout",
+        "stderr",
+        "run",
+    ] {
+        let fixture = Fixture::new(Lock::Binary);
+        let mut executor = binary_executor(
+            |environment| {
+                if failure != "missing" {
+                    fs::write(
+                        environment.scratch_dir.join("bun.lock").as_path(),
+                        if failure == "invalid" {
+                            "{}"
+                        } else {
+                            VALID_GENERATED_LOCK
+                        },
+                    )?;
+                }
+                if failure == "changed" {
+                    fs::write(
+                        environment.scratch_dir.join("bun.lockb").as_path(),
+                        b"changed",
+                    )?;
+                }
+                if failure == "oversized-lock" {
+                    fs::File::create(environment.scratch_dir.join("bun.lock").as_path())?
+                        .set_len(super::super::lockfile::MAX_BUN_LOCK_BYTES + 1)?;
+                }
+                if failure == "run" {
+                    return Err(anyhow::anyhow!("inspection execution failed"));
+                }
+                Ok(output(
+                    /*code*/ i32::from(failure == "nonzero"),
+                    /*stdout_oversized*/ failure == "stdout",
+                    /*stderr_oversized*/ failure == "stderr",
+                ))
+            },
+            |_| panic!("install must not run after failed inspection"),
+        );
+        assert!(
+            materialize_with_executor(fixture.normal_request(), &mut executor).is_err(),
+            "{failure}"
+        );
+        assert_eq!(
+            executor.events,
+            [
+                FakeExecutorEvent::Prepare(ManagedBunPhase::Install),
+                FakeExecutorEvent::Prepare(ManagedBunPhase::InspectBinaryLockfile),
+                FakeExecutorEvent::Run(ManagedBunPhase::InspectBinaryLockfile),
+            ],
+            "{failure}"
+        );
+        assert!(!fixture.node_modules().exists(), "{failure}");
+    }
+}
+
+#[test]
+fn cancellation_after_inspection_prevents_binary_install() {
+    let fixture = Fixture::new(Lock::Binary);
+    let cancelled = AtomicBool::new(false);
+    let mut executor = binary_executor(
+        |environment| {
+            fs::write(
+                environment.scratch_dir.join("bun.lock").as_path(),
+                VALID_GENERATED_LOCK,
+            )?;
+            cancelled.store(true, Ordering::Relaxed);
+            Ok(output(
+                /*code*/ 0, /*stdout_oversized*/ false, /*stderr_oversized*/ false,
+            ))
+        },
+        |_| panic!("install must not run after cancellation"),
+    );
+    let error = materialize_with_executor(
+        fixture.request(&fixture.management, Some(&cancelled)),
+        &mut executor,
+    )
+    .expect_err("cancel after inspection");
+    assert!(error.to_string().contains("cancelled"));
+    assert!(!fixture.node_modules().exists());
+}
+
+#[test]
+fn expired_deadline_after_inspection_prevents_binary_install() {
+    let fixture = Fixture::new(Lock::Binary);
+    let mut executor = binary_executor(
+        |environment| {
+            fs::write(
+                environment.scratch_dir.join("bun.lock").as_path(),
+                VALID_GENERATED_LOCK,
+            )?;
+            std::thread::sleep(Duration::from_millis(1_100));
+            Ok(output(
+                /*code*/ 0, /*stdout_oversized*/ false, /*stderr_oversized*/ false,
+            ))
+        },
+        |_| panic!("install must not run after timeout"),
+    );
+    let mut request = fixture.normal_request();
+    request.deadline = crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 1));
+    let error =
+        materialize_with_executor(request, &mut executor).expect_err("timeout after inspection");
+    assert!(error.to_string().contains("timed out"));
+    assert!(!fixture.node_modules().exists());
+}
+
+#[test]
+fn binary_inspection_preparation_failure_cleans_up_before_execution() {
+    for unavailable in [false, true] {
+        let fixture = Fixture::new(Lock::Binary);
+        let mut executor = FakeManagedBunExecutor {
+            preparation: VecDeque::from([
+                FakePreparation::Prepared,
+                if unavailable {
+                    FakePreparation::SandboxUnavailable(
+                        LocalSandboxUnavailableReason::SelectionUnavailable,
+                    )
+                } else {
+                    FakePreparation::Error("inspection preparation failed")
+                },
+            ]),
+            runs: VecDeque::new(),
+            events: Vec::new(),
+        };
+        let result = materialize_with_executor(fixture.normal_request(), &mut executor);
+        if unavailable {
+            assert_eq!(
+                result.expect("typed sandbox unavailability"),
+                ManagedDependencyMaterializationOutcome::SandboxUnavailable(
+                    LocalSandboxUnavailableReason::SelectionUnavailable
+                )
+            );
+        } else {
+            assert!(result.is_err());
+        }
+        assert_eq!(
+            executor.events,
+            [
+                FakeExecutorEvent::Prepare(ManagedBunPhase::Install),
+                FakeExecutorEvent::Prepare(ManagedBunPhase::InspectBinaryLockfile),
+            ]
+        );
+        assert!(!fixture.node_modules().exists());
+    }
+}
+
+#[test]
+fn binary_install_failure_removes_partial_dependencies() {
+    let fixture = Fixture::new(Lock::Binary);
+    let node_modules = fixture.node_modules();
+    let mut executor = binary_executor(
+        |environment| {
+            fs::write(
+                environment.scratch_dir.join("bun.lock").as_path(),
+                VALID_GENERATED_LOCK,
+            )?;
+            Ok(output(
+                /*code*/ 0, /*stdout_oversized*/ false, /*stderr_oversized*/ false,
+            ))
+        },
+        |_| {
+            fs::create_dir_all(node_modules.join("partial/tree"))?;
+            Err(anyhow::anyhow!("install execution failed"))
+        },
+    );
+    assert!(materialize_with_executor(fixture.normal_request(), &mut executor).is_err());
+    assert_eq!(
+        executor.events,
+        [
+            FakeExecutorEvent::Prepare(ManagedBunPhase::Install),
+            FakeExecutorEvent::Prepare(ManagedBunPhase::InspectBinaryLockfile),
+            FakeExecutorEvent::Run(ManagedBunPhase::InspectBinaryLockfile),
+            FakeExecutorEvent::Run(ManagedBunPhase::Install),
+        ]
+    );
+    assert!(!node_modules.exists());
+}
+
 #[cfg(unix)]
 fn exit_status(code: i32) -> ExitStatus {
     use std::os::unix::process::ExitStatusExt;
@@ -234,27 +495,16 @@ fn exit_status(code: i32) -> ExitStatus {
 
 #[test]
 fn dependency_classification_controls_zero_mutation_and_exactly_one_install() {
-    for lock in [Lock::None, Lock::Binary] {
-        let fixture = Fixture::new(lock);
-        let mut executor = FakeManagedBunExecutor::successful();
-        let result = materialize_with_executor(fixture.normal_request(), &mut executor);
-        match lock {
-            Lock::None => assert_eq!(
-                result.expect("dependency-free package"),
-                ManagedDependencyMaterializationOutcome::Materialized
-            ),
-            Lock::Binary => assert!(
-                result
-                    .expect_err("defer binary lock")
-                    .to_string()
-                    .contains("binary Bun lockfile inspection")
-            ),
-            Lock::Text => unreachable!(),
-        }
-        assert_eq!(executor.events, []);
-        assert!(!fixture.management.as_path().exists());
-        assert!(!fixture.node_modules().exists());
-    }
+    let fixture = Fixture::new(Lock::None);
+    let mut executor = FakeManagedBunExecutor::successful();
+    assert_eq!(
+        materialize_with_executor(fixture.normal_request(), &mut executor)
+            .expect("dependency-free package"),
+        ManagedDependencyMaterializationOutcome::Materialized
+    );
+    assert_eq!(executor.events, []);
+    assert!(!fixture.management.as_path().exists());
+    assert!(!fixture.node_modules().exists());
 
     let fixture = Fixture::new(Lock::Text);
     let mut executor = FakeManagedBunExecutor::run_with(|_, _, limits, cancel| {

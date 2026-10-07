@@ -32,6 +32,7 @@ use file::validate_directory_component;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ManagedBunPhase {
     Install,
+    InspectBinaryLockfile,
 }
 
 enum ManagedBunPreparation<Prepared> {
@@ -119,7 +120,7 @@ pub(in crate::managed) enum ManagedDependencyMaterializationOutcome {
     SandboxUnavailable(LocalSandboxUnavailableReason),
 }
 
-/// Materializes text-lock dependencies exactly once in a mandatory sandbox.
+/// Materializes validated Bun dependencies exactly once in a mandatory sandbox.
 ///
 /// This rereads package manifests and the lockfile, but intentionally does not establish candidate
 /// identity. A successful result is not activation-ready: the next slice must enforce post-install
@@ -142,15 +143,13 @@ fn materialize_with_executor<E: ManagedBunExecutor>(
     if fresh_dependencies != *request.dependencies {
         bail!("managed workflow dependency inputs changed after validation");
     }
-    match fresh_dependencies.lockfile {
+    let lockfile = match fresh_dependencies.lockfile {
         ManagedBunLockfile::NotRequired => {
             return Ok(ManagedDependencyMaterializationOutcome::Materialized);
         }
-        ManagedBunLockfile::BinaryRequiresSandboxInspection => {
-            bail!("binary Bun lockfile inspection is not supported in this installation stage");
-        }
-        ManagedBunLockfile::TextSourcesValidated => {}
-    }
+        ManagedBunLockfile::BinaryRequiresSandboxInspection => ManagedBunInstallLockfile::Binary,
+        ManagedBunLockfile::TextSourcesValidated => ManagedBunInstallLockfile::Text,
+    };
 
     let candidate = AbsolutePathBuf::from_absolute_path_checked(&fresh_package.root)
         .context("managed workflow candidate must use an absolute path")?;
@@ -165,10 +164,18 @@ fn materialize_with_executor<E: ManagedBunExecutor>(
     }
 
     let environment = super::bun::materialize_bun_environment(request.management_root)?;
+    let staged = if lockfile == ManagedBunInstallLockfile::Binary {
+        Some(binary_lock::stage_binary_lock_inputs(
+            &candidate,
+            &environment,
+        )?)
+    } else {
+        None
+    };
     let plan = super::bun::managed_bun_install_command_plan(
         request.bun_executable,
         &candidate,
-        ManagedBunInstallLockfile::Text,
+        lockfile,
         &fresh_dependencies.sources,
         &environment,
     )?;
@@ -193,6 +200,59 @@ fn materialize_with_executor<E: ManagedBunExecutor>(
         }
         Err(error) => return Err(cleanup.with_original(error)),
     };
+    if let Some(staged) = staged {
+        let inspection_plan = match super::bun::managed_bun_binary_inspection_command_plan(
+            request.bun_executable,
+            &candidate,
+            &environment,
+        ) {
+            Ok(plan) => plan,
+            Err(error) => return Err(cleanup.with_original(error)),
+        };
+        let inspected = match executor
+            .prepare(ManagedBunPhase::InspectBinaryLockfile, inspection_plan)
+        {
+            Ok(ManagedBunPreparation::Prepared(prepared)) => prepared,
+            Ok(ManagedBunPreparation::SandboxUnavailable(reason)) => {
+                if let Err(cleanup_error) = cleanup.cleanup() {
+                    bail!(
+                        "managed Bun inspection sandbox was unavailable ({reason:?}); cleanup also failed: {cleanup_error:#}"
+                    );
+                }
+                return Ok(ManagedDependencyMaterializationOutcome::SandboxUnavailable(
+                    reason,
+                ));
+            }
+            Err(error) => return Err(cleanup.with_original(error)),
+        };
+        let output = match executor.run(
+            ManagedBunPhase::InspectBinaryLockfile,
+            inspected,
+            &environment,
+            request.deadline,
+            request.limits,
+            request.cancelled,
+        ) {
+            Ok(output) => output,
+            Err(error) => return Err(cleanup.with_original(error)),
+        };
+        if let Err(error) = classify_output(ManagedBunPhase::InspectBinaryLockfile, &output) {
+            return Err(cleanup.with_original(error));
+        }
+        if let Err(error) = request.deadline.check(request.cancelled).and_then(|()| {
+            binary_lock::validate_binary_lock_inspection(
+                &staged,
+                &environment,
+                &fresh_package,
+                &fresh_dependencies.sources,
+            )
+        }) {
+            return Err(cleanup.with_original(error));
+        }
+    }
+    if let Err(error) = request.deadline.check(request.cancelled) {
+        return Err(cleanup.with_original(error));
+    }
     let output = match executor.run(
         ManagedBunPhase::Install,
         prepared,
@@ -204,22 +264,32 @@ fn materialize_with_executor<E: ManagedBunExecutor>(
         Ok(output) => output,
         Err(error) => return Err(cleanup.with_original(error)),
     };
-    if let Err(error) = classify_output(&output) {
+    if let Err(error) = classify_output(ManagedBunPhase::Install, &output) {
         return Err(cleanup.with_original(error));
     }
     cleanup.preserve();
     Ok(ManagedDependencyMaterializationOutcome::Materialized)
 }
 
-fn classify_output(output: &crate::runner::BoundedCommandOutput) -> anyhow::Result<()> {
+fn classify_output(
+    phase: ManagedBunPhase,
+    output: &crate::runner::BoundedCommandOutput,
+) -> anyhow::Result<()> {
+    let operation = match phase {
+        ManagedBunPhase::Install => "install",
+        ManagedBunPhase::InspectBinaryLockfile => "inspection",
+    };
     if output.stdout_oversized {
-        bail!("managed Bun install stdout exceeded its configured limit");
+        bail!("managed Bun {operation} stdout exceeded its configured limit");
     }
     if output.stderr_oversized {
-        bail!("managed Bun install stderr exceeded its configured limit");
+        bail!("managed Bun {operation} stderr exceeded its configured limit");
     }
     if !output.status.success() {
-        bail!("managed Bun install failed with status {}", output.status);
+        bail!(
+            "managed Bun {operation} failed with status {}",
+            output.status
+        );
     }
     Ok(())
 }
