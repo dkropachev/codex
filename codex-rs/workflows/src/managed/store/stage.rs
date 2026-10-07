@@ -9,6 +9,8 @@ use anyhow::bail;
 #[cfg(unix)]
 use super::cleanup;
 use super::fs::SecureDirectory;
+#[cfg(unix)]
+use super::fs::device_id_from_stat;
 
 static NEXT_TRANSACTION_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -93,10 +95,11 @@ impl<'a> TransactionStaging<'a> {
                     .context("new transaction staging remains reserved for recovery")?;
                 let metadata = rustix::fs::fstat(directory.handle())
                     .context("new transaction staging remains reserved for recovery")?;
+                let device = device_id_from_stat(metadata.st_dev);
                 let mut creation = CreationCleanup {
                     parent,
                     name: name.clone(),
-                    device: metadata.st_dev,
+                    device,
                     inode: metadata.st_ino,
                     directory: &directory,
                     armed: true,
@@ -104,7 +107,7 @@ impl<'a> TransactionStaging<'a> {
                 parent.sync()?;
                 parent.write_file(
                     &record_name,
-                    &cleanup::bound_record(&name, metadata.st_dev, metadata.st_ino),
+                    &cleanup::bound_record(&name, device, metadata.st_ino),
                     /*replace*/ true,
                 )?;
                 directory.write_file(
@@ -118,7 +121,7 @@ impl<'a> TransactionStaging<'a> {
                     parent,
                     directory,
                     name,
-                    device: metadata.st_dev,
+                    device,
                     inode: metadata.st_ino,
                     armed: true,
                 });
