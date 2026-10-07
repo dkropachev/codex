@@ -112,7 +112,7 @@ fn validate_tree_listing(
     Ok(())
 }
 
-fn portable_path(path: &str) -> anyhow::Result<String> {
+pub(in crate::managed) fn portable_path(path: &str) -> anyhow::Result<String> {
     if path.is_empty()
         || !path.is_ascii()
         || path.starts_with('/')
