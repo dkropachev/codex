@@ -26,7 +26,7 @@ impl SecureDirectory {
 
             let handle = open(
                 path.as_path(),
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                 Mode::empty(),
             )
             .context("failed to open managed workflow root")?;
@@ -72,7 +72,7 @@ impl SecureDirectory {
             let handle = openat(
                 &self.handle,
                 name,
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                 Mode::empty(),
             )
             .context("failed to open private managed directory")?;
@@ -105,6 +105,53 @@ impl SecureDirectory {
         &self.path
     }
 
+    #[cfg(unix)]
+    pub(super) fn device_id(&self) -> anyhow::Result<u64> {
+        Ok(rustix::fs::fstat(&self.handle)?.st_dev)
+    }
+
+    /// Opens or creates a permanent, owner-private advisory lock file.
+    pub(super) fn open_lock_file(&self, name: &str) -> anyhow::Result<fs::File> {
+        validate_component(name)?;
+        #[cfg(unix)]
+        {
+            use rustix::fs::Mode;
+            use rustix::fs::OFlags;
+            use rustix::fs::openat;
+            use rustix::io::Errno;
+
+            let exclusive =
+                OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+            let (handle, created) =
+                match openat(&self.handle, name, exclusive, Mode::RUSR | Mode::WUSR) {
+                    Ok(handle) => (handle, true),
+                    Err(Errno::EXIST) => (
+                        openat(
+                            &self.handle,
+                            name,
+                            OFlags::RDWR | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+                            Mode::empty(),
+                        )
+                        .context("failed to open existing managed lock file")?,
+                        false,
+                    ),
+                    Err(error) => return Err(error).context("failed to create managed lock file"),
+                };
+            let metadata = rustix::fs::fstat(&handle)?;
+            if metadata.st_mode & 0o170000 != 0o100000 || metadata.st_mode & 0o077 != 0 {
+                bail!("managed lock must be an owner-private regular file");
+            }
+            if created {
+                self.sync()?;
+            }
+            Ok(fs::File::from(handle))
+        }
+        #[cfg(windows)]
+        bail!("Windows managed locks require protected ACL and handle-relative support");
+        #[cfg(not(any(unix, windows)))]
+        bail!("managed lock files are unsupported on this platform");
+    }
+
     /// Opens an existing private child without creating metadata during reads.
     pub(super) fn existing_child(&self, name: &str) -> anyhow::Result<Self> {
         validate_component(name)?;
@@ -117,7 +164,7 @@ impl SecureDirectory {
             let handle = openat(
                 &self.handle,
                 name,
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                 Mode::empty(),
             )
             .context("failed to open existing managed workflow directory")?;
@@ -140,6 +187,36 @@ impl SecureDirectory {
             }
             Ok(Self { path })
         }
+    }
+
+    /// Inspects a child without creating it, for pre-mutation volume checks.
+    #[cfg(unix)]
+    pub(super) fn optional_existing_child(&self, name: &str) -> anyhow::Result<Option<Self>> {
+        use rustix::fs::Mode;
+        use rustix::fs::OFlags;
+        use rustix::fs::openat;
+        use rustix::io::Errno;
+
+        validate_component(name)?;
+        let handle = match openat(
+            &self.handle,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(handle) => handle,
+            Err(Errno::NOENT) => return Ok(None),
+            Err(error) => {
+                return Err(error).context("failed to inspect managed workflow directory");
+            }
+        };
+        if rustix::fs::fstat(&handle)?.st_mode & 0o077 != 0 {
+            bail!("managed workflow directory is accessible to other users");
+        }
+        Ok(Some(Self {
+            path: self.path.join(name),
+            handle,
+        }))
     }
 
     /// Opens an existing regular metadata file without following an alias.
@@ -205,7 +282,11 @@ impl SecureDirectory {
                 let opened = openat(
                     &self.handle,
                     temporary_name.as_str(),
-                    OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW,
+                    OFlags::WRONLY
+                        | OFlags::CREATE
+                        | OFlags::EXCL
+                        | OFlags::NOFOLLOW
+                        | OFlags::CLOEXEC,
                     Mode::RUSR | Mode::WUSR,
                 );
                 let mut file = match opened {
@@ -344,7 +425,7 @@ impl SecureDirectory {
             fs::File::from(openat(
                 &self.handle,
                 name,
-                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
                 Mode::empty(),
             )?)
         };
