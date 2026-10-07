@@ -97,7 +97,7 @@ fn journal_rejects_corruption_unknown_versions_and_mismatched_state() {
     let valid = ManagedWorkflowJournal::new(
         "tx-123".into(),
         "team/build".into(),
-        None,
+        /*previous_receipt*/ None,
         receipt("team/build"),
         evidence(),
     )
@@ -165,7 +165,7 @@ fn journal_and_marker_caps_fail_before_publication_and_on_oversized_reads() {
     let valid = ManagedWorkflowJournal::new(
         "tx-123".into(),
         "team/build".into(),
-        None,
+        /*previous_receipt*/ None,
         receipt("team/build"),
         evidence(),
     )
