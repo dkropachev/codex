@@ -88,4 +88,4 @@ pub(super) fn prepare_release<'a>(
 
 #[cfg(all(test, unix))]
 #[path = "prepare_tests.rs"]
-mod tests;
+pub(super) mod tests;
