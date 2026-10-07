@@ -13,6 +13,8 @@ mod prepare;
 #[cfg(unix)]
 mod publish;
 mod receipt;
+#[cfg(unix)]
+mod replace;
 mod stage;
 
 use std::sync::atomic::AtomicBool;
@@ -92,6 +94,26 @@ impl ManagedWorkflowStore {
     ) -> anyhow::Result<Option<ManagedWorkflowCommitOutcome>> {
         locked.ensure_store(self)?;
         publish::recover_fresh(self, locked)
+    }
+
+    #[cfg(unix)]
+    pub(in crate::managed) fn commit_replace(
+        &self,
+        locked: &LockedManagedWorkflow,
+        expected: &ExpectedCurrent,
+        prepared: PreparedWorkflowRelease<'_>,
+    ) -> anyhow::Result<ManagedWorkflowCommitOutcome> {
+        locked.ensure_store(self)?;
+        replace::commit_replace(self, locked, expected, prepared)
+    }
+
+    #[cfg(unix)]
+    pub(in crate::managed) fn recover_replace(
+        &self,
+        locked: &LockedManagedWorkflow,
+    ) -> anyhow::Result<Option<ManagedWorkflowCommitOutcome>> {
+        locked.ensure_store(self)?;
+        replace::recover_replace(self, locked)
     }
 
     /// Copies a verified release into operation-private staging and binds it to a journal marker.

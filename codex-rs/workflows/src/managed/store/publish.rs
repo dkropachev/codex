@@ -27,6 +27,8 @@ use crate::managed::integrity::verify_published_copy;
 pub(in crate::managed) enum ManagedWorkflowCommitOutcome {
     Committed,
     CommittedCleanupPending,
+    RolledBack,
+    RolledBackCleanupPending,
 }
 
 pub(super) fn commit_fresh(
@@ -38,14 +40,7 @@ pub(super) fn commit_fresh(
     if prepared.journal.id != locked.id || prepared.journal.previous_receipt.is_some() {
         bail!("prepared workflow transaction does not match fresh install lock");
     }
-    let prepared_parent = rustix::fs::fstat(prepared.staging.parent.handle())?;
-    let store_parent = rustix::fs::fstat(store.staging.handle())?;
-    if (prepared_parent.st_dev, prepared_parent.st_ino)
-        != (store_parent.st_dev, store_parent.st_ino)
-        || prepared.journal.transaction_id != prepared.staging.name()
-    {
-        bail!("prepared workflow release belongs to a different transaction store");
-    }
+    validate_prepared(store, &prepared)?;
     if journal_exists(&store.journals, &locked.id)? {
         recover_fresh(store, locked)?;
         if journal_exists(&store.journals, &locked.id)? {
@@ -74,6 +69,21 @@ pub(super) fn commit_fresh(
     }
     prepared.staging.retain_for_recovery();
     finish_fresh(store, prepared.journal)
+}
+
+pub(super) fn validate_prepared(
+    store: &ManagedWorkflowStore,
+    prepared: &PreparedWorkflowRelease<'_>,
+) -> anyhow::Result<()> {
+    let prepared_parent = rustix::fs::fstat(prepared.staging.parent.handle())?;
+    let store_parent = rustix::fs::fstat(store.staging.handle())?;
+    if (prepared_parent.st_dev, prepared_parent.st_ino)
+        != (store_parent.st_dev, store_parent.st_ino)
+        || prepared.journal.transaction_id != prepared.staging.name()
+    {
+        bail!("prepared workflow release belongs to a different transaction store");
+    }
+    Ok(())
 }
 
 pub(super) fn recover_fresh(
@@ -196,7 +206,7 @@ fn finish_fresh(
     }
 }
 
-fn verify_published(
+pub(super) fn verify_published(
     directory: &SecureDirectory,
     journal: &ManagedWorkflowJournal,
 ) -> anyhow::Result<()> {
@@ -228,6 +238,16 @@ fn cleanup_fresh(
     store: &ManagedWorkflowStore,
     journal: &ManagedWorkflowJournal,
 ) -> anyhow::Result<()> {
+    cleanup_stage(store, journal)?;
+    store
+        .journals
+        .remove_regular_file(&journal_file_name(&journal.id)?)
+}
+
+pub(super) fn cleanup_stage(
+    store: &ManagedWorkflowStore,
+    journal: &ManagedWorkflowJournal,
+) -> anyhow::Result<()> {
     let root = statat(
         store.staging.handle(),
         journal.transaction_id.as_str(),
@@ -245,13 +265,10 @@ fn cleanup_fresh(
         inode,
         cleanup::OwnershipMarker::Required,
         cleanup::CleanupEntryLimit::STANDARD,
-    )?;
-    store
-        .journals
-        .remove_regular_file(&journal_file_name(&journal.id)?)
+    )
 }
 
-fn journal_exists(journals: &SecureDirectory, id: &str) -> anyhow::Result<bool> {
+pub(super) fn journal_exists(journals: &SecureDirectory, id: &str) -> anyhow::Result<bool> {
     match statat(
         journals.handle(),
         journal_file_name(id)?.as_str(),
@@ -263,18 +280,18 @@ fn journal_exists(journals: &SecureDirectory, id: &str) -> anyhow::Result<bool> 
     }
 }
 
-enum ParentMode {
+pub(super) enum ParentMode {
     Existing,
     Create,
 }
 
-enum ActiveParent<'a> {
+pub(super) enum ActiveParent<'a> {
     Root(&'a SecureDirectory),
     Child(SecureDirectory),
 }
 
 impl ActiveParent<'_> {
-    fn directory(&self) -> &SecureDirectory {
+    pub(super) fn directory(&self) -> &SecureDirectory {
         match self {
             Self::Root(root) => root,
             Self::Child(child) => child,
@@ -282,7 +299,7 @@ impl ActiveParent<'_> {
     }
 }
 
-fn active_parent<'a>(
+pub(super) fn active_parent<'a>(
     root: &'a SecureDirectory,
     id: &str,
     mode: ParentMode,
@@ -301,7 +318,7 @@ fn active_parent<'a>(
     Ok(Some(parent))
 }
 
-fn leaf(id: &str) -> anyhow::Result<&str> {
+pub(super) fn leaf(id: &str) -> anyhow::Result<&str> {
     id.rsplit('/')
         .next()
         .context("managed workflow id is empty")
