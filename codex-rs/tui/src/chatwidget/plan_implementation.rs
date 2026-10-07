@@ -91,8 +91,8 @@ fn selection_view_params_with_copy(
     };
 
     let clear_context_description = clear_context_usage_label.map_or_else(
-        || "Fresh thread with this plan.".to_string(),
-        |label| format!("Fresh thread. Context: {label}."),
+        || "Fresh thread with this plan".to_string(),
+        |label| format!("Start a fresh thread (current context: {label})"),
     );
 
     SelectionViewParams {

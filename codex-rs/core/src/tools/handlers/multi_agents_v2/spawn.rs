@@ -1,4 +1,7 @@
 use super::*;
+use crate::agent::api::AgentControl;
+use crate::agent::api::AgentInput;
+use crate::agent::api::SpawnRequest;
 use crate::agent::child_config::SpawnConfigOptions;
 use crate::agent::child_config::SpawnConfigVersion;
 use crate::agent::child_config::apply_spawn_agent_service_tier;
@@ -8,8 +11,6 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::types::MessageDeliveryMode;
 use crate::agent::types::SpawnAgentForkMode;
 use crate::agent::types::SpawnAgentOptions;
-use crate::agent_communication::AgentCommunicationContext;
-use crate::agent_communication::AgentCommunicationKind;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::model_policy::ModelPolicySource;
 use crate::model_policy::apply_model_policy;
@@ -20,7 +21,6 @@ use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
 use crate::tools::handlers::multi_agents_v2::message_tool::message_content;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_prompts::ResolvedModelMessages;
-use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::ToolSpec;
@@ -76,10 +76,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
                     Default::default(),
                 ),
             };
-            let agent_snapshot = result
-                .as_ref()
-                .ok()
-                .and_then(|(_, _, _, snapshot)| snapshot.as_ref());
+            let agent_snapshot = result.as_ref().ok().map(|(_, _, _, snapshot)| snapshot);
 
             analytics.track_collab_tool_call(
                 turn_id,
@@ -112,7 +109,7 @@ async fn handle_spawn_agent(
         SpawnAgentResult,
         ThreadId,
         AgentStatus,
-        Option<ThreadConfigSnapshot>,
+        ThreadConfigSnapshot,
     ),
     FunctionCallError,
 > {
@@ -179,16 +176,6 @@ async fn handle_spawn_agent(
             "spawned agent is missing a canonical task name".to_string(),
         )
     })?;
-    let author = turn
-        .session_source
-        .get_agent_path()
-        .unwrap_or_else(AgentPath::root);
-    let communication = agent_message_from_tool(message, &source).into_communication(
-        author,
-        new_agent_path.clone(),
-        MessageDeliveryMode::TriggerTurn,
-    );
-    let context = AgentCommunicationContext::new(AgentCommunicationKind::Spawn, session.thread_id);
     let multi_agent_v2_usage_hints =
         if is_full_history_fork && turn.multi_agent_version == MultiAgentVersion::V2 {
             let child_model_info = match config.model.as_deref() {
@@ -213,40 +200,36 @@ async fn handle_spawn_agent(
         } else {
             None
         };
-    let spawned_agent = Box::pin(
-        session
-            .services
-            .agent_control
-            .spawn_agent_with_communication(
-                config,
-                communication,
-                context,
-                Some(spawn_source),
-                SpawnAgentOptions {
-                    fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
-                    fork_mode,
-                    parent_thread_id: Some(session.thread_id),
-                    parent_turn_id: Some(turn.sub_id.clone()),
-                    root_turn_id: turn.turn_metadata_state.root_turn_id(),
-                    turn_trigger: turn.turn_metadata_state.current_turn_trigger(),
-                    environments: Some(step_context.environments.to_selections()),
-                    multi_agent_v2_usage_hints,
-                    cyber_access_program: turn.cyber_access_program,
-                },
-            ),
-    )
-    .await
-    .map_err(collab_spawn_error)?;
-    let new_thread_id = spawned_agent.thread_id;
-    let agent_status = spawned_agent.status;
-    let agent_snapshot = session
+    let (spawned_agent, agent_snapshot) = session
         .services
         .agent_control
-        .get_agent_config_snapshot(new_thread_id)
-        .await;
+        .spawn(SpawnRequest {
+            caller: session.thread_id,
+            config,
+            input: AgentInput::Message {
+                message: agent_message_from_tool(message, &source),
+                mode: MessageDeliveryMode::TriggerTurn,
+            },
+            source: spawn_source,
+            options: SpawnAgentOptions {
+                fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
+                fork_mode,
+                parent_thread_id: Some(session.thread_id),
+                parent_turn_id: Some(turn.sub_id.clone()),
+                root_turn_id: turn.turn_metadata_state.root_turn_id(),
+                turn_trigger: turn.turn_metadata_state.current_turn_trigger(),
+                environments: Some(step_context.environments.to_selections()),
+                multi_agent_v2_usage_hints,
+                cyber_access_program: turn.cyber_access_program,
+            },
+        })
+        .await
+        .map_err(collab_spawn_error)?;
+    let new_thread_id = spawned_agent.thread_id;
+    let agent_status = spawned_agent.status;
     let nickname = agent_snapshot
-        .as_ref()
-        .and_then(|snapshot| snapshot.session_source.get_nickname())
+        .session_source
+        .get_nickname()
         .or(spawned_agent.metadata.agent_nickname);
     emit_sub_agent_activity(
         &session,

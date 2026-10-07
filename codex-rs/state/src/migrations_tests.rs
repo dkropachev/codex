@@ -112,7 +112,11 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
     .collect::<Vec<_>>();
     assert_eq!(
         added_migrations,
-        vec![(63, "thread attachments".to_string())]
+        vec![
+            (63, "thread attachments".to_string()),
+            (64, "threads creator identity".to_string()),
+            (65, "cleanup guardian thread metadata".to_string())
+        ]
     );
 
     let schema = sqlx::query(
@@ -262,6 +266,123 @@ INSERT INTO threads (
         .await
         .expect("pin states should load");
     assert_eq!(pinned_values, vec![false, false]);
+
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn guardian_metadata_cleanup_preserves_custom_names_and_titles() {
+    let sqlite_home = crate::runtime::test_support::unique_temp_dir();
+    tokio::fs::create_dir_all(&sqlite_home)
+        .await
+        .expect("sqlite home should be created");
+    let _cleanup = scopeguard::guard(sqlite_home.clone(), |sqlite_home| {
+        let _ = std::fs::remove_dir_all(sqlite_home);
+    });
+    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+    let pool = sqlite
+        .open_read_write_pool(&sqlite.state_db_path())
+        .await
+        .expect("sqlite database should open");
+    migrator_through(/*version*/ 64)
+        .run(&pool)
+        .await
+        .expect("pre-cleanup migrations should apply");
+
+    sqlx::query(
+        r#"
+INSERT INTO threads (
+    id, rollout_path, created_at, updated_at, source, model_provider, cwd,
+    title, name, preview, sandbox_policy, approval_mode, first_user_message
+) VALUES
+    ('derived', '/tmp/guardian.jsonl', 1700000000, 1700000100,
+     '{"subagent":{"other":"guardian"}}', 'openai', '/tmp',
+     ' large guardian prompt ', NULL, 'large guardian prompt',
+     'read-only', 'on-request', 'large guardian prompt'),
+    ('empty', '/tmp/empty-guardian.jsonl', 1700000000, 1700000100,
+     '{"subagent":{"other":"guardian"}}', 'openai', '/tmp',
+     ' ', ' ', 'large guardian prompt',
+     'read-only', 'on-request', 'large guardian prompt'),
+    ('worker', '/tmp/worker.jsonl', 1700000000, 1700000100,
+     '{"subagent":{"other":"worker"}}', 'openai', '/tmp',
+     'worker title', 'worker name', 'worker preview',
+     'read-only', 'on-request', 'worker first message'),
+    ('custom-title', '/tmp/named-guardian.jsonl', 1700000000, 1700000100,
+     '{"subagent":{"other":"guardian"}}', 'openai', '/tmp',
+     'Named Guardian review', NULL, 'large guardian prompt',
+     'read-only', 'on-request', 'large guardian prompt'),
+    ('custom-name', '/tmp/explicitly-named-guardian.jsonl', 1700000000, 1700000100,
+     '{"subagent":{"other":"guardian"}}', 'openai', '/tmp',
+     'large guardian prompt', 'Explicit Guardian name', 'large guardian prompt',
+     'read-only', 'on-request', 'large guardian prompt')
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("legacy metadata rows should insert");
+
+    STATE_MIGRATOR
+        .run(&pool)
+        .await
+        .expect("guardian metadata cleanup should apply");
+
+    let rows =
+        sqlx::query("SELECT id, title, name, preview, first_user_message FROM threads ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("cleaned metadata rows should load");
+    let actual = rows
+        .iter()
+        .map(|row| {
+            (
+                row.get::<&str, _>("id"),
+                row.get::<&str, _>("title"),
+                row.get::<Option<&str>, _>("name"),
+                row.get::<&str, _>("preview"),
+                row.get::<&str, _>("first_user_message"),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![
+            (
+                "custom-name",
+                "Guardian review",
+                Some("Explicit Guardian name"),
+                "Approval review",
+                ""
+            ),
+            (
+                "custom-title",
+                "Named Guardian review",
+                Some("Named Guardian review"),
+                "Approval review",
+                ""
+            ),
+            (
+                "derived",
+                "Guardian review",
+                Some("Guardian review"),
+                "Approval review",
+                ""
+            ),
+            (
+                "empty",
+                "Guardian review",
+                Some("Guardian review"),
+                "Approval review",
+                ""
+            ),
+            (
+                "worker",
+                "worker title",
+                Some("worker name"),
+                "worker preview",
+                "worker first message"
+            ),
+        ]
+    );
 
     pool.close().await;
 }
@@ -780,6 +901,13 @@ async fn realtime_items_preserve_older_thread_history_writers() {
             ("older-writer-item".to_string(), "turn-1".to_string()),
         ]
     );
+    let lifecycle_timestamps = sqlx::query_as::<_, (Option<i64>, Option<i64>)>(
+        "SELECT started_at_ms, completed_at_ms FROM thread_items ORDER BY rollout_ordinal",
+    )
+    .fetch_all(&older_pool)
+    .await
+    .expect("old rows and older writers leave lifecycle timestamps unknown");
+    assert_eq!(lifecycle_timestamps, vec![(None, None), (None, None)]);
     sqlx::query("DELETE FROM thread_history_projection_state WHERE thread_id = ?")
         .bind("thread-1")
         .execute(&older_pool)
