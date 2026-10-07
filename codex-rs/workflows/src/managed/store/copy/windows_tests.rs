@@ -74,10 +74,15 @@ fn windows_copy_rejects_junction_entries() {
     fs::create_dir(&outside).expect("outside directory");
     fs::write(outside.join("secret"), b"outside").expect("outside file");
     let junction = modules.join("junction");
-    let output = std::process::Command::new("cmd")
-        .args(["/C", "mklink", "/J"])
-        .arg(&junction)
-        .arg(&outside)
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$ErrorActionPreference = 'Stop'; New-Item -ItemType Junction -Path $env:CODEX_TEST_LINK -Target $env:CODEX_TEST_TARGET | Out-Null",
+        ])
+        .env("CODEX_TEST_LINK", &junction)
+        .env("CODEX_TEST_TARGET", &outside)
         .output()
         .expect("create junction");
     assert!(
@@ -114,10 +119,15 @@ fn windows_copy_rejects_nested_links_through_a_junction() {
     fs::create_dir(&outside).expect("outside directory");
     fs::write(outside.join("secret"), b"outside").expect("outside file");
     let junction = modules.join("-aliasdir/junction");
-    let output = std::process::Command::new("cmd")
-        .args(["/C", "mklink", "/J"])
-        .arg(&junction)
-        .arg(&outside)
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$ErrorActionPreference = 'Stop'; New-Item -ItemType Junction -Path $env:CODEX_TEST_LINK -Target $env:CODEX_TEST_TARGET | Out-Null",
+        ])
+        .env("CODEX_TEST_LINK", &junction)
+        .env("CODEX_TEST_TARGET", &outside)
         .output()
         .expect("create nested junction");
     assert!(
