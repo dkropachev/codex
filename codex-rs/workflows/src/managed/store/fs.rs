@@ -3,10 +3,15 @@ use std::fs;
 use std::io::Read;
 #[cfg(not(windows))]
 use std::io::Write;
+use std::sync::atomic::AtomicBool;
+#[cfg(not(unix))]
+use std::sync::atomic::Ordering;
 
 use anyhow::Context;
 use anyhow::bail;
 use codex_utils_absolute_path::AbsolutePathBuf;
+
+mod list;
 
 /// A retained, non-aliased directory used as the parent of managed metadata.
 pub(super) struct SecureDirectory {
@@ -103,6 +108,39 @@ impl SecureDirectory {
 
     pub(super) fn path(&self) -> &AbsolutePathBuf {
         &self.path
+    }
+
+    /// Lists a bounded set of child names; callers open each entry through this handle.
+    pub(super) fn list_names(
+        &self,
+        maximum_entries: usize,
+        cancelled: Option<&AtomicBool>,
+    ) -> anyhow::Result<Vec<String>> {
+        #[cfg(unix)]
+        return list::list_names(&self.handle, maximum_entries, cancelled);
+        #[cfg(not(unix))]
+        {
+            let mut names = Vec::new();
+            for entry in fs::read_dir(self.path.as_path())
+                .context("failed to scan managed workflow directory")?
+            {
+                if cancelled.is_some_and(|signal| signal.load(Ordering::Relaxed)) {
+                    bail!("managed workflow directory scan was cancelled");
+                }
+                let entry = entry.context("failed to inspect managed workflow directory entry")?;
+                let name = entry.file_name();
+                let name = name
+                    .to_str()
+                    .context("managed workflow directory entry must be UTF-8")?;
+                validate_component(name)?;
+                names.push(name.to_owned());
+                if names.len() > maximum_entries {
+                    bail!("managed workflow directory scan exceeds its entry limit");
+                }
+            }
+            names.sort();
+            Ok(names)
+        }
     }
 
     #[cfg(unix)]

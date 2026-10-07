@@ -278,3 +278,50 @@ fn rejects_cross_device_roots_before_creating_metadata() {
     );
     assert!(!home.path().join(".workflow-management").exists());
 }
+
+#[test]
+fn catalog_waits_for_install_receipt_publication() {
+    use super::receipt::ManagedWorkflowReceipt;
+    use super::receipt::WorkflowRelease;
+    use super::receipt::WorkflowUpdatePolicy;
+    use super::receipt::write_receipt;
+
+    let root = tempfile::tempdir().expect("root");
+    let store = Arc::new(store(root.path()));
+    let held = store
+        .lock_install("team/build", /*cancelled*/ None)
+        .expect("hold install lock");
+    let (sender, receiver) = mpsc::channel();
+    let reader = Arc::clone(&store);
+    let thread = std::thread::spawn(move || {
+        let listed = reader
+            .list_receipts(/*cancelled*/ None)
+            .expect("list receipts");
+        sender.send(listed).expect("send catalog");
+    });
+    assert!(
+        receiver
+            .recv_timeout(Duration::from_millis(/*millis*/ 30))
+            .is_err()
+    );
+    let receipt = ManagedWorkflowReceipt::new(
+        "team/build".into(),
+        "https://example.com/team/build.git".into(),
+        WorkflowRelease {
+            tag: None,
+            version: None,
+            commit: "a".repeat(40),
+        },
+        WorkflowUpdatePolicy::Prompt,
+    )
+    .expect("receipt");
+    write_receipt(&store.receipts, &receipt, /*replace*/ false).expect("publish receipt");
+    drop(held);
+    assert_eq!(
+        receiver
+            .recv_timeout(Duration::from_secs(/*secs*/ 2))
+            .expect("completed catalog"),
+        [receipt],
+    );
+    thread.join().expect("join catalog reader");
+}
