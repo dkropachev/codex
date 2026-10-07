@@ -14,9 +14,20 @@ use sha2::Sha256;
 
 use super::fetch::VerificationLimits;
 
+const MAX_GIT_INDEX_BYTES: u64 = 32 * 1024 * 1024;
+
 mod link;
+mod verify;
 
 use link::validate_dependency_link;
+#[allow(unused_imports, reason = "consumed by the managed lifecycle stage")]
+pub(in crate::managed) use verify::ActivationPayloadEvidence;
+#[allow(unused_imports, reason = "consumed by the managed lifecycle stage")]
+pub(in crate::managed) use verify::VerifiedWorkflowRelease;
+#[allow(unused_imports, reason = "consumed by the managed lifecycle stage")]
+pub(in crate::managed) use verify::verify_materialized_copy;
+#[allow(unused_imports, reason = "consumed by the managed lifecycle stage")]
+pub(in crate::managed) use verify::verify_post_install;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct IndexEntry {
@@ -29,6 +40,7 @@ pub(super) struct IndexEntry {
 pub(super) struct SourceIntegrityBaseline {
     pub(super) commit: String,
     pub(super) index: Vec<IndexEntry>,
+    pub(super) index_sha256: [u8; 32],
     pub(super) source: PayloadInventory,
 }
 
@@ -92,9 +104,17 @@ pub(super) fn capture_source_baseline(
         "--",
     ]);
     super::fetch::run_git(staged_diff, "Git workflow index baseline", cancelled)?;
+    let index_sha256 = hash_regular_file(
+        &root.join(".git/index"),
+        MAX_GIT_INDEX_BYTES,
+        crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 60)),
+        cancelled,
+    )?
+    .0;
     Ok(SourceIntegrityBaseline {
         commit: expected_commit.to_ascii_lowercase(),
         index,
+        index_sha256,
         source,
     })
 }
@@ -155,6 +175,7 @@ fn parse_index(bytes: &[u8], oid_length: usize) -> anyhow::Result<Vec<IndexEntry
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PayloadKind {
     Source,
+    Staged,
     Installed,
 }
 
@@ -203,7 +224,7 @@ pub(super) fn scan_payload(
         {
             deadline.check(cancelled)?;
             let entry = entry.context("failed to read workflow payload entry")?;
-            if directory == root && entry.file_name() == ".git" && kind == PayloadKind::Source {
+            if directory == root && entry.file_name() == ".git" && kind != PayloadKind::Installed {
                 continue;
             }
             if directory == root
@@ -255,7 +276,7 @@ pub(super) fn scan_payload(
             let metadata = fs::symlink_metadata(&path)
                 .with_context(|| format!("failed to inspect workflow payload entry {portable}"))?;
             let entry_kind = if metadata.file_type().is_symlink() {
-                if kind != PayloadKind::Installed
+                if kind == PayloadKind::Source
                     || relative == Path::new("node_modules")
                     || !relative.starts_with("node_modules")
                 {
