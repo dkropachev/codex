@@ -232,6 +232,11 @@ impl SecureDirectory {
 
     #[cfg(windows)]
     pub(super) fn device_id(&self) -> anyhow::Result<u64> {
+        Ok(self.identity()?.0)
+    }
+
+    #[cfg(windows)]
+    pub(super) fn identity(&self) -> anyhow::Result<(u64, u64)> {
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION;
         use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle;
@@ -242,7 +247,10 @@ impl SecureDirectory {
             return Err(std::io::Error::last_os_error())
                 .context("failed to inspect managed volume");
         }
-        Ok(u64::from(info.dwVolumeSerialNumber))
+        Ok((
+            u64::from(info.dwVolumeSerialNumber),
+            (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+        ))
     }
 
     /// Opens or creates a permanent, owner-private advisory lock file.
@@ -715,6 +723,15 @@ impl SecureDirectory {
             bail!("managed metadata target must be a regular file");
         }
         unlinkat(&self.handle, name, AtFlags::empty())?;
+        self.sync()
+    }
+
+    #[cfg(windows)]
+    pub(super) fn remove_regular_file(&self, name: &str) -> anyhow::Result<()> {
+        validate_component(name)?;
+        let file = self.open_regular_file(name)?;
+        drop(file);
+        fs::remove_file(self.path.join(name).as_path())?;
         self.sync()
     }
 

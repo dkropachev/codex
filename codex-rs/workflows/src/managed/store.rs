@@ -3,6 +3,9 @@ mod backup;
 mod catalog;
 #[cfg(unix)]
 mod cleanup;
+#[cfg(windows)]
+#[path = "store/cleanup/windows.rs"]
+mod cleanup;
 mod copy;
 #[cfg(unix)]
 mod expected;
