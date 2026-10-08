@@ -7,6 +7,7 @@ use rustix::io::Errno;
 use super::ManagedWorkflowStore;
 use super::cleanup;
 use super::fs::SecureDirectory;
+use super::fs::device_id_from_stat;
 use super::journal::ManagedWorkflowJournal;
 use super::journal::read_marker;
 use crate::managed::fetch::VERIFICATION_LIMITS;
@@ -54,7 +55,7 @@ pub(super) fn move_current_aside(
     };
     verify_backup(&backup, journal)?;
     let metadata = rustix::fs::fstat(backup.handle())?;
-    let bound = cleanup::bound_record(name, metadata.st_dev, metadata.st_ino);
+    let bound = cleanup::bound_record(name, device_id_from_stat(metadata.st_dev), metadata.st_ino);
     let current_record = store
         .backups
         .read_file(&record_name, /*maximum_bytes*/ 256)?;
@@ -115,7 +116,10 @@ fn verify_old_release(
 
     let retained = rustix::fs::fstat(directory.handle())?;
     let named = std::fs::symlink_metadata(directory.path().as_path())?;
-    if !named.is_dir() || named.dev() != retained.st_dev || named.ino() != retained.st_ino {
+    if !named.is_dir()
+        || named.dev() != device_id_from_stat(retained.st_dev)
+        || named.ino() != retained.st_ino
+    {
         bail!("previous workflow release changed directory identity");
     }
     let previous = journal
@@ -146,7 +150,10 @@ fn verify_old_release(
         bail!("previous managed workflow payload differs from its marker");
     }
     let named = std::fs::symlink_metadata(directory.path().as_path())?;
-    if !named.is_dir() || named.dev() != retained.st_dev || named.ino() != retained.st_ino {
+    if !named.is_dir()
+        || named.dev() != device_id_from_stat(retained.st_dev)
+        || named.ino() != retained.st_ino
+    {
         bail!("previous workflow release changed directory identity during verification");
     }
     Ok(())
@@ -191,7 +198,7 @@ pub(super) fn cleanup_backup(
     let name = journal.transaction_id.as_str();
     let root = statat(store.backups.handle(), name, AtFlags::SYMLINK_NOFOLLOW);
     let (device, inode) = match root {
-        Ok(metadata) => (metadata.st_dev, metadata.st_ino),
+        Ok(metadata) => (device_id_from_stat(metadata.st_dev), metadata.st_ino),
         Err(Errno::NOENT) => (0, 0),
         Err(error) => return Err(error).context("failed to inspect workflow backup cleanup root"),
     };
