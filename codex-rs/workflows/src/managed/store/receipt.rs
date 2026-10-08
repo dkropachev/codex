@@ -263,6 +263,6 @@ fn receipt_directory(
     directory.context("receipt id is empty")
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 #[path = "receipt_tests.rs"]
 mod tests;
