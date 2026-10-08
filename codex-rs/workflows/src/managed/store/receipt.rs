@@ -158,7 +158,7 @@ fn parse_receipt(bytes: &[u8], id: &str) -> anyhow::Result<ManagedWorkflowReceip
     Ok(receipt)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn read_optional_receipt(
     receipts: &SecureDirectory,
     id: &str,
@@ -166,7 +166,7 @@ pub(super) fn read_optional_receipt(
     read_optional_receipt_with_mode(receipts, id, MissingReceiptFile::Corrupt)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn read_pending_receipt(
     receipts: &SecureDirectory,
     id: &str,
@@ -174,22 +174,18 @@ pub(super) fn read_pending_receipt(
     read_optional_receipt_with_mode(receipts, id, MissingReceiptFile::PendingTransaction)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 enum MissingReceiptFile {
     Corrupt,
     PendingTransaction,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn read_optional_receipt_with_mode(
     receipts: &SecureDirectory,
     id: &str,
     missing: MissingReceiptFile,
 ) -> anyhow::Result<Option<ManagedWorkflowReceipt>> {
-    use rustix::fs::AtFlags;
-    use rustix::fs::statat;
-    use rustix::io::Errno;
-
     validate_id(id)?;
     let mut directory = None;
     for component in id.split('/') {
@@ -200,23 +196,38 @@ fn read_optional_receipt_with_mode(
         };
     }
     let directory = directory.context("receipt id is empty")?;
-    match statat(
-        directory.handle(),
-        "receipt.json",
-        AtFlags::SYMLINK_NOFOLLOW,
-    ) {
-        Ok(_) => {
-            let bytes = directory.read_file("receipt.json", MAX_RECEIPT_BYTES as u64)?;
-            parse_receipt(&bytes, id).map(Some)
+    #[cfg(unix)]
+    let exists = {
+        use rustix::fs::AtFlags;
+        use rustix::fs::statat;
+        use rustix::io::Errno;
+
+        match statat(
+            directory.handle(),
+            "receipt.json",
+            AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(_) => true,
+            Err(Errno::NOENT) => false,
+            Err(error) => return Err(error).context("failed to inspect managed workflow receipt"),
         }
-        Err(Errno::NOENT) => match missing {
+    };
+    #[cfg(windows)]
+    let exists = match std::fs::symlink_metadata(directory.path().join("receipt.json").as_path()) {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error).context("failed to inspect managed workflow receipt"),
+    };
+    if !exists {
+        return match missing {
             MissingReceiptFile::Corrupt => {
                 bail!("managed workflow receipt directory has no receipt file")
             }
             MissingReceiptFile::PendingTransaction => Ok(None),
-        },
-        Err(error) => Err(error).context("failed to inspect managed workflow receipt"),
+        };
     }
+    let bytes = directory.read_file("receipt.json", MAX_RECEIPT_BYTES as u64)?;
+    parse_receipt(&bytes, id).map(Some)
 }
 
 pub(super) fn write_receipt(

@@ -44,6 +44,6 @@ pub(super) fn compare_current(
     Ok(current)
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 #[path = "expected_tests.rs"]
 mod tests;
