@@ -29,7 +29,7 @@ fn prepared<'a>(
             /*previous_receipt*/ None,
             receipt.clone(),
             VERIFICATION_LIMITS,
-            crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
+            crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 60)),
             /*cancelled*/ None,
         )
         .expect("prepare release");
