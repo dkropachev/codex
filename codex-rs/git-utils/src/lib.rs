@@ -70,6 +70,7 @@ pub use review_scope::resolve_review_scope;
 pub use review_validation::has_uncommitted_changes;
 pub use status::get_has_changes_in_repo;
 pub use trust::resolve_root_git_project_for_trust;
+pub use trust::resolve_root_git_project_uri_for_trust;
 pub use worktree::RepositoryIdentity;
 pub use worktree::linked_worktree_cwds;
 pub use worktree::repository_identity;

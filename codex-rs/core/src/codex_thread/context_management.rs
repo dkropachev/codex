@@ -60,10 +60,7 @@ impl CodexThread {
         request: CompactionRequest,
     ) -> CodexResult<StartIfIdleSubmission> {
         let CompactionRequest { source, trace } = request;
-        self.session
-            .services
-            .agent_control
-            .ensure_execution_capacity_for_turn_start(self)
+        self.ensure_execution_capacity_for_turn_start(self.session.services.agent_control.as_ref())
             .await?;
         self.io.submit_compact_if_idle(source, trace).await
     }

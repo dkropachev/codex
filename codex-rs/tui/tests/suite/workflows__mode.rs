@@ -58,7 +58,7 @@ async fn workflow_slash_enters_mode_and_submits_mocked_ai_turn() -> Result<()> {
         &env,
         &None,
         TerminalSize { rows: 24, cols: 80 },
-        /*inherited_fds*/ &[],
+        /*inherited_fds*/ codex_utils_pty::ChildFds::Inherited(&[]),
     )
     .await?;
     let writer = spawned.session.writer_sender();
