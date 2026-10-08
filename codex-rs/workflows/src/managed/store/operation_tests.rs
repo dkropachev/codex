@@ -72,7 +72,11 @@ fn startup_removes_only_marked_orphans_and_keeps_cache() {
     operations
         .write_file(
             &cleanup::ownership_record_name("operation-marked"),
-            &cleanup::bound_record("operation-marked", metadata.st_dev, metadata.st_ino),
+            &cleanup::bound_record(
+                "operation-marked",
+                device_id_from_stat(metadata.st_dev),
+                metadata.st_ino,
+            ),
             /*replace*/ false,
         )
         .expect("ownership record");
