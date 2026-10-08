@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - codex-rs/workflows/**
       - .github/workflows/windows-release-smoke.yml
       - .github/workflows/fork-rust-release.yml
 
@@ -54,6 +55,12 @@ jobs:
             -p codex-protocol \
             -p codex-app-server-protocol \
             -E 'not (package(codex-windows-sandbox) and test(unified_exec::tests::))'
+
+      - name: Test managed workflow lifecycle on Windows
+        shell: bash
+        run: |
+          just test -p codex-workflows \
+            -E 'test(managed::store::) or test(managed::dependencies::bun::tests::materializes_private_configuration_and_isolated_directories)'
 
       - name: Check for a clean worktree
         if: always() && !cancelled()

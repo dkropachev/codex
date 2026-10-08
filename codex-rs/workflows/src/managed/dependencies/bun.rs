@@ -181,11 +181,20 @@ pub(in crate::managed) fn materialize_bun_environment(
 ) -> anyhow::Result<ManagedBunEnvironment> {
     let bun_root = management_root.join("bun");
     let cache_dir = bun_root.join("cache");
+    #[cfg(not(windows))]
     let operations_dir = bun_root.join("operations");
+    #[cfg(not(windows))]
     super::install::ensure_regular_directory_tree(management_root, &cache_dir)
         .context("failed to create managed Bun cache")?;
+    #[cfg(not(windows))]
     super::install::ensure_regular_directory_tree(management_root, &operations_dir)
         .context("failed to create managed Bun operation root")?;
+    #[cfg(windows)]
+    let operation = ManagedBunOperationDirectory::create_with_layout(
+        management_root,
+        TRUSTED_BUNFIG.as_bytes(),
+    )?;
+    #[cfg(not(windows))]
     let operation = ManagedBunOperationDirectory::create(&operations_dir)?;
     let operation_root = AbsolutePathBuf::from_absolute_path_checked(operation.path())
         .context("managed Bun operation directory was not absolute")?;
@@ -198,6 +207,7 @@ pub(in crate::managed) fn materialize_bun_environment(
     let xdg_state_dir = home_dir.join("xdg-state");
     let app_data_dir = home_dir.join("app-data");
     let local_app_data_dir = home_dir.join("local-app-data");
+    #[cfg(not(windows))]
     for path in [
         &scratch_dir,
         &temp_dir,
@@ -219,12 +229,14 @@ pub(in crate::managed) fn materialize_bun_environment(
 
     let bunfig = operation_root.join("bunfig.toml");
     let npmrc = operation_root.join("npmrc");
+    #[cfg(not(windows))]
     fs::write(bunfig.as_path(), TRUSTED_BUNFIG).with_context(|| {
         format!(
             "failed to write trusted Bun configuration {}",
             bunfig.as_path().display()
         )
     })?;
+    #[cfg(not(windows))]
     fs::write(npmrc.as_path(), []).with_context(|| {
         format!(
             "failed to write empty npm configuration {}",

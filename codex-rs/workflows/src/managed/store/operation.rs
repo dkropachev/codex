@@ -6,31 +6,31 @@ use anyhow::Context;
 use anyhow::bail;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use super::cleanup;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use super::fs::SecureDirectory;
 #[cfg(unix)]
 use super::fs::device_id_from_stat;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use super::lock::LockMode;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use super::lock::ManagedFileLock;
 
 /// Retains a marked Bun operation directory until every prepared command exits.
 pub(in crate::managed) struct ManagedBunOperationDirectory {
     path: AbsolutePathBuf,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     parent: SecureDirectory,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     name: String,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     device: u64,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     inode: u64,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     _global: ManagedFileLock,
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     temporary: tempfile::TempDir,
 }
 
@@ -44,36 +44,79 @@ impl std::fmt::Debug for ManagedBunOperationDirectory {
 }
 
 impl ManagedBunOperationDirectory {
+    #[cfg(windows)]
+    pub(in crate::managed) fn create_with_layout(
+        management_root: &AbsolutePathBuf,
+        bunfig: &[u8],
+    ) -> anyhow::Result<Self> {
+        let management_parent = management_root
+            .as_path()
+            .parent()
+            .context("managed Bun root has no parent directory")?;
+        let management_name = management_root
+            .as_path()
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .context("managed Bun root has no UTF-8 name")?;
+        let management_parent = AbsolutePathBuf::from_absolute_path_checked(management_parent)?;
+        let management = SecureDirectory::open_root(&management_parent)?.child(management_name)?;
+        let global = management.open_lock_file("managed.lock")?;
+        let _layout_lock =
+            ManagedFileLock::acquire(global, LockMode::Shared, /*cancelled*/ None)?;
+        let bun = management.child("bun")?;
+        bun.child("cache")?;
+        let operations = bun.child("operations")?;
+        let operation = Self::create(operations.path())?;
+        let root = operations.existing_child(&operation.name)?;
+        root.child("scratch")?;
+        root.child("temp")?;
+        let home = root.child("home")?;
+        for name in [
+            "xdg-config",
+            "xdg-cache",
+            "xdg-data",
+            "xdg-state",
+            "app-data",
+            "local-app-data",
+        ] {
+            home.child(name)?;
+        }
+        root.write_file("bunfig.toml", bunfig, /*replace*/ false)?;
+        root.write_file("npmrc", b"", /*replace*/ false)?;
+        Ok(operation)
+    }
+
     pub(in crate::managed) fn create(operations: &AbsolutePathBuf) -> anyhow::Result<Self> {
-        let mut builder = tempfile::Builder::new();
-        builder.prefix("operation-");
+        #[cfg(any(unix, windows))]
+        let management = operations
+            .as_path()
+            .parent()
+            .and_then(Path::parent)
+            .context("managed Bun operation root has no management parent")?;
+        #[cfg(any(unix, windows))]
+        let management = AbsolutePathBuf::from_absolute_path_checked(management)?;
+        #[cfg(any(unix, windows))]
+        let management = SecureDirectory::open_root(&management)?;
+        #[cfg(any(unix, windows))]
+        let global = management.open_lock_file("managed.lock")?;
+        #[cfg(any(unix, windows))]
+        let global = ManagedFileLock::acquire(global, LockMode::Shared, /*cancelled*/ None)?;
+
         #[cfg(unix)]
-        let global = {
-            let management = operations
-                .as_path()
-                .parent()
-                .and_then(Path::parent)
-                .context("managed Bun operation root has no management parent")?;
-            let management = AbsolutePathBuf::from_absolute_path_checked(management)?;
-            let management = SecureDirectory::open_root(&management)?;
-            let global = management.open_lock_file("managed.lock")?;
-            let global =
-                ManagedFileLock::acquire(global, LockMode::Shared, /*cancelled*/ None)?;
+        {
+            let mut builder = tempfile::Builder::new();
+            builder.prefix("operation-");
             use std::os::unix::fs::PermissionsExt;
 
             let private = std::fs::Permissions::from_mode(0o700);
             std::fs::set_permissions(operations.as_path(), private.clone())
                 .context("failed to secure managed Bun operation root")?;
             builder.permissions(private);
-            global
-        };
-        let temporary = builder
-            .tempdir_in(operations.as_path())
-            .context("failed to create private managed Bun operation directory")?;
-        let path = AbsolutePathBuf::from_absolute_path_checked(temporary.path())
-            .context("managed Bun operation directory was not absolute")?;
-        #[cfg(unix)]
-        {
+            let temporary = builder
+                .tempdir_in(operations.as_path())
+                .context("failed to create private managed Bun operation directory")?;
+            let path = AbsolutePathBuf::from_absolute_path_checked(temporary.path())
+                .context("managed Bun operation directory was not absolute")?;
             let parent = SecureDirectory::open_root(operations)?;
             let name = temporary
                 .path()
@@ -107,8 +150,84 @@ impl ManagedBunOperationDirectory {
                 _global: global,
             })
         }
-        #[cfg(not(unix))]
-        Ok(Self { path, temporary })
+        #[cfg(windows)]
+        {
+            use std::sync::atomic::AtomicU64;
+            use std::time::SystemTime;
+            use std::time::UNIX_EPOCH;
+
+            static NEXT_OPERATION_ID: AtomicU64 = AtomicU64::new(0);
+            let bun = management.existing_child("bun")?;
+            let parent = bun.existing_child("operations")?;
+            if parent.path() != operations {
+                bail!("managed Bun operation path does not match private root");
+            }
+            let clock = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .context("system clock predates Unix epoch")?
+                .as_nanos();
+            for _ in 0..128 {
+                let sequence = NEXT_OPERATION_ID.fetch_add(1, Ordering::Relaxed);
+                let name = format!("operation-{}-{clock}-{sequence}", std::process::id());
+                if parent.optional_existing_child(&name)?.is_some() {
+                    continue;
+                }
+                let record = cleanup::ownership_record_name(&name);
+                parent.write_file(
+                    &record,
+                    &cleanup::reservation_record(&name),
+                    /*replace*/ false,
+                )?;
+                let directory = parent
+                    .create_new_child(&name)
+                    .context("new Bun operation remains reserved for recovery")?;
+                let (device, inode) = directory.identity()?;
+                let result = (|| {
+                    parent.write_file(
+                        &record,
+                        &cleanup::bound_record(&name, device, inode),
+                        /*replace*/ true,
+                    )?;
+                    directory.write_file(
+                        ".codex-managed-operation",
+                        name.as_bytes(),
+                        /*replace*/ false,
+                    )
+                })();
+                drop(directory);
+                if let Err(error) = result {
+                    let _ = cleanup::remove_tree(
+                        &parent,
+                        &name,
+                        device,
+                        inode,
+                        cleanup::OwnershipMarker::CreationIncomplete {
+                            original_device: device,
+                            original_inode: inode,
+                        },
+                        cleanup::CleanupEntryLimit::STANDARD,
+                    );
+                    return Err(error).context("failed to mark private Bun operation");
+                }
+                return Ok(Self {
+                    path: operations.join(&name),
+                    parent,
+                    name,
+                    device,
+                    inode,
+                    _global: global,
+                });
+            }
+            bail!("failed to allocate private Bun operation directory");
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let temporary = tempfile::Builder::new()
+                .prefix("operation-")
+                .tempdir_in(operations.as_path())?;
+            let path = AbsolutePathBuf::from_absolute_path_checked(temporary.path())?;
+            Ok(Self { path, temporary })
+        }
     }
 
     pub(in crate::managed) fn path(&self) -> &Path {
@@ -116,7 +235,7 @@ impl ManagedBunOperationDirectory {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl Drop for ManagedBunOperationDirectory {
     fn drop(&mut self) {
         let _ = cleanup::remove_tree(
@@ -130,15 +249,11 @@ impl Drop for ManagedBunOperationDirectory {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(super) fn recover_marked_bun_operations(
     management: &SecureDirectory,
     cancelled: Option<&AtomicBool>,
 ) -> anyhow::Result<()> {
-    use rustix::fs::AtFlags;
-    use rustix::fs::statat;
-    use rustix::io::Errno;
-
     let Some(bun) = management.optional_existing_child("bun")? else {
         return Ok(());
     };
@@ -155,15 +270,9 @@ pub(super) fn recover_marked_bun_operations(
         else {
             continue;
         };
-        let root = statat(
-            operations.handle(),
-            name.as_str(),
-            AtFlags::SYMLINK_NOFOLLOW,
-        );
-        let (device, inode) = match root {
-            Ok(metadata) => (device_id_from_stat(metadata.st_dev), metadata.st_ino),
-            Err(Errno::NOENT) => (0, 0),
-            Err(error) => return Err(error).context("failed to inspect marked Bun operation"),
+        let (device, inode) = match operations.optional_existing_child(&name)? {
+            Some(root) => root.identity()?,
+            None => (0, 0),
         };
         cleanup::remove_tree(
             &operations,
@@ -180,3 +289,7 @@ pub(super) fn recover_marked_bun_operations(
 #[cfg(all(test, unix))]
 #[path = "operation_tests.rs"]
 mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "operation_windows_tests.rs"]
+mod windows_tests;
