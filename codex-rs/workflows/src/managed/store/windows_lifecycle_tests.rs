@@ -116,6 +116,112 @@ fn windows_install_and_replace_commit_matching_receipts() {
 }
 
 #[test]
+fn windows_uninstall_removes_managed_release_and_receipt() {
+    let root = tempfile::tempdir().expect("root");
+    let store = store(root.path());
+    let lock = store
+        .lock_install("team/build", /*cancelled*/ None)
+        .expect("workflow lock");
+    let first = prepared(&store, 'a', "export default {};", /*previous*/ None);
+    let receipt = first.journal.next_receipt.clone();
+    store
+        .commit_fresh(&lock, &ExpectedCurrent::Absent, first)
+        .expect("install");
+    let expected = ExpectedCurrent::Receipt(
+        ReceiptIdentity::from_receipt(&receipt).expect("receipt identity"),
+    );
+    assert_eq!(
+        store.commit_uninstall(&lock, &expected).expect("uninstall"),
+        ManagedWorkflowCommitOutcome::Committed
+    );
+    drop(lock);
+    assert!(!root.path().join("workflows/team/build").exists());
+    assert!(
+        store
+            .list_receipts(/*cancelled*/ None)
+            .expect("catalog")
+            .is_empty()
+    );
+}
+
+#[test]
+fn windows_startup_finishes_interrupted_uninstall_twice() {
+    for phase in 0..5 {
+        let root = tempfile::tempdir().expect("root");
+        let store = store(root.path());
+        let lock = store
+            .lock_install("team/build", /*cancelled*/ None)
+            .expect("workflow lock");
+        let first = prepared(&store, 'a', "export default {};", /*previous*/ None);
+        let receipt = first.journal.next_receipt.clone();
+        store
+            .commit_fresh(&lock, &ExpectedCurrent::Absent, first)
+            .expect("install");
+        let active = store
+            .active_root
+            .existing_child("team")
+            .expect("parent")
+            .existing_child("build")
+            .expect("active");
+        let evidence = crate::managed::integrity::published_payload_evidence(
+            active.path().as_path(),
+            crate::managed::fetch::VERIFICATION_LIMITS,
+            crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
+            /*cancelled*/ None,
+        )
+        .expect("evidence");
+        drop(active);
+        let mut staging = stage::TransactionStaging::create(&store.staging).expect("staging");
+        let mut journal = journal::ManagedWorkflowJournal::new_uninstall(
+            staging.name().to_owned(),
+            receipt,
+            evidence,
+        )
+        .expect("uninstall journal");
+        journal::write_journal(&store.journals, &journal, /*replace*/ false)
+            .expect("persist journal");
+        staging.retain_for_recovery();
+        drop(staging);
+        let parent = store.active_root.existing_child("team").expect("parent");
+        if phase >= 1 {
+            backup::move_current_aside(&store, &journal, &parent, "build")
+                .expect("move old release aside");
+        }
+        if phase >= 2 {
+            journal.next_action = journal::ManagedWorkflowNextAction::RemoveReceipt;
+            journal::write_journal(&store.journals, &journal, /*replace*/ true)
+                .expect("advance to receipt removal");
+        }
+        if phase >= 3 {
+            receipt::remove_receipt_and_empty_directories(&store.receipts, &journal.id)
+                .expect("remove receipt");
+        }
+        if phase >= 4 {
+            journal.next_action = journal::ManagedWorkflowNextAction::Cleanup;
+            journal::write_journal(&store.journals, &journal, /*replace*/ true)
+                .expect("advance to cleanup");
+        }
+        drop(parent);
+        drop(lock);
+        drop(store);
+        for _ in 0..2 {
+            let recovered = ManagedWorkflowStore::create(
+                &absolute(root.path()),
+                &absolute(&root.path().join("workflows")),
+            )
+            .expect("startup recovery");
+            assert!(!root.path().join("workflows/team/build").exists());
+            assert!(
+                recovered
+                    .list_receipts(/*cancelled*/ None)
+                    .expect("catalog")
+                    .is_empty()
+            );
+        }
+    }
+}
+
+#[test]
 fn windows_startup_rolls_forward_pending_install_twice() {
     let root = tempfile::tempdir().expect("root");
     let store = store(root.path());
