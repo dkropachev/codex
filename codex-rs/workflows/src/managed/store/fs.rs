@@ -162,6 +162,24 @@ impl SecureDirectory {
         }
     }
 
+    #[cfg(windows)]
+    pub(super) fn create_new_child(&self, name: &str) -> anyhow::Result<Self> {
+        validate_component(name)?;
+        let path = self.path.join(name);
+        let (handle, created) = super::windows_security::create_private_directory(path.as_path())?;
+        if !created {
+            bail!("managed workflow private directory already exists");
+        }
+        self.sync()?;
+        Ok(Self {
+            path,
+            guard: std::sync::Arc::new(WindowsDirectoryGuard {
+                handle,
+                _parent: Some(std::sync::Arc::clone(&self.guard)),
+            }),
+        })
+    }
+
     pub(super) fn path(&self) -> &AbsolutePathBuf {
         &self.path
     }
