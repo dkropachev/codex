@@ -58,19 +58,6 @@ impl ManagedWorkflowService {
             .collect())
     }
 
-    /// Lists managed receipts while honoring a caller's cancellation signal.
-    pub fn list_installed_cancellable(
-        &self,
-        cancelled: &AtomicBool,
-    ) -> anyhow::Result<Vec<ManagedWorkflowRecord>> {
-        Ok(self
-            .store
-            .list_receipts(Some(cancelled))?
-            .into_iter()
-            .map(ManagedWorkflowRecord::from)
-            .collect())
-    }
-
     /// Checks one source and returns a diagnostic without changing its installed release.
     pub fn check_update(
         &self,
@@ -132,7 +119,26 @@ fn check_release(
         version: receipt.installed.version.clone(),
         commit: receipt.installed.commit.clone(),
     };
-    if installed == selected {
+    if let (Some(old), Some(new)) = (&installed.version, &selected.version)
+        && Version::parse(new)?.cmp_precedence(&Version::parse(old)?) == Ordering::Less
+    {
+        bail!("managed workflow source now advertises a downgrade");
+    }
+    if let Some(tag) = &receipt.installed.tag {
+        let installed_tag =
+            super::super::git_command::resolve_installed_workflow_tag(&source, tag, cancelled)?;
+        if !receipt
+            .installed
+            .commit
+            .eq_ignore_ascii_case(&installed_tag.advertised_object_id)
+        {
+            bail!("managed workflow release tag moved to a different commit");
+        }
+    }
+    if installed == selected
+        || installed.version == selected.version
+            && installed.commit.eq_ignore_ascii_case(&selected.commit)
+    {
         return Ok(ManagedWorkflowUpdate::Current);
     }
     match (&installed.version, &selected.version) {

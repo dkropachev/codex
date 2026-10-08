@@ -132,6 +132,17 @@ fn check_reports_moved_tag_and_downgrade_as_errors() {
     assert!(
         matches!(moved.update, ManagedWorkflowUpdate::Error(message) if message.contains("tag moved"))
     );
+    fs::write(repository.join("package.json"), r#"{"version":"3.0.0"}"#)
+        .expect("newer package version");
+    commit(&repository);
+    git(&repository, &["tag", "v3.0.0"]);
+    let moved_with_newer = service
+        .check_update("team/build", &cancelled)
+        .expect("moved installed tag with newer release");
+    assert!(
+        matches!(moved_with_newer.update, ManagedWorkflowUpdate::Error(message) if message.contains("tag moved"))
+    );
+    git(&repository, &["tag", "-d", "v3.0.0"]);
     git(&repository, &["tag", "-d", "v2.0.0"]);
     git(&repository, &["tag", "v1.0.0"]);
     fs::write(repository.join("package.json"), r#"{"version":"1.0.0"}"#)
@@ -143,6 +154,24 @@ fn check_reports_moved_tag_and_downgrade_as_errors() {
         .expect("downgrade check");
     assert!(
         matches!(downgrade.update, ManagedWorkflowUpdate::Error(message) if message.contains("downgrade"))
+    );
+}
+
+#[test]
+fn equivalent_tag_alias_at_the_same_commit_is_current() {
+    let root = tempfile::tempdir().expect("root");
+    let repository = root.path().join("source");
+    source(&repository, Some("1.0.0"));
+    let service = service(root.path());
+    let cancelled = AtomicBool::new(false);
+    install(&service, &repository, &cancelled);
+    git(&repository, &["tag", "1.0.0"]);
+    assert_eq!(
+        service
+            .check_update("team/build", &cancelled)
+            .expect("alias check")
+            .update,
+        ManagedWorkflowUpdate::Current
     );
 }
 
