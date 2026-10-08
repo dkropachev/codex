@@ -18,7 +18,12 @@ mod store;
 pub use management::ManagedWorkflowDependencyRuntime;
 pub use management::ManagedWorkflowInstallRequest;
 pub use management::ManagedWorkflowInstallation;
+pub use management::ManagedWorkflowRecord;
 pub use management::ManagedWorkflowService;
+pub use management::ManagedWorkflowUpdate;
+pub use management::ManagedWorkflowUpdateCheck;
+pub use management::WorkflowReleaseIdentity;
+pub use management::WorkflowUpdatePolicy;
 pub use release::ResolvedWorkflowRelease;
 pub use source::WorkflowGitSource;
 
