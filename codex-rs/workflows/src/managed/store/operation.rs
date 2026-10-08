@@ -10,6 +10,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use super::cleanup;
 #[cfg(any(unix, windows))]
 use super::fs::SecureDirectory;
+#[cfg(unix)]
+use super::fs::device_id_from_stat;
 #[cfg(any(unix, windows))]
 use super::lock::LockMode;
 #[cfg(any(unix, windows))]
@@ -126,7 +128,11 @@ impl ManagedBunOperationDirectory {
             let metadata = rustix::fs::fstat(directory.handle())?;
             parent.write_file(
                 &cleanup::ownership_record_name(&name),
-                &cleanup::bound_record(&name, metadata.st_dev, metadata.st_ino),
+                &cleanup::bound_record(
+                    &name,
+                    device_id_from_stat(metadata.st_dev),
+                    metadata.st_ino,
+                ),
                 /*replace*/ false,
             )?;
             directory.write_file(
@@ -139,7 +145,7 @@ impl ManagedBunOperationDirectory {
                 path,
                 parent,
                 name,
-                device: metadata.st_dev,
+                device: device_id_from_stat(metadata.st_dev),
                 inode: metadata.st_ino,
                 _global: global,
             })
