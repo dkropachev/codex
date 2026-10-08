@@ -11,6 +11,8 @@ use super::cleanup;
 #[cfg(unix)]
 use super::fs::SecureDirectory;
 #[cfg(unix)]
+use super::fs::device_id_from_stat;
+#[cfg(unix)]
 use super::lock::LockMode;
 #[cfg(unix)]
 use super::lock::ManagedFileLock;
@@ -83,7 +85,11 @@ impl ManagedBunOperationDirectory {
             let metadata = rustix::fs::fstat(directory.handle())?;
             parent.write_file(
                 &cleanup::ownership_record_name(&name),
-                &cleanup::bound_record(&name, metadata.st_dev, metadata.st_ino),
+                &cleanup::bound_record(
+                    &name,
+                    device_id_from_stat(metadata.st_dev),
+                    metadata.st_ino,
+                ),
                 /*replace*/ false,
             )?;
             directory.write_file(
@@ -96,7 +102,7 @@ impl ManagedBunOperationDirectory {
                 path,
                 parent,
                 name,
-                device: metadata.st_dev,
+                device: device_id_from_stat(metadata.st_dev),
                 inode: metadata.st_ino,
                 _global: global,
             })
@@ -155,7 +161,7 @@ pub(super) fn recover_marked_bun_operations(
             AtFlags::SYMLINK_NOFOLLOW,
         );
         let (device, inode) = match root {
-            Ok(metadata) => (metadata.st_dev, metadata.st_ino),
+            Ok(metadata) => (device_id_from_stat(metadata.st_dev), metadata.st_ino),
             Err(Errno::NOENT) => (0, 0),
             Err(error) => return Err(error).context("failed to inspect marked Bun operation"),
         };
