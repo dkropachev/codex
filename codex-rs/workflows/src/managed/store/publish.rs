@@ -12,6 +12,7 @@ use super::journal::ManagedWorkflowNextAction;
 use super::journal::ManagedWorkflowOperation;
 use super::journal::journal_file_name;
 use super::journal::read_journal;
+use super::journal::read_journal_named;
 use super::journal::read_marker;
 use super::journal::write_journal;
 use super::prepare::PreparedWorkflowRelease;
@@ -65,9 +66,31 @@ pub(in crate::managed) fn ensure_fresh_target(
     locked: &LockedManagedWorkflow,
     expected: &ExpectedCurrent,
 ) -> anyhow::Result<()> {
+    let target_prefix = format!("{}/", locked.id);
+    for name in store
+        .journals
+        .list_names(/*maximum_entries*/ 4_096, /*cancelled*/ None)?
+    {
+        let journal = read_journal_named(&store.journals, &name)?;
+        if journal.id == locked.id
+            || journal.id.starts_with(&target_prefix)
+            || locked.id.starts_with(&format!("{}/", journal.id))
+        {
+            bail!("managed workflow install target overlaps a pending transaction");
+        }
+    }
     for (separator, _) in locked.id.match_indices('/') {
-        if read_pending_receipt(&store.receipts, &locked.id[..separator])?.is_some() {
+        let ancestor = &locked.id[..separator];
+        if read_pending_receipt(&store.receipts, ancestor)?.is_some() {
             bail!("managed workflow install target is inside an installed workflow");
+        }
+        if let Some(parent) = active_parent(&store.active_root, ancestor, ParentMode::Existing)?
+            && let Some(directory) = parent
+                .directory()
+                .optional_existing_child(leaf(ancestor)?)?
+            && directory.child_exists("codex-managed-workflow")?
+        {
+            bail!("managed workflow install target is inside a marked workflow");
         }
     }
     let previous = compare_current(&store.receipts, &locked.id, expected)?;

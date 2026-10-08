@@ -245,6 +245,46 @@ fn parent_and_child_install_locks_exclude_each_other() {
 }
 
 #[test]
+fn overlapping_pending_journals_block_fresh_install() {
+    for (pending_id, target_id) in [("team", "team/build"), ("team/build", "team")] {
+        let root = tempfile::tempdir().expect("root");
+        let store = store(root.path());
+        let receipt = super::receipt::ManagedWorkflowReceipt::new(
+            pending_id.into(),
+            "https://example.com/team.git".into(),
+            super::receipt::WorkflowRelease {
+                tag: None,
+                version: None,
+                commit: "a".repeat(40),
+            },
+            super::receipt::WorkflowUpdatePolicy::Prompt,
+        )
+        .expect("pending receipt");
+        let journal = super::journal::ManagedWorkflowJournal::new(
+            "tx-pending".into(),
+            pending_id.into(),
+            /*previous_receipt*/ None,
+            receipt,
+            crate::managed::integrity::ActivationPayloadEvidence {
+                format_version: 1,
+                sha256: "b".repeat(64),
+                entry_count: 0,
+                logical_bytes: 0,
+            },
+        )
+        .expect("pending journal");
+        super::journal::write_journal(&store.journals, &journal, /*replace*/ false)
+            .expect("write pending journal");
+        let locked = store
+            .lock_install(target_id, /*cancelled*/ None)
+            .expect("target lock");
+        let error = super::ensure_fresh_target(&store, &locked, &super::ExpectedCurrent::Absent)
+            .expect_err("overlapping pending journal must block install");
+        assert!(error.to_string().contains("overlaps a pending transaction"));
+    }
+}
+
+#[test]
 fn cancellation_stops_waiting_for_global_recovery_lock() {
     let root = tempfile::tempdir().expect("root");
     let store = Arc::new(store(root.path()));

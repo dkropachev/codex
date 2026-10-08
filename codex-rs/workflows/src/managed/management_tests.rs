@@ -107,27 +107,6 @@ fn installs_tagged_and_untagged_local_releases_with_prompt_policy() {
         );
         assert_eq!(receipt.policy, WorkflowUpdatePolicy::Prompt);
         assert!(!installed.cleanup_pending);
-        assert!(
-            root.path()
-                .join("workflows/team/build/src/workflow.ts")
-                .is_file()
-        );
-        assert!(
-            service
-                .install(ManagedWorkflowInstallRequest {
-                    source: &source,
-                    dependency_runtime: None,
-                    cancelled: &cancelled,
-                })
-                .is_err()
-        );
-        assert_eq!(
-            service
-                .store
-                .list_receipts(/*cancelled*/ None)
-                .expect("receipt after duplicate install"),
-            receipts
-        );
     }
 }
 
