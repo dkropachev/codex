@@ -261,6 +261,7 @@ jobs:
     needs:
       - validate
       - prepare-release
+    if: ${{ always() && needs.validate.result == 'success' && needs.prepare-release.result == 'success' }}
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
