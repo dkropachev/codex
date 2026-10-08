@@ -249,17 +249,35 @@ fn recovery_finishes_each_uninstall_crash_point_twice() {
         let workflow_root =
             AbsolutePathBuf::from_absolute_path_checked(root.path().join("workflows"))
                 .expect("workflow root");
-        let recovered = ManagedWorkflowStore::create(&home, &workflow_root)
-            .expect("startup uninstall recovery");
-        assert_eq!(
-            recovered
-                .list_receipts(/*cancelled*/ None)
-                .expect("receipt catalog"),
-            Vec::new(),
-            "phase {phase}"
-        );
-        assert!(!root.path().join("workflows/team/build").exists());
-        drop(recovered);
-        ManagedWorkflowStore::create(&home, &workflow_root).expect("repeat startup recovery");
+        for attempt in 0..2 {
+            let recovered = ManagedWorkflowStore::create(&home, &workflow_root)
+                .expect("startup uninstall recovery");
+            assert_eq!(
+                recovered
+                    .list_receipts(/*cancelled*/ None)
+                    .expect("receipt catalog"),
+                Vec::new(),
+                "phase {phase}, attempt {attempt}"
+            );
+            assert!(!root.path().join("workflows/team/build").exists());
+            assert_eq!(
+                [
+                    recovered
+                        .journals
+                        .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
+                        .expect("journals"),
+                    recovered
+                        .backups
+                        .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
+                        .expect("backups"),
+                    recovered
+                        .staging
+                        .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
+                        .expect("staging"),
+                ],
+                [Vec::<String>::new(), Vec::new(), Vec::new()],
+                "phase {phase}, attempt {attempt}"
+            );
+        }
     }
 }

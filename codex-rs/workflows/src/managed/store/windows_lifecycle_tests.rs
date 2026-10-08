@@ -146,7 +146,7 @@ fn windows_uninstall_removes_managed_release_and_receipt() {
 
 #[test]
 fn windows_startup_finishes_interrupted_uninstall_twice() {
-    for phase in 0..5 {
+    for phase in 0..9 {
         let root = tempfile::tempdir().expect("root");
         let store = store(root.path());
         let lock = store
@@ -192,19 +192,52 @@ fn windows_startup_finishes_interrupted_uninstall_twice() {
             journal::write_journal(&store.journals, &journal, /*replace*/ true)
                 .expect("advance to receipt removal");
         }
-        if phase >= 3 {
+        if (3..=7).contains(&phase) {
             receipt::remove_receipt_and_empty_directories(&store.receipts, &journal.id)
                 .expect("remove receipt");
         }
-        if phase >= 4 {
+        if phase == 8 {
+            let receipt_parent = store
+                .receipts
+                .existing_child("team")
+                .expect("receipt parent");
+            let receipt_leaf = receipt_parent
+                .existing_child("build")
+                .expect("receipt leaf");
+            receipt_leaf
+                .remove_regular_file("receipt.json")
+                .expect("remove receipt file");
+            let identity = receipt_leaf.identity().expect("receipt directory identity");
+            drop(receipt_leaf);
+            receipt_parent
+                .remove_empty_child("build", identity)
+                .expect("remove receipt leaf");
+        }
+        if (4..=7).contains(&phase) {
             journal.next_action = journal::ManagedWorkflowNextAction::Cleanup;
             journal::write_journal(&store.journals, &journal, /*replace*/ true)
                 .expect("advance to cleanup");
         }
+        if matches!(phase, 5 | 7) {
+            backup::cleanup_backup(&store, &journal).expect("remove backup");
+        }
+        if phase == 6 {
+            fs::remove_file(
+                store
+                    .backups
+                    .path()
+                    .join(&journal.transaction_id)
+                    .join("src/workflow.ts"),
+            )
+            .expect("simulate interrupted backup cleanup");
+        }
+        if phase == 7 {
+            publish::cleanup_stage(&store, &journal).expect("remove staging");
+        }
         drop(parent);
         drop(lock);
         drop(store);
-        for _ in 0..2 {
+        for attempt in 0..2 {
             let recovered = ManagedWorkflowStore::create(
                 &absolute(root.path()),
                 &absolute(&root.path().join("workflows")),
@@ -216,6 +249,24 @@ fn windows_startup_finishes_interrupted_uninstall_twice() {
                     .list_receipts(/*cancelled*/ None)
                     .expect("catalog")
                     .is_empty()
+            );
+            assert_eq!(
+                [
+                    recovered
+                        .journals
+                        .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
+                        .expect("journals"),
+                    recovered
+                        .backups
+                        .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
+                        .expect("backups"),
+                    recovered
+                        .staging
+                        .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
+                        .expect("staging"),
+                ],
+                [Vec::<String>::new(), Vec::new(), Vec::new()],
+                "phase {phase}, attempt {attempt}"
             );
         }
     }
