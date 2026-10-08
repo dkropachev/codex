@@ -65,6 +65,11 @@ pub(in crate::managed) fn ensure_fresh_target(
     locked: &LockedManagedWorkflow,
     expected: &ExpectedCurrent,
 ) -> anyhow::Result<()> {
+    for (separator, _) in locked.id.match_indices('/') {
+        if read_pending_receipt(&store.receipts, &locked.id[..separator])?.is_some() {
+            bail!("managed workflow install target is inside an installed workflow");
+        }
+    }
     let previous = compare_current(&store.receipts, &locked.id, expected)?;
     if previous.is_some() || !matches!(expected, ExpectedCurrent::Absent) {
         bail!("fresh workflow install requires an absent receipt");

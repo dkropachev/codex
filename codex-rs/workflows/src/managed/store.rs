@@ -69,7 +69,7 @@ pub(in crate::managed) struct LockedManagedWorkflow {
     #[cfg(any(unix, windows))]
     management_identity: (u64, u64),
     _global: ManagedFileLock,
-    _workflow: ManagedFileLock,
+    _workflows: Vec<ManagedFileLock>,
 }
 
 #[cfg(any(unix, windows))]
@@ -84,7 +84,7 @@ impl LockedManagedWorkflow {
 
 pub(in crate::managed) struct ManagedWorkflowRunGuard {
     _global: ManagedFileLock,
-    _workflow: ManagedFileLock,
+    _workflows: Vec<ManagedFileLock>,
 }
 
 pub(in crate::managed) struct ManagedWorkflowRecoveryGuard {
@@ -264,8 +264,7 @@ impl ManagedWorkflowStore {
         receipt::validate_id(id)?;
         let global = self.management.open_lock_file("managed.lock")?;
         let global = ManagedFileLock::acquire(global, LockMode::Shared, cancelled)?;
-        let workflow = self.workflow_lock_file(id)?;
-        let workflow = ManagedFileLock::acquire(workflow, LockMode::Exclusive, cancelled)?;
+        let workflows = self.workflow_locks(id, LockMode::Exclusive, cancelled)?;
         #[cfg(any(unix, windows))]
         let management_identity = self.management.identity()?;
         Ok(LockedManagedWorkflow {
@@ -273,7 +272,7 @@ impl ManagedWorkflowStore {
             #[cfg(any(unix, windows))]
             management_identity,
             _global: global,
-            _workflow: workflow,
+            _workflows: workflows,
         })
     }
 
@@ -285,11 +284,10 @@ impl ManagedWorkflowStore {
         receipt::validate_id(id)?;
         let global = self.management.open_lock_file("managed.lock")?;
         let global = ManagedFileLock::acquire(global, LockMode::Shared, cancelled)?;
-        let workflow = self.workflow_lock_file(id)?;
-        let workflow = ManagedFileLock::acquire(workflow, LockMode::Shared, cancelled)?;
+        let workflows = self.workflow_locks(id, LockMode::Shared, cancelled)?;
         Ok(ManagedWorkflowRunGuard {
             _global: global,
-            _workflow: workflow,
+            _workflows: workflows,
         })
     }
 
@@ -315,6 +313,22 @@ impl ManagedWorkflowStore {
             .as_ref()
             .unwrap_or(&self.locks)
             .open_lock_file(&format!("{leaf}.lock"))
+    }
+
+    fn workflow_locks(
+        &self,
+        id: &str,
+        leaf_mode: LockMode,
+        cancelled: Option<&AtomicBool>,
+    ) -> anyhow::Result<Vec<ManagedFileLock>> {
+        let mut locks = Vec::new();
+        for (separator, _) in id.match_indices('/') {
+            let file = self.workflow_lock_file(&id[..separator])?;
+            locks.push(ManagedFileLock::acquire(file, LockMode::Shared, cancelled)?);
+        }
+        let file = self.workflow_lock_file(id)?;
+        locks.push(ManagedFileLock::acquire(file, leaf_mode, cancelled)?);
+        Ok(locks)
     }
 }
 

@@ -210,6 +210,41 @@ fn same_id_install_waits_while_other_ids_and_shared_runs_proceed() {
 }
 
 #[test]
+fn parent_and_child_install_locks_exclude_each_other() {
+    for (held_id, waiting_id) in [("team", "team/build"), ("team/build", "team")] {
+        let root = tempfile::tempdir().expect("root");
+        let store = Arc::new(store(root.path()));
+        let held = store
+            .lock_install(held_id, /*cancelled*/ None)
+            .expect("hold namespace lock");
+        let (started_tx, started_rx) = mpsc::channel();
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+        let other = Arc::clone(&store);
+        let waiting = std::thread::spawn(move || {
+            started_tx.send(()).expect("signal start");
+            let lock = other
+                .lock_install(waiting_id, /*cancelled*/ None)
+                .expect("wait for namespace lock");
+            acquired_tx.send(()).expect("signal acquisition");
+            drop(lock);
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(/*secs*/ 2))
+            .expect("thread started");
+        assert!(
+            acquired_rx
+                .recv_timeout(Duration::from_millis(/*millis*/ 30))
+                .is_err()
+        );
+        drop(held);
+        acquired_rx
+            .recv_timeout(Duration::from_secs(/*secs*/ 2))
+            .expect("namespace lock acquired after release");
+        waiting.join().expect("join lock waiter");
+    }
+}
+
+#[test]
 fn cancellation_stops_waiting_for_global_recovery_lock() {
     let root = tempfile::tempdir().expect("root");
     let store = Arc::new(store(root.path()));

@@ -23,25 +23,21 @@ fn git(root: &Path, args: &[&str]) {
     );
 }
 
-fn source(root: &Path, tagged: bool, dependencies: bool) {
+fn source(root: &Path, id: &str, tagged: bool) {
     fs::create_dir(root).expect("source root");
     fs::create_dir(root.join("src")).expect("source directory");
-    fs::write(root.join("workflow.yaml"), MANIFEST).expect("manifest");
-    let package = match (tagged, dependencies) {
-        (true, false) => r#"{"version":"1.2.3"}"#,
-        (true, true) => r#"{"version":"1.2.3","dependencies":{"dep":"1.0.0"}}"#,
-        (false, false) => "{}",
-        (false, true) => r#"{"dependencies":{"dep":"1.0.0"}}"#,
+    fs::write(
+        root.join("workflow.yaml"),
+        MANIFEST.replace("team/build", id),
+    )
+    .expect("manifest");
+    let package = if tagged {
+        r#"{"version":"1.2.3"}"#
+    } else {
+        "{}"
     };
     fs::write(root.join("package.json"), package).expect("package");
     fs::write(root.join("src/workflow.ts"), "export default {};\n").expect("workflow source");
-    if dependencies {
-        fs::write(
-            root.join("bun.lock"),
-            r#"{"lockfileVersion":1,"workspaces":{"":{"dependencies":{"dep":"1.0.0"}}},"packages":{"dep":["dep@1.0.0","",{},"integrity"]}}"#,
-        )
-        .expect("Bun lock");
-    }
     git(root, &["init", "-q"]);
     git(root, &["add", "--all"]);
     git(
@@ -72,7 +68,7 @@ fn installs_tagged_and_untagged_local_releases_with_prompt_policy() {
     for tagged in [false, true] {
         let root = tempfile::tempdir().expect("root");
         let repository = root.path().join("source");
-        source(&repository, tagged, /*dependencies*/ false);
+        source(&repository, "team/build", tagged);
         let service = ManagedWorkflowService::new(
             &absolute(root.path()),
             &absolute(&root.path().join("workflows")),
@@ -136,83 +132,43 @@ fn installs_tagged_and_untagged_local_releases_with_prompt_policy() {
 }
 
 #[test]
-fn refuses_unmanaged_target_and_missing_dependency_runtime() {
+fn refuses_install_inside_an_existing_managed_release() {
     let root = tempfile::tempdir().expect("root");
-    let repository = root.path().join("source");
-    source(
-        &repository,
-        /*tagged*/ false,
-        /*dependencies*/ false,
-    );
+    let ancestor_source = root.path().join("ancestor-source");
+    let child_source = root.path().join("child-source");
+    source(&ancestor_source, "team", /*tagged*/ false);
+    source(&child_source, "team/build", /*tagged*/ false);
     let service = ManagedWorkflowService::new(
         &absolute(root.path()),
         &absolute(&root.path().join("workflows")),
     )
     .expect("service");
-    let target = root.path().join("workflows/team/build");
-    fs::create_dir_all(&target).expect("unmanaged target");
-    fs::write(target.join("sentinel"), "untouched").expect("unmanaged file");
     let cancelled = AtomicBool::new(false);
-    assert!(
-        service
-            .install(ManagedWorkflowInstallRequest {
-                source: repository.to_str().expect("UTF-8 path"),
-                dependency_runtime: None,
-                cancelled: &cancelled,
-            })
-            .is_err()
-    );
+    service
+        .install(ManagedWorkflowInstallRequest {
+            source: ancestor_source.to_str().expect("UTF-8 path"),
+            dependency_runtime: None,
+            cancelled: &cancelled,
+        })
+        .expect("install ancestor");
+    let receipts = service
+        .store
+        .list_receipts(/*cancelled*/ None)
+        .expect("ancestor receipt");
+    let error = service
+        .install(ManagedWorkflowInstallRequest {
+            source: child_source.to_str().expect("UTF-8 path"),
+            dependency_runtime: None,
+            cancelled: &cancelled,
+        })
+        .expect_err("child must not alter ancestor payload");
+    assert!(error.to_string().contains("inside an installed workflow"));
+    assert!(!root.path().join("workflows/team/build").exists());
     assert_eq!(
-        fs::read_to_string(target.join("sentinel")).expect("unmanaged file"),
-        "untouched"
-    );
-    assert!(
         service
             .store
             .list_receipts(/*cancelled*/ None)
-            .expect("receipt catalog")
-            .is_empty()
-    );
-
-    let dependency_repository = root.path().join("dependencies");
-    source(
-        &dependency_repository,
-        /*tagged*/ false,
-        /*dependencies*/ true,
-    );
-    let error = service
-        .install(ManagedWorkflowInstallRequest {
-            source: dependency_repository.to_str().expect("UTF-8 path"),
-            dependency_runtime: None,
-            cancelled: &cancelled,
-        })
-        .expect_err("occupied target should fail before Bun setup");
-    assert!(
-        !error
-            .to_string()
-            .contains("require Bun and a local sandbox"),
-        "{error:#}"
-    );
-    fs::remove_dir_all(target.parent().expect("unmanaged target parent"))
-        .expect("remove fixture target");
-    let error = service
-        .install(ManagedWorkflowInstallRequest {
-            source: dependency_repository.to_str().expect("UTF-8 path"),
-            dependency_runtime: None,
-            cancelled: &cancelled,
-        })
-        .expect_err("missing dependency runtime");
-    assert!(
-        error
-            .to_string()
-            .contains("require Bun and a local sandbox")
-    );
-    assert!(!target.exists());
-    assert!(
-        service
-            .store
-            .list_receipts(/*cancelled*/ None)
-            .expect("receipt catalog")
-            .is_empty()
+            .expect("unchanged receipts"),
+        receipts
     );
 }
