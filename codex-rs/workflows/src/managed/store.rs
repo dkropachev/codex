@@ -19,6 +19,8 @@ mod recovery;
 #[cfg(unix)]
 mod replace;
 mod stage;
+#[cfg(windows)]
+mod windows_security;
 
 use std::sync::atomic::AtomicBool;
 
