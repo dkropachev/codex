@@ -318,25 +318,23 @@ jobs:
           tool: sccache
           version: 0.16.0
 
-      - name: Expose Actions cache credentials (macOS)
-        if: ${{ runner.os == 'macOS' }}
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
-        with:
-          script: |
-            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
       - name: Configure sccache (macOS)
         if: ${{ runner.os == 'macOS' }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${ACTIONS_RESULTS_URL:-}" && -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
-            echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          else
-            echo "SCCACHE_DIR=${RUNNER_TEMP}/sccache" >> "$GITHUB_ENV"
-          fi
+          echo "SCCACHE_DIR=${RUNNER_TEMP}/sccache" >> "$GITHUB_ENV"
+          echo "SCCACHE_CACHE_SIZE=4G" >> "$GITHUB_ENV"
           echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
+      - name: Restore sccache objects (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ runner.temp }}/sccache
+          key: sccache-fork-release-${{ matrix.target }}-${{ hashFiles('codex-rs/rust-toolchain.toml') }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-fork-release-${{ matrix.target }}-${{ hashFiles('codex-rs/rust-toolchain.toml') }}-
 
       - name: Use hermetic Cargo home
         if: ${{ runner.os == 'Linux' }}
