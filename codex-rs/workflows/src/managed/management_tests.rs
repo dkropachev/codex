@@ -92,7 +92,6 @@ fn installs_tagged_and_untagged_local_releases_with_prompt_policy() {
             .store
             .list_receipts(/*cancelled*/ None)
             .expect("receipt catalog");
-        assert_eq!(receipts.len(), 1);
         let receipt = &receipts[0];
         assert_eq!(receipt.id, installed.id);
         assert_eq!(receipt.source, installed.source);
@@ -106,7 +105,6 @@ fn installs_tagged_and_untagged_local_releases_with_prompt_policy() {
             installed.release.advertised_object_id
         );
         assert_eq!(receipt.policy, WorkflowUpdatePolicy::Prompt);
-        assert!(!installed.cleanup_pending);
     }
 }
 

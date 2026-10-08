@@ -71,7 +71,11 @@ pub(in crate::managed) fn ensure_fresh_target(
         .journals
         .list_names(/*maximum_entries*/ 4_096, /*cancelled*/ None)?
     {
-        let journal = read_journal_named(&store.journals, &name)?;
+        let journal = match read_journal_named(&store.journals, &name) {
+            Ok(journal) => journal,
+            Err(_) if !store.journals.child_exists(&name)? => continue,
+            Err(error) => return Err(error),
+        };
         if journal.id == locked.id
             || journal.id.starts_with(&target_prefix)
             || locked.id.starts_with(&format!("{}/", journal.id))
