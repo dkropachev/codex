@@ -77,7 +77,7 @@ jobs:
         shell: bash
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev bubblewrap
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
         with:
           tool: nextest
@@ -88,7 +88,11 @@ jobs:
       - name: cargo fmt
         run: cargo fmt -- --config imports_granularity=Item --check
       - name: Test hosted workflow runtime
-        run: just workflow-runtime-test
+        run: |
+          cargo build -p codex-linux-sandbox --bin codex-linux-sandbox
+          mkdir -p "${CARGO_TARGET_DIR}/debug/codex-resources"
+          cp "$(command -v bwrap)" "${CARGO_TARGET_DIR}/debug/codex-resources/bwrap"
+          CODEX_WORKFLOW_TEST_SANDBOX="${CARGO_TARGET_DIR}/debug/codex-linux-sandbox" just workflow-runtime-test
       - name: Rust benchmark smoke test
         run: just bench-smoke
 
