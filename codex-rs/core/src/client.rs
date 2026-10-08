@@ -1739,63 +1739,89 @@ impl ModelClientSession {
         if !self.client.responses_websocket_enabled() {
             return Ok(());
         }
-        let affinity_key = self.client.prompt_cache_key(responses_metadata);
-        let client_setup = self
-            .client
-            .current_account_pool_client_setup(AccountPoolClientSetupRequest {
-                routing: ClientRouting::Workspace,
-                model: Some(&model_info.slug),
-                operation_kind: AccountPoolOperationKind::Prewarm,
-                affinity_key: &affinity_key,
-                pinned_selection: None,
-            })
-            .await?;
-        self.remember_account_pool_selection(&client_setup);
-        let connection_key =
-            ResponsesConnectionKey::new(&client_setup.api_provider, client_setup.auth_revision);
-        let account_pool_member_id = client_setup
-            .account_pool_selection
-            .as_ref()
-            .map(|selection| selection.account_id.clone());
-        if self.websocket_session.connection.is_some()
-            && self.websocket_session.connection_key.as_ref() == Some(&connection_key)
-            && self.websocket_session.account_pool_member_id == account_pool_member_id
-        {
-            return Ok(());
-        }
-        self.websocket_session.reset(Some("other"));
-        let auth_context = AuthRequestTelemetryContext::new(
-            client_setup.auth.as_ref().map(CodexAuth::auth_mode),
-            client_setup.api_auth.as_ref(),
-            client_setup.agent_identity_telemetry.clone(),
-            PendingUnauthorizedRetry::default(),
-        );
-        let responses_headers = self
-            .client
-            .responses_headers(client_setup.auth.as_ref(), &model_info.slug);
-        let mut websocket_metadata = responses_metadata.clone();
-        websocket_metadata.routing_hint = self.client.build_routing_hint_header(
-            client_setup.auth.as_ref(),
-            &responses_headers,
-            &model_info.slug,
-            model_info.service_tier_for_request(service_tier).as_deref(),
-        );
         let provider = Arc::clone(&self.client.state.provider);
-        self.websocket_connection(WebsocketConnectParams {
-            session_telemetry,
-            api_provider: client_setup.api_provider,
-            auth_revision: client_setup.auth_revision,
-            api_auth: client_setup.api_auth,
-            auth_owner_generation: client_setup.auth_owner_generation,
-            responses_metadata: &websocket_metadata,
-            auth_context,
-            request_route_telemetry: RequestRouteTelemetry::for_endpoint("/responses"),
-            responses_headers: &responses_headers,
-            account_pool_member_id,
-        })
-        .await
-        .map_err(|err| provider.map_api_error(err))?;
-        Ok(())
+        let auth_manager = provider.auth_manager();
+        let mut auth_recovery = auth_manager
+            .as_ref()
+            .map(AuthManager::unauthorized_recovery);
+        let mut provider_auth_recovery_attempted = false;
+        let mut pending_retry = PendingUnauthorizedRetry::default();
+        let affinity_key = self.client.prompt_cache_key(responses_metadata);
+        loop {
+            let client_setup = self
+                .client
+                .current_account_pool_client_setup(AccountPoolClientSetupRequest {
+                    routing: ClientRouting::Workspace,
+                    model: Some(&model_info.slug),
+                    operation_kind: AccountPoolOperationKind::Prewarm,
+                    affinity_key: &affinity_key,
+                    pinned_selection: None,
+                })
+                .await?;
+            self.remember_account_pool_selection(&client_setup);
+            let account_pool_member_id = client_setup
+                .account_pool_selection
+                .as_ref()
+                .map(|selection| selection.account_id.clone());
+            let auth_context = AuthRequestTelemetryContext::new(
+                client_setup.auth.as_ref().map(CodexAuth::auth_mode),
+                client_setup.api_auth.as_ref(),
+                client_setup.agent_identity_telemetry.clone(),
+                pending_retry,
+            );
+            let responses_headers = self
+                .client
+                .responses_headers(client_setup.auth.as_ref(), &model_info.slug);
+            let mut websocket_metadata = responses_metadata.clone();
+            websocket_metadata.routing_hint = self.client.build_routing_hint_header(
+                client_setup.auth.as_ref(),
+                &responses_headers,
+                &model_info.slug,
+                model_info
+                    .service_tier_for_request(service_tier.clone())
+                    .as_deref(),
+            );
+            match self
+                .websocket_connection(WebsocketConnectParams {
+                    session_telemetry,
+                    api_provider: client_setup.api_provider,
+                    auth_revision: client_setup.auth_revision,
+                    api_auth: client_setup.api_auth,
+                    auth_owner_generation: client_setup.auth_owner_generation,
+                    responses_metadata: &websocket_metadata,
+                    auth_context,
+                    request_route_telemetry: RequestRouteTelemetry::for_endpoint("/responses"),
+                    responses_headers: &responses_headers,
+                    account_pool_member_id,
+                })
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(ApiError::Transport(TransportError::Http { status, .. }))
+                    if status == StatusCode::UPGRADE_REQUIRED =>
+                {
+                    self.try_switch_fallback_transport(session_telemetry, model_info);
+                    return Ok(());
+                }
+                Err(ApiError::Transport(unauthorized_transport))
+                    if provider.is_recoverable_auth_error(&unauthorized_transport) =>
+                {
+                    pending_retry = PendingUnauthorizedRetry::from_recovery(
+                        handle_unauthorized(
+                            unauthorized_transport,
+                            &mut auth_recovery,
+                            &mut provider_auth_recovery_attempted,
+                            session_telemetry,
+                            &provider,
+                            self.client.event_sender.as_ref(),
+                            responses_metadata.turn_id.as_deref(),
+                        )
+                        .await?,
+                    );
+                }
+                Err(err) => return Err(provider.map_api_error(err)),
+            }
+        }
     }
 
     /// Returns a websocket connection for this turn.
