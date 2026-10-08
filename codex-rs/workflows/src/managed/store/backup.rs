@@ -27,6 +27,7 @@ pub(super) fn move_current_aside(
     } else {
         let active = active_parent.existing_child(active_name)?;
         verify_old_active(&active, journal)?;
+        drop(active);
         match statat(
             store.backups.handle(),
             record_name.as_str(),
@@ -176,6 +177,7 @@ pub(super) fn restore_previous(
         Err(Errno::NOENT) => {}
         Err(error) => return Err(error).context("failed to inspect backup operation marker"),
     }
+    drop(backup);
     store
         .backups
         .rename_child_noreplace(name, active_parent, active_name)?;

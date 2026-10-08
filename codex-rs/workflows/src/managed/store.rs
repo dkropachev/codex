@@ -176,11 +176,11 @@ impl ManagedWorkflowStore {
     ) -> anyhow::Result<Self> {
         let home = SecureDirectory::open_root(codex_home)?;
         let active_root = SecureDirectory::open_root(workflow_root)?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if home.device_id()? != active_root.device_id()? {
             bail!("managed workflow roots must share a filesystem");
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if let Some(existing) = home.optional_existing_child(".workflow-management")? {
             if existing.device_id()? != active_root.device_id()? {
                 bail!("managed workflow metadata crossed a filesystem boundary");
@@ -194,32 +194,32 @@ impl ManagedWorkflowStore {
             }
         }
         let management = home.child(".workflow-management")?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if management.device_id()? != active_root.device_id()? {
             bail!("managed workflow metadata crossed a filesystem boundary");
         }
         let locks = management.child("locks")?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if locks.device_id()? != active_root.device_id()? {
             bail!("managed workflow metadata crossed a filesystem boundary");
         }
         let receipts = management.child("receipts")?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if receipts.device_id()? != active_root.device_id()? {
             bail!("managed workflow metadata crossed a filesystem boundary");
         }
         let journals = management.child("journals")?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if journals.device_id()? != active_root.device_id()? {
             bail!("managed workflow metadata crossed a filesystem boundary");
         }
         let staging = management.child("staging")?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if staging.device_id()? != active_root.device_id()? {
             bail!("managed workflow metadata crossed a filesystem boundary");
         }
         let backups = management.child("backups")?;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if backups.device_id()? != active_root.device_id()? {
             bail!("managed workflow metadata crossed a filesystem boundary");
         }

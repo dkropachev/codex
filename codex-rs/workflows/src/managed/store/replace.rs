@@ -46,6 +46,7 @@ pub(super) fn commit_replace(
         .context("replacement active parent is missing")?;
     let active = parent.directory().existing_child(leaf(&locked.id)?)?;
     backup::verify_old_active(&active, &prepared.journal)?;
+    drop(active);
     if let Err(error) = write_journal(&store.journals, &prepared.journal, /*replace*/ false) {
         if !matches!(
             publish::journal_exists(&store.journals, &locked.id),
@@ -56,7 +57,9 @@ pub(super) fn commit_replace(
         return Err(error);
     }
     prepared.staging.retain_for_recovery();
-    finish_replace(store, prepared.journal)
+    let journal = prepared.journal;
+    drop(prepared.staging);
+    finish_replace(store, journal)
 }
 
 pub(super) fn recover_replace(
@@ -125,15 +128,17 @@ pub(super) fn finish_replace(
         ) {
             bail!("replacement pending payload vanished after publication");
         }
-        match (&active, &backup) {
-            (None, Some(_)) => {
-                backup::restore_previous(store, &journal, parent.directory(), leaf(&journal.id)?)?;
-            }
-            (Some(old), None) => backup::verify_old_active(old, &journal)?,
-            (None, None) | (Some(_), Some(_)) => {
-                bail!("replacement rollback topology is ambiguous")
-            }
+        if active.is_none() && backup.is_some() {
+            drop(backup);
+            backup::restore_previous(store, &journal, parent.directory(), leaf(&journal.id)?)?;
+        } else if let Some(old) = &active
+            && backup.is_none()
+        {
+            backup::verify_old_active(old, &journal)?;
+        } else {
+            bail!("replacement rollback topology is ambiguous");
         }
+        drop(staging);
         if backup::cleanup_backup(store, &journal).is_err()
             || publish::cleanup_stage(store, &journal).is_err()
             || store
@@ -177,6 +182,7 @@ pub(super) fn finish_replace(
         if active.is_none() && backup.is_none() {
             bail!("replacement has neither old release nor backup");
         }
+        drop(active);
         backup::move_current_aside(store, &journal, parent.directory(), leaf(&journal.id)?)?;
         journal.next_action = ManagedWorkflowNextAction::PublishRelease;
         write_journal(&store.journals, &journal, /*replace*/ true)?;
@@ -191,6 +197,7 @@ pub(super) fn finish_replace(
                 .context("replacement staging disappeared")?;
             let payload = stage.existing_child("payload")?;
             verify_published(&payload, &journal)?;
+            drop(payload);
             stage.rename_child_noreplace("payload", parent.directory(), leaf(&journal.id)?)?;
             let published = parent.directory().existing_child(leaf(&journal.id)?)?;
             verify_published(&published, &journal)?;
@@ -217,6 +224,8 @@ pub(super) fn finish_replace(
             return Ok(ManagedWorkflowCommitOutcome::CommittedCleanupPending);
         }
     }
+    drop(backup);
+    drop(staging);
     if backup::cleanup_backup(store, &journal).is_err()
         || publish::cleanup_stage(store, &journal).is_err()
         || store
