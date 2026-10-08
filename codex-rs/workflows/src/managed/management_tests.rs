@@ -222,6 +222,91 @@ fn unavailable_remote_source_keeps_the_store_empty() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn ssh_remote_service_install_round_trip() {
+    use std::os::unix::fs::PermissionsExt;
+
+    const REMOTE_REPOSITORY: &str = "CODEX_WORKFLOW_TEST_REMOTE_REPOSITORY";
+    if std::env::var_os(REMOTE_REPOSITORY).is_some() {
+        let root = tempfile::tempdir().expect("install root");
+        let service = ManagedWorkflowService::new(
+            &absolute(root.path()),
+            &absolute(&root.path().join("workflows")),
+        )
+        .expect("service");
+        let cancelled = AtomicBool::new(false);
+        let installed = service
+            .install(ManagedWorkflowInstallRequest {
+                source: "ssh://git@localhost/repo.git",
+                dependency_runtime: None,
+                cancelled: &cancelled,
+            })
+            .expect("install SSH release");
+        assert_eq!(installed.id, "team/build");
+        assert_eq!(installed.source, "ssh://git@localhost/repo.git");
+        assert_eq!(
+            service
+                .store
+                .list_receipts(/*cancelled*/ None)
+                .expect("remote receipt")[0]
+                .source,
+            installed.source
+        );
+        assert!(
+            root.path()
+                .join("workflows/team/build/src/workflow.ts")
+                .is_file()
+        );
+        return;
+    }
+
+    let root = tempfile::tempdir().expect("fixture root");
+    let source_root = root.path().join("source");
+    source(&source_root, "team/build", /*tagged*/ true);
+    let bare = root.path().join("repo.git");
+    let clone = Command::new("git")
+        .args(["clone", "--bare", "--quiet"])
+        .arg(&source_root)
+        .arg(&bare)
+        .output()
+        .expect("create bare remote");
+    assert!(
+        clone.status.success(),
+        "{}",
+        String::from_utf8_lossy(&clone.stderr)
+    );
+    let bin = root.path().join("bin");
+    fs::create_dir(&bin).expect("test executable directory");
+    let ssh = bin.join("ssh");
+    fs::write(
+        &ssh,
+        "#!/bin/sh\nexec git-upload-pack \"$CODEX_WORKFLOW_TEST_REMOTE_REPOSITORY\"\n",
+    )
+    .expect("SSH transport shim");
+    fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700)).expect("executable shim");
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").expect("PATH"),
+    )))
+    .expect("test PATH");
+    let output = Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "managed::management::tests::ssh_remote_service_install_round_trip",
+            "--nocapture",
+        ])
+        .env("PATH", path)
+        .env(REMOTE_REPOSITORY, &bare)
+        .output()
+        .expect("run isolated remote test");
+    assert!(
+        output.status.success(),
+        "remote test failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn unmanaged_target_is_never_replaced() {
     let root = tempfile::tempdir().expect("root");
@@ -381,8 +466,10 @@ fn sandboxed_local_dependency_install_publishes_verified_tree() {
     use codex_protocol::config_types::WindowsSandboxLevel;
     use codex_sandboxing::SandboxDirectSpawnRuntime;
 
-    let sandbox_helper = std::env::var_os("CODEX_WORKFLOW_TEST_SANDBOX")
-        .expect("CODEX_WORKFLOW_TEST_SANDBOX must name the built sandbox helper");
+    let Some(sandbox_helper) = std::env::var_os("CODEX_WORKFLOW_TEST_SANDBOX") else {
+        eprintln!("skipping sandboxed Bun install: bubblewrap user namespaces are unavailable");
+        return;
+    };
     let bun = std::env::split_paths(&std::env::var_os("PATH").expect("PATH"))
         .map(|directory| directory.join("bun"))
         .find(|candidate| candidate.is_file())
