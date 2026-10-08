@@ -199,6 +199,32 @@ impl SecureDirectory {
         }
     }
 
+    /// Enumerates source names before portable-path validation so checkout `.git` can be skipped.
+    #[cfg(windows)]
+    pub(super) fn list_raw_names(
+        &self,
+        maximum_entries: usize,
+        cancelled: Option<&AtomicBool>,
+    ) -> anyhow::Result<Vec<String>> {
+        let mut names = Vec::new();
+        for entry in fs::read_dir(self.path.as_path())? {
+            if cancelled.is_some_and(|signal| signal.load(Ordering::Relaxed)) {
+                bail!("managed workflow directory scan was cancelled");
+            }
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name
+                .to_str()
+                .context("workflow source entry must be UTF-8")?;
+            names.push(name.to_owned());
+            if names.len() > maximum_entries {
+                bail!("workflow source enumeration exceeds its entry limit");
+            }
+        }
+        names.sort();
+        Ok(names)
+    }
+
     #[cfg(unix)]
     pub(super) fn device_id(&self) -> anyhow::Result<rustix::fs::Dev> {
         Ok(rustix::fs::fstat(&self.handle)?.st_dev)

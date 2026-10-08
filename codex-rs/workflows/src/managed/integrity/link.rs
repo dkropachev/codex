@@ -11,7 +11,7 @@ use super::is_windows_reparse_point;
 
 const MAX_DEPENDENCY_LINK_DEPTH: usize = 32;
 
-pub(super) fn validate_dependency_link(
+pub(in crate::managed) fn validate_dependency_link(
     node_modules: &Path,
     link: &Path,
     target: &Path,
