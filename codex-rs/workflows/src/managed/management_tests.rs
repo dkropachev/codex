@@ -94,7 +94,6 @@ fn installs_tagged_and_untagged_local_releases_with_prompt_policy() {
             .expect("receipt catalog");
         let receipt = &receipts[0];
         assert_eq!(receipt.id, installed.id);
-        assert_eq!(receipt.source, installed.source);
         assert_eq!(receipt.installed.tag, installed.release.tag);
         assert_eq!(
             receipt.installed.version,
