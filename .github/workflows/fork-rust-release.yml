@@ -198,6 +198,7 @@ jobs:
     needs:
       - validate
       - release-checks
+    if: ${{ always() && needs.validate.result == 'success' && needs.release-checks.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -252,10 +253,15 @@ jobs:
             --title "$VERSION" \
             --notes-file "$notes"
 
+      - name: Skip release preparation for manual package operations
+        if: ${{ needs.validate.outputs.mode != 'release' }}
+        run: echo 'Manual dry-runs and backfills do not create a release.'
+
   build:
     needs:
       - validate
       - prepare-release
+    if: ${{ always() && needs.validate.result == 'success' && needs.prepare-release.result == 'success' }}
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
@@ -304,6 +310,31 @@ jobs:
         with:
           toolchain: ${{ steps.toolchain.outputs.version }}
           targets: ${{ matrix.target }}
+
+      - name: Install sccache (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: sccache
+          version: 0.16.0
+
+      - name: Configure sccache (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "SCCACHE_DIR=${RUNNER_TEMP}/sccache" >> "$GITHUB_ENV"
+          echo "SCCACHE_CACHE_SIZE=4G" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
+      - name: Restore sccache objects (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ runner.temp }}/sccache
+          key: sccache-fork-release-${{ matrix.target }}-${{ hashFiles('codex-rs/rust-toolchain.toml') }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-fork-release-${{ matrix.target }}-${{ hashFiles('codex-rs/rust-toolchain.toml') }}-
 
       - name: Use hermetic Cargo home
         if: ${{ runner.os == 'Linux' }}
@@ -372,9 +403,27 @@ jobs:
         run: |
           set -euo pipefail
           export STABLE_GIT_COMMIT="$(git rev-parse HEAD)"
-          cargo build --locked --target "$TARGET" --release \
+          build_args=()
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            build_args+=(--timings)
+          fi
+          cargo build --locked --target "$TARGET" --release "${build_args[@]}" \
             --bin codex \
             --bin codex-code-mode-host
+
+      - name: Upload Cargo timings (macOS)
+        if: ${{ always() && runner.os == 'macOS' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: cargo-timings-fork-release-${{ matrix.target }}
+          path: codex-rs/target/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
+
+      - name: sccache stats (macOS)
+        if: ${{ always() && runner.os == 'macOS' }}
+        continue-on-error: true
+        shell: bash
+        run: sccache --show-stats
 
       - name: Strip Codex binaries
         shell: bash
