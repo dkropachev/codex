@@ -65,21 +65,21 @@ fn uninstall_removes_managed_payload_and_receipt() {
     assert!(
         store
             .journals
-            .list_names(10, None)
+            .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
             .expect("journals")
             .is_empty()
     );
     assert!(
         store
             .backups
-            .list_names(10, None)
+            .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
             .expect("backups")
             .is_empty()
     );
     assert!(
         store
             .staging
-            .list_names(10, None)
+            .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
             .expect("staging")
             .is_empty()
     );
@@ -109,7 +109,7 @@ fn uninstall_rejects_dirty_payload_and_stale_receipt() {
     assert!(
         store
             .journals
-            .list_names(10, None)
+            .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
             .expect("journals")
             .is_empty()
     );
