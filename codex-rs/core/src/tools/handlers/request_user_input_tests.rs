@@ -3,7 +3,6 @@ use crate::GuardianAuthorizationVersion;
 use crate::context::GuardianReviewEvidence;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
-use crate::session::tests::make_session_and_context_with_auth_and_config_and_rx;
 use crate::session::tests::make_session_and_context_with_rx;
 use crate::session::tests::update_selected_settings_for_test;
 use crate::session::tests::update_turn_settings_for_test;
