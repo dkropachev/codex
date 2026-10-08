@@ -47,6 +47,7 @@ pub struct ManagedWorkflowInstallation {
 pub struct ManagedWorkflowService {
     store: ManagedWorkflowStore,
     management_root: AbsolutePathBuf,
+    fetch_root: AbsolutePathBuf,
 }
 
 impl ManagedWorkflowService {
@@ -61,6 +62,7 @@ impl ManagedWorkflowService {
         Ok(Self {
             store,
             management_root: codex_home.join(".workflow-management"),
+            fetch_root: codex_home.join(".workflow-fetch"),
         })
     }
 
@@ -77,7 +79,7 @@ impl ManagedWorkflowService {
         let source = WorkflowGitSource::parse(source)?;
         let release = super::git_command::resolve_workflow_git_release(&source, Some(cancelled))?;
         let staged = fetch::stage_resolved_workflow_release_cancellable(
-            &self.management_root.join("fetch"),
+            &self.fetch_root,
             &source,
             &release,
             cancelled,
