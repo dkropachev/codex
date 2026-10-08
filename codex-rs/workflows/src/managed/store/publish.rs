@@ -12,6 +12,7 @@ use super::journal::ManagedWorkflowNextAction;
 use super::journal::ManagedWorkflowOperation;
 use super::journal::journal_file_name;
 use super::journal::read_journal;
+use super::journal::read_journal_named;
 use super::journal::read_marker;
 use super::journal::write_journal;
 use super::prepare::PreparedWorkflowRelease;
@@ -45,18 +46,7 @@ pub(super) fn commit_fresh(
             bail!("managed workflow has an unresolved transaction journal");
         }
     }
-    let previous = compare_current(&store.receipts, &locked.id, expected)?;
-    if previous.is_some() || !matches!(expected, ExpectedCurrent::Absent) {
-        bail!("fresh workflow install requires an absent receipt");
-    }
-    if let Some(parent) = active_parent(&store.active_root, &locked.id, ParentMode::Existing)?
-        && parent
-            .directory()
-            .optional_existing_child(leaf(&locked.id)?)?
-            .is_some()
-    {
-        bail!("managed workflow active target already exists");
-    }
+    ensure_fresh_target(store, locked, expected)?;
     if let Err(error) = write_journal(&store.journals, &prepared.journal, /*replace*/ false) {
         // The atomic rename may have succeeded before a directory sync failed.
         // Keep the payload whenever journal publication is ambiguous.
@@ -69,6 +59,57 @@ pub(super) fn commit_fresh(
     let journal = prepared.journal;
     drop(prepared.staging);
     finish_fresh(store, journal)
+}
+
+pub(in crate::managed) fn ensure_fresh_target(
+    store: &ManagedWorkflowStore,
+    locked: &LockedManagedWorkflow,
+    expected: &ExpectedCurrent,
+) -> anyhow::Result<()> {
+    let target_prefix = format!("{}/", locked.id);
+    for name in store
+        .journals
+        .list_names(/*maximum_entries*/ 4_096, /*cancelled*/ None)?
+    {
+        let journal = match read_journal_named(&store.journals, &name) {
+            Ok(journal) => journal,
+            Err(_) if !store.journals.child_exists(&name)? => continue,
+            Err(error) => return Err(error),
+        };
+        if journal.id == locked.id
+            || journal.id.starts_with(&target_prefix)
+            || locked.id.starts_with(&format!("{}/", journal.id))
+        {
+            bail!("managed workflow install target overlaps a pending transaction");
+        }
+    }
+    for (separator, _) in locked.id.match_indices('/') {
+        let ancestor = &locked.id[..separator];
+        if read_pending_receipt(&store.receipts, ancestor)?.is_some() {
+            bail!("managed workflow install target is inside an installed workflow");
+        }
+        if let Some(parent) = active_parent(&store.active_root, ancestor, ParentMode::Existing)?
+            && let Some(directory) = parent
+                .directory()
+                .optional_existing_child(leaf(ancestor)?)?
+            && directory.child_exists("codex-managed-workflow")?
+        {
+            bail!("managed workflow install target is inside a marked workflow");
+        }
+    }
+    let previous = compare_current(&store.receipts, &locked.id, expected)?;
+    if previous.is_some() || !matches!(expected, ExpectedCurrent::Absent) {
+        bail!("fresh workflow install requires an absent receipt");
+    }
+    if let Some(parent) = active_parent(&store.active_root, &locked.id, ParentMode::Existing)?
+        && parent
+            .directory()
+            .optional_existing_child(leaf(&locked.id)?)?
+            .is_some()
+    {
+        bail!("managed workflow active target already exists");
+    }
+    Ok(())
 }
 
 pub(super) fn validate_prepared(

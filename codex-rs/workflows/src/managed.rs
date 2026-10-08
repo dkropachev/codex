@@ -9,11 +9,16 @@ mod git_command;
 )]
 mod integrity;
 mod jsonc;
+mod management;
 mod release;
 mod source;
 #[allow(dead_code, reason = "used by managed lifecycle stages")]
 mod store;
 
+pub use management::ManagedWorkflowDependencyRuntime;
+pub use management::ManagedWorkflowInstallRequest;
+pub use management::ManagedWorkflowInstallation;
+pub use management::ManagedWorkflowService;
 pub use release::ResolvedWorkflowRelease;
 pub use source::WorkflowGitSource;
 
