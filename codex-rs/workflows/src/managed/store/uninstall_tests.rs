@@ -159,7 +159,7 @@ fn startup_recovers_a_journal_before_moving_the_release() {
 
 #[test]
 fn recovery_finishes_each_uninstall_crash_point_twice() {
-    for phase in 0..8 {
+    for phase in 0..9 {
         let root = tempfile::tempdir().expect("root");
         let store = store(root.path());
         let (lock, receipt) = installed(&store);
@@ -203,7 +203,7 @@ fn recovery_finishes_each_uninstall_crash_point_twice() {
             write_journal(&store.journals, &journal, /*replace*/ true)
                 .expect("advance journal to receipt removal");
         }
-        if (3..=6).contains(&phase) {
+        if (3..=6).contains(&phase) || phase == 8 {
             remove_receipt_and_empty_directories(&store.receipts, &journal.id)
                 .expect("remove receipt");
         }
@@ -224,7 +224,7 @@ fn recovery_finishes_each_uninstall_crash_point_twice() {
                 .remove_empty_child("build", identity)
                 .expect("remove receipt leaf");
         }
-        if (4..=6).contains(&phase) {
+        if (4..=6).contains(&phase) || phase == 8 {
             journal.next_action = ManagedWorkflowNextAction::Cleanup;
             write_journal(&store.journals, &journal, /*replace*/ true)
                 .expect("advance journal to cleanup");
@@ -241,6 +241,10 @@ fn recovery_finishes_each_uninstall_crash_point_twice() {
                     .join("src/workflow.ts"),
             )
             .expect("simulate interrupted backup cleanup");
+        }
+        if phase == 8 {
+            backup::cleanup_backup(&store, &journal).expect("remove backup");
+            publish::cleanup_stage(&store, &journal).expect("remove staging");
         }
         drop(parent);
         drop(lock);
