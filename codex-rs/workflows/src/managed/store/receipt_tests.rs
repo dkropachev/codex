@@ -77,6 +77,35 @@ fn receipt_v1_round_trip_is_exact_and_bounded() {
 }
 
 #[test]
+fn local_source_receipt_remains_readable_after_source_disappears() {
+    let root = tempfile::tempdir().expect("root");
+    let source = root.path().join("local source");
+    std::fs::create_dir(&source).expect("create source");
+    let source = crate::managed::WorkflowGitSource::parse(source.to_str().expect("UTF-8 path"))
+        .expect("parse local source")
+        .receipt_source()
+        .expect("persist local source");
+    let receipts = receipts(root.path());
+    let receipt = ManagedWorkflowReceipt::new(
+        "team/build".into(),
+        source,
+        release(),
+        WorkflowUpdatePolicy::Prompt,
+    )
+    .expect("local receipt");
+    write_receipt(&receipts, &receipt, /*replace*/ false).expect("write receipt");
+    let source_path = url::Url::parse(&receipt.source)
+        .expect("stored URL")
+        .to_file_path()
+        .expect("local path");
+    std::fs::remove_dir(&source_path).expect("remove source");
+    assert_eq!(
+        read_receipt(&receipts, "team/build").expect("read receipt with missing source"),
+        receipt
+    );
+}
+
+#[test]
 fn oversized_receipt_fails_before_creating_id_directories() {
     let root = tempfile::tempdir().expect("root");
     let receipts = receipts(root.path());
@@ -109,7 +138,8 @@ fn receipt_rejects_unknown_versions_fields_and_unsafe_values() {
     .expect("valid receipt");
     for source in [
         "https://user:secret@example.com/repo",
-        "file:///tmp/repo",
+        "file://server/share/repo",
+        "file:///tmp/../repo",
         "/tmp/repo",
         "C:\\repo",
     ] {

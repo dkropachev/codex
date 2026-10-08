@@ -8,8 +8,14 @@ fn parses_existing_local_path_and_file_url() {
     let canonical = AbsolutePathBuf::from_absolute_path(temp.path())
         .and_then(|path| path.canonicalize())
         .expect("canonical temp dir");
+    let canonical_url = Url::from_file_path(canonical.as_path())
+        .expect("canonical file URL")
+        .to_string();
     let local = WorkflowGitSource(WorkflowGitSourceKind::Local(canonical));
-    assert!(local.receipt_source().is_err());
+    assert_eq!(
+        local.receipt_source().expect("persistable local source"),
+        canonical_url
+    );
 
     assert_eq!(
         WorkflowGitSource::parse(&format!("  {}  ", temp.path().display())).expect("local source"),
