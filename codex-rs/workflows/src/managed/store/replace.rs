@@ -8,6 +8,7 @@ use super::expected::ExpectedCurrent;
 use super::expected::compare_current;
 use super::journal::ManagedWorkflowJournal;
 use super::journal::ManagedWorkflowNextAction;
+use super::journal::ManagedWorkflowOperation;
 use super::journal::journal_file_name;
 use super::journal::read_journal;
 use super::journal::read_marker;
@@ -70,7 +71,7 @@ pub(super) fn recover_replace(
         return Ok(None);
     }
     let journal = read_journal(&store.journals, &locked.id)?;
-    if journal.previous_receipt.is_none() {
+    if journal.operation != ManagedWorkflowOperation::Replace {
         bail!("fresh-install journal requires fresh-install recovery");
     }
     finish_replace(store, journal).map(Some)
@@ -80,6 +81,9 @@ pub(super) fn finish_replace(
     store: &ManagedWorkflowStore,
     mut journal: ManagedWorkflowJournal,
 ) -> anyhow::Result<ManagedWorkflowCommitOutcome> {
+    if journal.operation != ManagedWorkflowOperation::Replace {
+        bail!("replacement recovery requires a replacement journal");
+    }
     let previous = journal
         .previous_receipt
         .as_ref()
@@ -166,6 +170,9 @@ pub(super) fn finish_replace(
         }
         ManagedWorkflowNextAction::Cleanup if !active_is_new || receipt != journal.next_receipt => {
             bail!("cleanup action has no committed replacement")
+        }
+        ManagedWorkflowNextAction::RemoveReceipt => {
+            bail!("replacement journal has an uninstall action")
         }
         ManagedWorkflowNextAction::MoveCurrentAside
         | ManagedWorkflowNextAction::PublishRelease

@@ -5,12 +5,14 @@ use anyhow::bail;
 
 use super::LockedManagedWorkflow;
 use super::ManagedWorkflowStore;
+use super::journal::ManagedWorkflowOperation;
 use super::journal::read_journal;
 use super::journal::read_journal_named;
 use super::operation::recover_marked_bun_operations;
 use super::publish;
 use super::publish::ManagedWorkflowCommitOutcome;
 use super::replace;
+use super::uninstall;
 
 const MAX_JOURNAL_DIRECTORY_ENTRIES: usize = 4_096;
 const MAX_JOURNALS: usize = 1_024;
@@ -39,11 +41,11 @@ pub(super) fn recover_all(
         if cancelled.is_some_and(|signal| signal.load(Ordering::Relaxed)) {
             bail!("managed workflow recovery was cancelled");
         }
-        if journal.previous_receipt.is_some() {
-            replace::finish_replace(store, journal)?;
-        } else {
-            publish::finish_fresh(store, journal)?;
-        }
+        match journal.operation {
+            ManagedWorkflowOperation::Install => publish::finish_fresh(store, journal)?,
+            ManagedWorkflowOperation::Replace => replace::finish_replace(store, journal)?,
+            ManagedWorkflowOperation::Uninstall => uninstall::finish_uninstall(store, journal)?,
+        };
     }
     recover_marked_bun_operations(&store.management, cancelled)?;
     Ok(())
@@ -59,10 +61,12 @@ pub(super) fn recover_locked(
         return Ok(None);
     }
     let journal = read_journal(&store.journals, &locked.id)?;
-    if journal.previous_receipt.is_some() {
-        replace::finish_replace(store, journal).map(Some)
-    } else {
-        publish::finish_fresh(store, journal).map(Some)
+    match journal.operation {
+        ManagedWorkflowOperation::Install => publish::finish_fresh(store, journal).map(Some),
+        ManagedWorkflowOperation::Replace => replace::finish_replace(store, journal).map(Some),
+        ManagedWorkflowOperation::Uninstall => {
+            uninstall::finish_uninstall(store, journal).map(Some)
+        }
     }
 }
 

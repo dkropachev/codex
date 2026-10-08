@@ -9,6 +9,7 @@ use super::expected::compare_current;
 use super::fs::SecureDirectory;
 use super::journal::ManagedWorkflowJournal;
 use super::journal::ManagedWorkflowNextAction;
+use super::journal::ManagedWorkflowOperation;
 use super::journal::journal_file_name;
 use super::journal::read_journal;
 use super::journal::read_marker;
@@ -100,6 +101,9 @@ pub(super) fn finish_fresh(
     store: &ManagedWorkflowStore,
     mut journal: ManagedWorkflowJournal,
 ) -> anyhow::Result<ManagedWorkflowCommitOutcome> {
+    if journal.operation != ManagedWorkflowOperation::Install {
+        bail!("fresh install recovery requires an install journal");
+    }
     let staging = store
         .staging
         .optional_existing_child(&journal.transaction_id)?;
@@ -135,7 +139,7 @@ pub(super) fn finish_fresh(
         ManagedWorkflowNextAction::Cleanup if current.is_none() || current_receipt.is_none() => {
             bail!("cleanup action has no committed active release")
         }
-        ManagedWorkflowNextAction::MoveCurrentAside => {
+        ManagedWorkflowNextAction::MoveCurrentAside | ManagedWorkflowNextAction::RemoveReceipt => {
             bail!("fresh install has a replacement action")
         }
         ManagedWorkflowNextAction::PublishRelease

@@ -22,6 +22,8 @@ mod recovery;
 #[cfg(any(unix, windows))]
 mod replace;
 mod stage;
+#[cfg(any(unix, windows))]
+mod uninstall;
 #[cfg(windows)]
 mod windows_security;
 
@@ -132,6 +134,18 @@ impl ManagedWorkflowStore {
     ) -> anyhow::Result<Option<ManagedWorkflowCommitOutcome>> {
         locked.ensure_store(self)?;
         replace::recover_replace(self, locked)
+    }
+
+    /// Removes a verified managed release through a durable transaction.
+    #[allow(dead_code, reason = "used by workflow lifecycle management")]
+    #[cfg(any(unix, windows))]
+    pub(in crate::managed) fn commit_uninstall(
+        &self,
+        locked: &LockedManagedWorkflow,
+        expected: &ExpectedCurrent,
+    ) -> anyhow::Result<ManagedWorkflowCommitOutcome> {
+        locked.ensure_store(self)?;
+        uninstall::commit_uninstall(self, locked, expected)
     }
 
     /// Copies a verified release into operation-private staging and binds it to a journal marker.
