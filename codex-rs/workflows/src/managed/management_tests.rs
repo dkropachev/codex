@@ -466,10 +466,8 @@ fn sandboxed_local_dependency_install_publishes_verified_tree() {
     use codex_protocol::config_types::WindowsSandboxLevel;
     use codex_sandboxing::SandboxDirectSpawnRuntime;
 
-    let Some(sandbox_helper) = std::env::var_os("CODEX_WORKFLOW_TEST_SANDBOX") else {
-        eprintln!("skipping sandboxed Bun install: bubblewrap user namespaces are unavailable");
-        return;
-    };
+    let sandbox_helper = std::env::var_os("CODEX_WORKFLOW_TEST_SANDBOX")
+        .expect("CODEX_WORKFLOW_TEST_SANDBOX must name the built sandbox helper");
     let bun = std::env::split_paths(&std::env::var_os("PATH").expect("PATH"))
         .map(|directory| directory.join("bun"))
         .find(|candidate| candidate.is_file())

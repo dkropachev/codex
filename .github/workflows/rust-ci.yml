@@ -92,12 +92,8 @@ jobs:
           cargo build -p codex-linux-sandbox --bin codex-linux-sandbox
           mkdir -p "${CARGO_TARGET_DIR}/debug/codex-resources"
           cp "$(command -v bwrap)" "${CARGO_TARGET_DIR}/debug/codex-resources/bwrap"
-          if bwrap --unshare-user --uid 0 --gid 0 --ro-bind / / -- /bin/true >/dev/null 2>&1; then
-            export CODEX_WORKFLOW_TEST_SANDBOX="${CARGO_TARGET_DIR}/debug/codex-linux-sandbox"
-          else
-            echo "bubblewrap user namespaces unavailable; sandboxed Bun install test will skip"
-          fi
-          just workflow-runtime-test
+          bwrap --unshare-user --uid 0 --gid 0 --ro-bind / / -- /bin/true
+          CODEX_WORKFLOW_TEST_SANDBOX="${CARGO_TARGET_DIR}/debug/codex-linux-sandbox" just workflow-runtime-test
       - name: Rust benchmark smoke test
         run: just bench-smoke
 
