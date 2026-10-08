@@ -305,6 +305,25 @@ jobs:
           toolchain: ${{ steps.toolchain.outputs.version }}
           targets: ${{ matrix.target }}
 
+      - name: Install sccache (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: sccache
+          version: 0.7.5
+
+      - name: Configure sccache (macOS)
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${ACTIONS_CACHE_URL:-}" && -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
+            echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          else
+            echo "SCCACHE_DIR=${RUNNER_TEMP}/sccache" >> "$GITHUB_ENV"
+          fi
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
       - name: Use hermetic Cargo home
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -372,9 +391,27 @@ jobs:
         run: |
           set -euo pipefail
           export STABLE_GIT_COMMIT="$(git rev-parse HEAD)"
-          cargo build --locked --target "$TARGET" --release \
+          build_args=()
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            build_args+=(--timings)
+          fi
+          cargo build --locked --target "$TARGET" --release "${build_args[@]}" \
             --bin codex \
             --bin codex-code-mode-host
+
+      - name: Upload Cargo timings (macOS)
+        if: ${{ always() && runner.os == 'macOS' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: cargo-timings-fork-release-${{ matrix.target }}
+          path: codex-rs/target/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
+
+      - name: sccache stats (macOS)
+        if: ${{ always() && runner.os == 'macOS' }}
+        continue-on-error: true
+        shell: bash
+        run: sccache --show-stats
 
       - name: Strip Codex binaries
         shell: bash
