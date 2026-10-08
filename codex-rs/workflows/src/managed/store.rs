@@ -40,7 +40,9 @@ use fs::SecureDirectory;
 use lock::LockMode;
 use lock::ManagedFileLock;
 use prepare::PreparedWorkflowRelease;
-use receipt::ManagedWorkflowReceipt;
+pub(in crate::managed) use receipt::ManagedWorkflowReceipt;
+pub(in crate::managed) use receipt::WorkflowRelease;
+pub(in crate::managed) use receipt::WorkflowUpdatePolicy;
 
 pub(in crate::managed) use operation::ManagedBunOperationDirectory;
 
@@ -48,6 +50,8 @@ pub(in crate::managed) use operation::ManagedBunOperationDirectory;
 pub(in crate::managed) use expected::ExpectedCurrent;
 #[cfg(any(unix, windows))]
 pub(in crate::managed) use publish::ManagedWorkflowCommitOutcome;
+#[cfg(any(unix, windows))]
+pub(in crate::managed) use publish::ensure_fresh_target;
 
 /// Owns the private, same-filesystem metadata layout for managed workflows.
 pub(in crate::managed) struct ManagedWorkflowStore {

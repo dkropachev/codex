@@ -45,18 +45,7 @@ pub(super) fn commit_fresh(
             bail!("managed workflow has an unresolved transaction journal");
         }
     }
-    let previous = compare_current(&store.receipts, &locked.id, expected)?;
-    if previous.is_some() || !matches!(expected, ExpectedCurrent::Absent) {
-        bail!("fresh workflow install requires an absent receipt");
-    }
-    if let Some(parent) = active_parent(&store.active_root, &locked.id, ParentMode::Existing)?
-        && parent
-            .directory()
-            .optional_existing_child(leaf(&locked.id)?)?
-            .is_some()
-    {
-        bail!("managed workflow active target already exists");
-    }
+    ensure_fresh_target(store, locked, expected)?;
     if let Err(error) = write_journal(&store.journals, &prepared.journal, /*replace*/ false) {
         // The atomic rename may have succeeded before a directory sync failed.
         // Keep the payload whenever journal publication is ambiguous.
@@ -69,6 +58,26 @@ pub(super) fn commit_fresh(
     let journal = prepared.journal;
     drop(prepared.staging);
     finish_fresh(store, journal)
+}
+
+pub(in crate::managed) fn ensure_fresh_target(
+    store: &ManagedWorkflowStore,
+    locked: &LockedManagedWorkflow,
+    expected: &ExpectedCurrent,
+) -> anyhow::Result<()> {
+    let previous = compare_current(&store.receipts, &locked.id, expected)?;
+    if previous.is_some() || !matches!(expected, ExpectedCurrent::Absent) {
+        bail!("fresh workflow install requires an absent receipt");
+    }
+    if let Some(parent) = active_parent(&store.active_root, &locked.id, ParentMode::Existing)?
+        && parent
+            .directory()
+            .optional_existing_child(leaf(&locked.id)?)?
+            .is_some()
+    {
+        bail!("managed workflow active target already exists");
+    }
+    Ok(())
 }
 
 pub(super) fn validate_prepared(
