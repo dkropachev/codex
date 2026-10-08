@@ -492,7 +492,7 @@ fn sandboxed_local_dependency_install_publishes_verified_tree() {
                         windows_sandbox_wrapper_executable: None,
                     },
                     linux_sandbox_executable: Some(&sandbox_helper),
-                    use_legacy_landlock: true,
+                    use_legacy_landlock: false,
                     windows_sandbox_level: WindowsSandboxLevel::Disabled,
                     windows_sandbox_private_desktop: false,
                 },
