@@ -198,6 +198,7 @@ jobs:
     needs:
       - validate
       - release-checks
+    if: ${{ always() && needs.validate.result == 'success' && needs.release-checks.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -251,6 +252,10 @@ jobs:
             --latest=false \
             --title "$VERSION" \
             --notes-file "$notes"
+
+      - name: Skip release preparation for manual package operations
+        if: ${{ needs.validate.outputs.mode != 'release' }}
+        run: echo 'Manual dry-runs and backfills do not create a release.'
 
   build:
     needs:
