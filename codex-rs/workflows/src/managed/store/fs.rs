@@ -767,6 +767,30 @@ impl SecureDirectory {
         self.sync()
     }
 
+    #[cfg(any(unix, windows))]
+    pub(super) fn remove_empty_child(
+        &self,
+        name: &str,
+        expected_identity: (u64, u64),
+    ) -> anyhow::Result<()> {
+        validate_component(name)?;
+        let child = self.existing_child(name)?;
+        if child.identity()? != expected_identity {
+            bail!("managed workflow directory changed before removal");
+        }
+        drop(child);
+        #[cfg(unix)]
+        {
+            use rustix::fs::AtFlags;
+            use rustix::fs::unlinkat;
+
+            unlinkat(&self.handle, name, AtFlags::REMOVEDIR)?;
+        }
+        #[cfg(windows)]
+        fs::remove_dir(self.path.join(name).as_path())?;
+        self.sync()
+    }
+
     #[cfg(windows)]
     pub(super) fn remove_regular_file(&self, name: &str) -> anyhow::Result<()> {
         validate_component(name)?;

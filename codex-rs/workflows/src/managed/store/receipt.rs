@@ -242,6 +242,43 @@ pub(super) fn write_receipt(
     directory.write_file("receipt.json", &bytes, replace)
 }
 
+#[cfg(any(unix, windows))]
+pub(super) fn remove_receipt_and_empty_directories(
+    receipts: &SecureDirectory,
+    id: &str,
+) -> anyhow::Result<()> {
+    validate_id(id)?;
+    let components = id.split('/').collect::<Vec<_>>();
+    let mut directories = Vec::with_capacity(components.len());
+    for component in &components {
+        let parent = directories.last().unwrap_or(receipts);
+        match parent.optional_existing_child(component)? {
+            Some(child) => directories.push(child),
+            None => break,
+        }
+    }
+    if directories.len() == components.len() {
+        let leaf = directories.last().context("receipt id is empty")?;
+        if leaf.child_exists("receipt.json")? {
+            leaf.remove_regular_file("receipt.json")?;
+        }
+    }
+    for component in components[..directories.len()].iter().rev() {
+        let child = directories.pop().context("receipt directory disappeared")?;
+        if !child
+            .list_names(/*maximum_entries*/ 4_096, /*cancelled*/ None)?
+            .is_empty()
+        {
+            break;
+        }
+        let identity = child.identity()?;
+        drop(child);
+        let parent = directories.last().unwrap_or(receipts);
+        parent.remove_empty_child(component, identity)?;
+    }
+    Ok(())
+}
+
 enum ReceiptDirectoryMode {
     Existing,
     Create,
