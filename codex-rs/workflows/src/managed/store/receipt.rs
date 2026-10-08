@@ -125,12 +125,14 @@ fn validate_source(source: &str) -> anyhow::Result<()> {
         || source.trim() != source
         || source.chars().any(char::is_control)
         || source.starts_with(['/', '\\'])
-        || source.starts_with("file:")
         || matches!(source.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic())
     {
         bail!("managed workflow receipt source is unsafe");
     }
-    if source.contains("://") || source.contains('@') || source.contains(':') {
+    if source.starts_with("file:") {
+        crate::managed::WorkflowGitSource::validate_receipt_file_url(source)
+            .context("managed workflow receipt source is invalid")?;
+    } else if source.contains("://") || source.contains('@') || source.contains(':') {
         crate::managed::WorkflowGitSource::parse(source)
             .context("managed workflow receipt source is invalid")?;
     } else {
