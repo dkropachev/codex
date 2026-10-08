@@ -238,6 +238,6 @@ pub(super) fn finish_replace(
     Ok(ManagedWorkflowCommitOutcome::Committed)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "replace_tests.rs"]
 mod tests;

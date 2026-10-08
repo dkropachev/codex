@@ -1,8 +1,5 @@
 use anyhow::Context;
 use anyhow::bail;
-use rustix::fs::AtFlags;
-use rustix::fs::statat;
-use rustix::io::Errno;
 
 use super::LockedManagedWorkflow;
 use super::ManagedWorkflowStore;
@@ -10,7 +7,6 @@ use super::cleanup;
 use super::expected::ExpectedCurrent;
 use super::expected::compare_current;
 use super::fs::SecureDirectory;
-use super::fs::device_id_from_stat;
 use super::journal::ManagedWorkflowJournal;
 use super::journal::ManagedWorkflowNextAction;
 use super::journal::journal_file_name;
@@ -78,10 +74,7 @@ pub(super) fn validate_prepared(
     store: &ManagedWorkflowStore,
     prepared: &PreparedWorkflowRelease<'_>,
 ) -> anyhow::Result<()> {
-    let prepared_parent = rustix::fs::fstat(prepared.staging.parent.handle())?;
-    let store_parent = rustix::fs::fstat(store.staging.handle())?;
-    if (prepared_parent.st_dev, prepared_parent.st_ino)
-        != (store_parent.st_dev, store_parent.st_ino)
+    if prepared.staging.parent.identity()? != store.staging.identity()?
         || prepared.journal.transaction_id != prepared.staging.name()
     {
         bail!("prepared workflow release belongs to a different transaction store");
@@ -215,16 +208,12 @@ pub(super) fn verify_published(
     directory: &SecureDirectory,
     journal: &ManagedWorkflowJournal,
 ) -> anyhow::Result<()> {
-    use std::os::unix::fs::MetadataExt;
-
-    let retained = rustix::fs::fstat(directory.handle())?;
-    let named = std::fs::symlink_metadata(directory.path().as_path())?;
-    if !named.is_dir()
-        || named.dev() != device_id_from_stat(retained.st_dev)
-        || named.ino() != retained.st_ino
-    {
+    let retained = directory.identity()?;
+    let named = SecureDirectory::open_root(directory.path())?;
+    if named.identity()? != retained {
         bail!("managed workflow publication changed directory identity");
     }
+    drop(named);
     if !read_marker(directory)?.matches_journal(journal) {
         bail!("managed workflow marker does not match transaction journal");
     }
@@ -235,11 +224,8 @@ pub(super) fn verify_published(
         crate::runner::CommandDeadline::after(std::time::Duration::from_secs(/*secs*/ 60)),
         /*cancelled*/ None,
     )?;
-    let named = std::fs::symlink_metadata(directory.path().as_path())?;
-    if !named.is_dir()
-        || named.dev() != device_id_from_stat(retained.st_dev)
-        || named.ino() != retained.st_ino
-    {
+    let named = SecureDirectory::open_root(directory.path())?;
+    if named.identity()? != retained {
         bail!("managed workflow publication changed directory identity during verification");
     }
     Ok(())
@@ -259,15 +245,12 @@ pub(super) fn cleanup_stage(
     store: &ManagedWorkflowStore,
     journal: &ManagedWorkflowJournal,
 ) -> anyhow::Result<()> {
-    let root = statat(
-        store.staging.handle(),
-        journal.transaction_id.as_str(),
-        AtFlags::SYMLINK_NOFOLLOW,
-    );
-    let (device, inode) = match root {
-        Ok(metadata) => (device_id_from_stat(metadata.st_dev), metadata.st_ino),
-        Err(Errno::NOENT) => (0, 0),
-        Err(error) => return Err(error).context("failed to inspect transaction cleanup root"),
+    let (device, inode) = match store
+        .staging
+        .optional_existing_child(&journal.transaction_id)?
+    {
+        Some(root) => root.identity()?,
+        None => (0, 0),
     };
     cleanup::remove_tree(
         &store.staging,
@@ -280,15 +263,7 @@ pub(super) fn cleanup_stage(
 }
 
 pub(super) fn journal_exists(journals: &SecureDirectory, id: &str) -> anyhow::Result<bool> {
-    match statat(
-        journals.handle(),
-        journal_file_name(id)?.as_str(),
-        AtFlags::SYMLINK_NOFOLLOW,
-    ) {
-        Ok(_) => Ok(true),
-        Err(Errno::NOENT) => Ok(false),
-        Err(error) => Err(error).context("failed to inspect managed workflow journal"),
-    }
+    journals.child_exists(&journal_file_name(id)?)
 }
 
 pub(super) enum ParentMode {
@@ -335,6 +310,6 @@ pub(super) fn leaf(id: &str) -> anyhow::Result<&str> {
         .context("managed workflow id is empty")
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "publish_tests.rs"]
 mod tests;
