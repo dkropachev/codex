@@ -156,3 +156,132 @@ fn startup_recovers_a_journal_before_moving_the_release() {
         Vec::new()
     );
 }
+
+#[test]
+fn recovery_finishes_each_uninstall_crash_point_twice() {
+    for phase in 0..9 {
+        let root = tempfile::tempdir().expect("root");
+        let store = store(root.path());
+        let (lock, receipt) = installed(&store);
+        let active = store
+            .active_root
+            .existing_child("team")
+            .expect("active parent")
+            .existing_child("build")
+            .expect("active release");
+        let evidence = published_payload_evidence(
+            active.path().as_path(),
+            VERIFICATION_LIMITS,
+            crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
+            /*cancelled*/ None,
+        )
+        .expect("published evidence");
+        drop(active);
+        let mut staging = TransactionStaging::create(&store.staging).expect("staging");
+        let mut journal =
+            ManagedWorkflowJournal::new_uninstall(staging.name().to_owned(), receipt, evidence)
+                .expect("uninstall journal");
+        write_journal(&store.journals, &journal, /*replace*/ false).expect("write journal");
+        staging.retain_for_recovery();
+        drop(staging);
+        let parent = store.active_root.existing_child("team").expect("parent");
+        if phase >= 1 {
+            backup::move_current_aside(&store, &journal, &parent, "build")
+                .expect("move active aside");
+        }
+        if phase == 1 {
+            let conflict = parent.child("build").expect("conflicting active directory");
+            assert!(store.recover_locked(&lock).is_err());
+            let identity = conflict.identity().expect("conflict identity");
+            drop(conflict);
+            parent
+                .remove_empty_child("build", identity)
+                .expect("remove conflict");
+        }
+        if phase >= 2 {
+            journal.next_action = ManagedWorkflowNextAction::RemoveReceipt;
+            write_journal(&store.journals, &journal, /*replace*/ true)
+                .expect("advance journal to receipt removal");
+        }
+        if (3..=6).contains(&phase) || phase == 8 {
+            remove_receipt_and_empty_directories(&store.receipts, &journal.id)
+                .expect("remove receipt");
+        }
+        if phase == 7 {
+            let receipt_parent = store
+                .receipts
+                .existing_child("team")
+                .expect("receipt parent");
+            let receipt_leaf = receipt_parent
+                .existing_child("build")
+                .expect("receipt leaf");
+            receipt_leaf
+                .remove_regular_file("receipt.json")
+                .expect("remove receipt file");
+            let identity = receipt_leaf.identity().expect("receipt directory identity");
+            drop(receipt_leaf);
+            receipt_parent
+                .remove_empty_child("build", identity)
+                .expect("remove receipt leaf");
+        }
+        if (4..=6).contains(&phase) || phase == 8 {
+            journal.next_action = ManagedWorkflowNextAction::Cleanup;
+            write_journal(&store.journals, &journal, /*replace*/ true)
+                .expect("advance journal to cleanup");
+        }
+        if phase == 5 {
+            backup::cleanup_backup(&store, &journal).expect("remove backup");
+        }
+        if phase == 6 {
+            fs::remove_file(
+                store
+                    .backups
+                    .path()
+                    .join(&journal.transaction_id)
+                    .join("src/workflow.ts"),
+            )
+            .expect("simulate interrupted backup cleanup");
+        }
+        if phase == 8 {
+            backup::cleanup_backup(&store, &journal).expect("remove backup");
+            publish::cleanup_stage(&store, &journal).expect("remove staging");
+        }
+        drop(parent);
+        drop(lock);
+        drop(store);
+        let home = AbsolutePathBuf::from_absolute_path_checked(root.path()).expect("home");
+        let workflow_root =
+            AbsolutePathBuf::from_absolute_path_checked(root.path().join("workflows"))
+                .expect("workflow root");
+        for attempt in 0..2 {
+            let recovered = ManagedWorkflowStore::create(&home, &workflow_root)
+                .expect("startup uninstall recovery");
+            assert_eq!(
+                recovered
+                    .list_receipts(/*cancelled*/ None)
+                    .expect("receipt catalog"),
+                Vec::new(),
+                "phase {phase}, attempt {attempt}"
+            );
+            assert!(!root.path().join("workflows/team/build").exists());
+            assert_eq!(
+                [
+                    recovered
+                        .journals
+                        .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
+                        .expect("journals"),
+                    recovered
+                        .backups
+                        .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
+                        .expect("backups"),
+                    recovered
+                        .staging
+                        .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
+                        .expect("staging"),
+                ],
+                [Vec::<String>::new(), Vec::new(), Vec::new()],
+                "phase {phase}, attempt {attempt}"
+            );
+        }
+    }
+}
