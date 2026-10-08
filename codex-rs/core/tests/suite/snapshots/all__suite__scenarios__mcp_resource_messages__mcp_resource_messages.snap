@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios_mcp_resource_messages.rs
+assertion_line: 152
 expression: "context_snapshot::format_request_history_snapshot(\"Catalog resource descriptions and parameter guidance accompany discovery and reading through Code Mode.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Catalog resource descriptions and parameter guidance accompany discovery and reading through Code Mode.
@@ -15,7 +16,7 @@ Settings:
     
     User authorization and preferences persist across turns. Do not request permission again when the user h... any guidelines provided in skills or external files. [hash=911f91c92c72882c]
     
-    <OMITTED 155 LINES; ~4935 TOKENS; hash=5573869716192298>
+    <OMITTED 155 LINES; ~4895 TOKENS; hash=fd5ef18a80f62502>
     
     - Skill naming: If a plugin contributes skills, those skill entries are prefixed with plugin_name: in the Skills list.
     - MCP naming: Plugin-provided MCP tools keep standard MCP identifiers such as mcp__server__tool; use tool provenance to tell which plugin they come from.
@@ -32,14 +33,14 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (7; hash=de6aceb7b0185d08):
-    - custom/exec: Run JavaScript code to orchestrate/compose tool calls - Evaluates the provided JavaScript code in...; hash=50ea9b7f60e145b5
+  tools (7; hash=df66462d034815fb):
+    - custom/exec: Run JavaScript code to orchestrate/compose tool calls - Evaluates the provided JavaScript code in...; hash=181700e6e10d2a85
     - function/wait: Waits on a yielded `exec` cell and returns new output or completion. - Use `wait` only after `exe...; args=[cell_id, max_tokens, terminate, yield_time_ms]; hash=6692d8f6c55be489
-    - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
+    - function/request_user_input: Request user input for one to three short questions and wait for the response. Set autoResolution...; args=[autoResolutionMs, questions]; hash=dbb20a8935aee54b
     - function/request_user_input_async: Ask the user one or more questions during ongoing work. Use this tool only to request missing inf...; args=[questions]; hash=d6d74f33db330162
     - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
       - function/sleep
-    - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=fd994b11525da73c
+    - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=6bdef832a6efb49a
       - function/followup_task
       - function/interrupt_agent
       - function/list_agents
@@ -63,12 +64,15 @@ Settings:
 
         Use the `request_user_input` tool only when it is listed in the available tools for this turn.
 
+        In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions.
+
         Use the `request_user_input` tool only for optional questions where the answer would materially improve the quality of the work.
 
         If `request_user_input` returns no answers, continue with best judgment instead of asking again or treating the turn as blocked.
 
         Never use the `request_user_input` tool for permission requests or permission-related escalations.
-        </collaboration_mode>
+
+        If explicit user input is required for another reason before progress can safely continue, do not use th... as a textual assistant message.</collaboration_mode> [hash=8213052bde4a62b2]
 01:message/developer:
     <multi_agent_role>You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
 

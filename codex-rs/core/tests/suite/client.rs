@@ -257,8 +257,8 @@ fn model_catalog_with_verbosity_model(model_slug: &str) -> ModelsResponse {
     let mut model = model_catalog
         .models
         .into_iter()
-        .find(|model| model.slug == "gpt-5.4")
-        .unwrap_or_else(|| panic!("gpt-5.4 exists in bundled models.json"));
+        .find(|model| model.slug == "gpt-5.5")
+        .unwrap_or_else(|| panic!("gpt-5.5 exists in bundled models.json"));
     model.slug = model_slug.to_string();
     model.display_name = model_slug.to_string();
     model.support_verbosity = true;

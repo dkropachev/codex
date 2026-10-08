@@ -36,7 +36,7 @@ use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 
-const DEFAULT_MODEL: &str = "gpt-5.4";
+const DEFAULT_MODEL: &str = "gpt-5.5";
 const ROUTED_MODEL: &str = "gpt-5.2";
 
 fn disabled_turn(test: &TestCodex, prompt: &str) -> TurnInputRequest {
