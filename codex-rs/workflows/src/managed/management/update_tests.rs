@@ -198,53 +198,36 @@ fn missing_local_source_is_visible_without_corrupting_receipt() {
 }
 
 #[test]
-fn dismissal_matches_only_the_exact_release() {
+fn untagged_head_advances_without_changing_installed_receipt() {
     let root = tempfile::tempdir().expect("root");
     let repository = root.path().join("source");
-    source(&repository, Some("1.0.0"));
-    let source =
-        WorkflowGitSource::parse(repository.to_str().expect("UTF-8 source")).expect("source");
-    let initial =
-        super::super::super::resolve_workflow_git_release(&source).expect("initial release");
-    let mut receipt = ManagedWorkflowReceipt::new(
-        "team/build".into(),
-        source.receipt_source().expect("stored source"),
-        crate::managed::store::WorkflowRelease {
-            tag: initial.tag,
-            version: initial.version.map(|version| version.to_string()),
-            commit: initial.advertised_object_id,
-        },
-        WorkflowUpdatePolicy::Prompt,
-    )
-    .expect("receipt");
-    fs::write(repository.join("package.json"), r#"{"version":"1.1.0"}"#)
-        .expect("new package version");
-    commit(&repository);
-    git(&repository, &["tag", "v1.1.0"]);
-    let selected =
-        super::super::super::resolve_workflow_git_release(&source).expect("selected release");
-    receipt.dismissed_release = Some(crate::managed::store::WorkflowRelease {
-        tag: selected.tag,
-        version: selected.version.map(|version| version.to_string()),
-        commit: selected.advertised_object_id,
-    });
+    source(&repository, /*version*/ None);
+    let service = service(root.path());
     let cancelled = AtomicBool::new(false);
-    assert!(matches!(
-        check_release(&receipt, &cancelled).expect("dismissed check"),
-        ManagedWorkflowUpdate::Available {
-            dismissed: true,
-            ..
-        }
-    ));
-    fs::write(repository.join("package.json"), r#"{"version":"1.2.0"}"#)
-        .expect("newer package version");
+    install(&service, &repository, &cancelled);
+    let before = service.list_installed().expect("installed receipt");
+    assert_eq!(
+        service
+            .check_update("team/build", &cancelled)
+            .expect("unchanged HEAD check")
+            .update,
+        ManagedWorkflowUpdate::Current
+    );
+    fs::write(
+        repository.join("src/workflow.ts"),
+        "export default { next: true };\n",
+    )
+    .expect("new HEAD source");
     commit(&repository);
-    git(&repository, &["tag", "v1.2.0"]);
     assert!(matches!(
-        check_release(&receipt, &cancelled).expect("newer release check"),
+        service
+            .check_update("team/build", &cancelled)
+            .expect("new HEAD check")
+            .update,
         ManagedWorkflowUpdate::Available {
             dismissed: false,
             ..
         }
     ));
+    assert_eq!(service.list_installed().expect("unchanged receipt"), before);
 }

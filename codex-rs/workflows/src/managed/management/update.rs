@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering as AtomicOrdering;
 
 use anyhow::Context;
 use anyhow::bail;
@@ -68,6 +69,7 @@ impl ManagedWorkflowService {
         let workflow = ManagedWorkflowRecord::from(receipt.clone());
         let update = match check_release(&receipt, cancelled) {
             Ok(update) => update,
+            Err(error) if cancelled.load(AtomicOrdering::Relaxed) => return Err(error),
             Err(error) => ManagedWorkflowUpdate::Error(format!("{error:#}")),
         };
         Ok(ManagedWorkflowUpdateCheck { workflow, update })
