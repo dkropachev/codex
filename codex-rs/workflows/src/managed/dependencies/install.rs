@@ -286,6 +286,11 @@ fn classify_output(
         bail!("managed Bun {operation} stderr exceeded its configured limit");
     }
     if !output.status.success() {
+        #[cfg(test)]
+        eprintln!(
+            "managed Bun {operation} stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         bail!(
             "managed Bun {operation} failed with status {}",
             output.status
