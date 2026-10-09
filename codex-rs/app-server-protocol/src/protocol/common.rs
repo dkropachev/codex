@@ -734,6 +734,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadWorkflowCommandResponse,
     },
+    #[experimental("workflow/list")]
+    WorkflowList => "workflow/list" {
+        params: v2::WorkflowListParams,
+        serialization: None,
+        response: v2::WorkflowListResponse,
+    },
     ThreadApproveGuardianDeniedAction => "thread/approveGuardianDeniedAction" {
         params: v2::ThreadApproveGuardianDeniedActionParams,
         serialization: thread_id(params.thread_id),

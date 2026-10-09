@@ -6660,6 +6660,21 @@ class WindowsWorldWritableWarningNotification(BaseModel):
     sample_paths: Annotated[list[str], Field(alias="samplePaths")]
 
 
+class WorkflowReleaseIdentity(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    commit: str
+    tag: str | None = None
+    version: str | None = None
+
+
+class WorkflowUpdatePolicy(Enum):
+    prompt = "prompt"
+    automatic = "automatic"
+    manual = "manual"
+
+
 class WorkspaceMessageType(Enum):
     headline = "headline"
     announcement = "announcement"
@@ -8513,6 +8528,18 @@ class LoginAccountParams(
         | AmazonBedrockAccessKeysLoginAccountParams,
         Field(title="LoginAccountParams"),
     ]
+
+
+class ManagedWorkflowInfo(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    dismissed_release: Annotated[
+        WorkflowReleaseIdentity | None, Field(alias="dismissedRelease")
+    ] = None
+    installed: WorkflowReleaseIdentity
+    policy: WorkflowUpdatePolicy
+    source: str
 
 
 class McpResourceReadParams(BaseModel):
@@ -10464,6 +10491,17 @@ class WindowsSandboxSetupCompletedNotification(BaseModel):
     error: str | None = None
     mode: WindowsSandboxSetupMode
     success: bool
+
+
+class WorkflowSummary(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    command: str
+    description: str
+    id: str
+    managed: ManagedWorkflowInfo | None = None
+    path: Annotated[str, Field(description="A local path on the app-server host.")]
 
 
 class WorkspaceMessage(BaseModel):

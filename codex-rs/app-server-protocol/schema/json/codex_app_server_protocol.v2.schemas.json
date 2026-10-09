@@ -10549,6 +10549,35 @@
       ],
       "type": "object"
     },
+    "ManagedWorkflowInfo": {
+      "properties": {
+        "dismissedRelease": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WorkflowReleaseIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "installed": {
+          "$ref": "#/definitions/WorkflowReleaseIdentity"
+        },
+        "policy": {
+          "$ref": "#/definitions/WorkflowUpdatePolicy"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "installed",
+        "policy",
+        "source"
+      ],
+      "type": "object"
+    },
     "MarketplaceAddParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -24693,6 +24722,71 @@
       ],
       "title": "WindowsWorldWritableWarningNotification",
       "type": "object"
+    },
+    "WorkflowReleaseIdentity": {
+      "properties": {
+        "commit": {
+          "type": "string"
+        },
+        "tag": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "commit"
+      ],
+      "type": "object"
+    },
+    "WorkflowSummary": {
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "managed": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ManagedWorkflowInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "description": "A local path on the app-server host.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "description",
+        "id",
+        "path"
+      ],
+      "type": "object"
+    },
+    "WorkflowUpdatePolicy": {
+      "enum": [
+        "prompt",
+        "automatic",
+        "manual"
+      ],
+      "type": "string"
     },
     "WorkspaceMessage": {
       "properties": {

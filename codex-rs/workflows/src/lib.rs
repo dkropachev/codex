@@ -21,6 +21,7 @@ pub use completion::complete_workflow_cancellable;
 pub use discovery::WorkflowCommand;
 pub use discovery::WorkflowCommandOptionHint;
 pub use discovery::discover_workflow_commands;
+pub use discovery::discover_workflow_commands_bounded;
 pub use input::WorkflowInvocation;
 pub use input::WorkflowInvocationError;
 pub use input::build_hosted_workflow_invocation;

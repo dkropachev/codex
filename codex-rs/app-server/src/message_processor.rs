@@ -48,6 +48,7 @@ use crate::request_processors::ThreadRequestProcessor;
 use crate::request_processors::ThreadResumeTarget;
 use crate::request_processors::TurnRequestProcessor;
 use crate::request_processors::WindowsSandboxRequestProcessor;
+use crate::request_processors::WorkflowListProcessor;
 use crate::request_processors::read_server_diagnostics;
 use crate::request_serialization::QueuedInitializedRequest;
 use crate::request_serialization::RequestSerializationQueueKey;
@@ -167,6 +168,7 @@ pub(crate) struct MessageProcessor {
     thread_processor: ThreadRequestProcessor,
     turn_processor: TurnRequestProcessor,
     windows_sandbox_processor: WindowsSandboxRequestProcessor,
+    workflow_list_processor: WorkflowListProcessor,
     request_serialization_queues: RequestSerializationQueues,
 }
 
@@ -580,6 +582,7 @@ impl MessageProcessor {
             Arc::clone(&config),
             config_manager,
         );
+        let workflow_list_processor = WorkflowListProcessor::new(Arc::clone(&config));
 
         Self {
             turn_admission,
@@ -611,6 +614,7 @@ impl MessageProcessor {
             thread_processor,
             turn_processor,
             windows_sandbox_processor,
+            workflow_list_processor,
             request_serialization_queues,
         }
     }
@@ -1516,6 +1520,9 @@ impl MessageProcessor {
                 self.thread_processor
                     .thread_workflow_command(&request_id, params)
                     .await
+            }
+            ClientRequest::WorkflowList { params, .. } => {
+                self.workflow_list_processor.list(params).await
             }
             ClientRequest::ThreadApproveGuardianDeniedAction { params, .. } => {
                 self.thread_processor
