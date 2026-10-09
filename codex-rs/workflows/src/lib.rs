@@ -42,6 +42,8 @@ pub use managed::ManagedWorkflowDependencyRuntime;
 pub use managed::ManagedWorkflowInstallRequest;
 pub use managed::ManagedWorkflowInstallation;
 pub use managed::ManagedWorkflowRecord;
+#[cfg(any(unix, windows))]
+pub use managed::ManagedWorkflowRunWorkspace;
 pub use managed::ManagedWorkflowService;
 #[cfg(any(unix, windows))]
 pub use managed::ManagedWorkflowUninstallation;

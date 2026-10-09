@@ -21,6 +21,8 @@ mod receipt;
 mod recovery;
 #[cfg(any(unix, windows))]
 mod replace;
+#[cfg(any(unix, windows))]
+mod run_workspace;
 mod stage;
 #[cfg(any(unix, windows))]
 mod uninstall;
@@ -85,8 +87,21 @@ impl LockedManagedWorkflow {
 }
 
 pub(in crate::managed) struct ManagedWorkflowRunGuard {
+    id: String,
+    #[cfg(any(unix, windows))]
+    management_identity: (u64, u64),
     _global: ManagedFileLock,
     _workflows: Vec<ManagedFileLock>,
+}
+
+#[cfg(any(unix, windows))]
+impl ManagedWorkflowRunGuard {
+    fn ensure_store(&self, store: &ManagedWorkflowStore, id: &str) -> anyhow::Result<()> {
+        if self.management_identity != store.management.identity()? || self.id != id {
+            bail!("managed workflow execution lock belongs to a different store or ID");
+        }
+        Ok(())
+    }
 }
 
 pub(in crate::managed) struct ManagedWorkflowRecoveryGuard {
@@ -299,7 +314,9 @@ impl ManagedWorkflowStore {
             if existing.device_id()? != active_root.device_id()? {
                 bail!("managed workflow metadata crossed a filesystem boundary");
             }
-            for name in ["locks", "receipts", "journals", "staging", "backups"] {
+            for name in [
+                "locks", "receipts", "journals", "staging", "backups", "runs",
+            ] {
                 if let Some(child) = existing.optional_existing_child(name)?
                     && child.device_id()? != active_root.device_id()?
                 {
@@ -381,9 +398,23 @@ impl ManagedWorkflowStore {
         let global = ManagedFileLock::acquire(global, LockMode::Shared, cancelled)?;
         let workflows = self.workflow_locks(id, LockMode::Shared, cancelled)?;
         Ok(ManagedWorkflowRunGuard {
+            id: id.to_owned(),
+            #[cfg(any(unix, windows))]
+            management_identity: self.management.identity()?,
             _global: global,
             _workflows: workflows,
         })
+    }
+
+    #[cfg(any(unix, windows))]
+    pub(in crate::managed) fn create_run_copy(
+        &self,
+        locked: &ManagedWorkflowRunGuard,
+        id: &str,
+        cancelled: &AtomicBool,
+    ) -> anyhow::Result<tempfile::TempDir> {
+        locked.ensure_store(self, id)?;
+        run_workspace::create_run_copy(self, id, cancelled)
     }
 
     pub(in crate::managed) fn lock_recovery(
