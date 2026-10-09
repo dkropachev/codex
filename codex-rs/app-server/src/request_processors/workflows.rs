@@ -11,6 +11,7 @@ use codex_app_server_protocol::WorkflowListResponse;
 use codex_app_server_protocol::WorkflowReleaseIdentity;
 use codex_app_server_protocol::WorkflowSummary;
 use codex_app_server_protocol::WorkflowUpdatePolicy;
+use codex_app_server_protocol::WorkflowUpdatesReadParams;
 use codex_core::config::Config;
 use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -21,6 +22,11 @@ use codex_workflows::discover_workflow_commands_bounded;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_params;
 use crate::error_code::method_not_found;
+use crate::outgoing_message::OutgoingMessageSender;
+
+#[path = "workflows/update_state.rs"]
+mod update_state;
+use update_state::WorkflowUpdates;
 
 const DEFAULT_PAGE_LIMIT: usize = 50;
 const MAX_PAGE_LIMIT: usize = 100;
@@ -29,11 +35,29 @@ const MAX_CURSOR_BYTES: usize = 512;
 
 pub(crate) struct WorkflowListProcessor {
     config: Arc<Config>,
+    updates: Option<WorkflowUpdates>,
 }
 
 impl WorkflowListProcessor {
-    pub(crate) fn new(config: Arc<Config>) -> Self {
-        Self { config }
+    pub(crate) fn new(config: Arc<Config>, outgoing: Arc<OutgoingMessageSender>) -> Self {
+        let updates = config
+            .features
+            .enabled(Feature::Workflows)
+            .then(|| WorkflowUpdates::start(Arc::clone(&config), outgoing));
+        Self { config, updates }
+    }
+
+    pub(crate) async fn updates_read(
+        &self,
+        params: WorkflowUpdatesReadParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let Some(updates) = &self.updates else {
+            return Err(method_not_found(
+                "workflow management requires the workflows feature",
+            ));
+        };
+        updates.wait_for_recovery().await;
+        Ok(Some(updates.read(params).await?.into()))
     }
 
     pub(crate) async fn list(
@@ -44,6 +68,9 @@ impl WorkflowListProcessor {
             return Err(method_not_found(
                 "workflow management requires the workflows feature",
             ));
+        }
+        if let Some(updates) = &self.updates {
+            updates.wait_for_recovery().await;
         }
         let limit = params
             .limit

@@ -64,3 +64,54 @@ pub struct WorkflowListResponse {
     pub data: Vec<WorkflowSummary>,
     pub next_cursor: Option<String>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum WorkflowUpdateStatus {
+    Pending,
+    Current,
+    Available,
+    Error,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowUpdateEntry {
+    pub id: String,
+    pub status: WorkflowUpdateStatus,
+    pub release: Option<WorkflowReleaseIdentity>,
+    pub dismissed: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS, ExperimentalApi)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowUpdatesReadParams {
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowUpdatesReadResponse {
+    #[ts(type = "number")]
+    pub generation: u64,
+    pub scanning: bool,
+    pub data: Vec<WorkflowUpdateEntry>,
+    pub next_cursor: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowUpdatesChangedNotification {
+    #[ts(type = "number")]
+    pub generation: u64,
+}
