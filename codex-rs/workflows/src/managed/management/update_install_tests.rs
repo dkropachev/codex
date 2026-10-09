@@ -259,6 +259,7 @@ fn dependency_failure_preserves_the_installed_release() {
     );
     git(&source, &["tag", "-f", "v1.1.0"]);
     let release = available(&service);
+    let before = service.list_installed().expect("records before update");
     let cancelled = AtomicBool::new(false);
     let error = service
         .update(ManagedWorkflowUpdateRequest {
@@ -275,8 +276,8 @@ fn dependency_failure_preserves_the_installed_release() {
             .contains("require Bun and a local sandbox")
     );
     assert_eq!(
-        service.list_installed().expect("records")[0].installed,
-        installed
+        service.list_installed().expect("records after update"),
+        before
     );
     assert_eq!(
         fs::read_to_string(root.path().join("workflows/team/build/src/workflow.ts"))
