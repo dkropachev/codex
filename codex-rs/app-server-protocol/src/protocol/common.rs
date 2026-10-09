@@ -746,6 +746,12 @@ client_request_definitions! {
         serialization: None,
         response: v2::WorkflowUpdatesReadResponse,
     },
+    #[experimental("workflow/checkUpdates")]
+    WorkflowCheckUpdates => "workflow/checkUpdates" {
+        params: v2::WorkflowCheckUpdatesParams,
+        serialization: None,
+        response: v2::WorkflowCheckUpdatesResponse,
+    },
     ThreadApproveGuardianDeniedAction => "thread/approveGuardianDeniedAction" {
         params: v2::ThreadApproveGuardianDeniedActionParams,
         serialization: thread_id(params.thread_id),
