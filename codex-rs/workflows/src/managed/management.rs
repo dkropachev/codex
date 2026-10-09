@@ -23,11 +23,15 @@ use super::store::ensure_fresh_target;
 #[cfg(any(unix, windows))]
 mod policy;
 #[cfg(any(unix, windows))]
+mod run_workspace;
+#[cfg(any(unix, windows))]
 mod uninstall;
 mod update;
 #[cfg(any(unix, windows))]
 mod update_install;
 
+#[cfg(any(unix, windows))]
+pub use run_workspace::ManagedWorkflowRunWorkspace;
 #[cfg(any(unix, windows))]
 pub use uninstall::ManagedWorkflowUninstallation;
 pub use update::ManagedWorkflowRecord;
@@ -63,6 +67,7 @@ pub struct ManagedWorkflowInstallation {
 /// Coordinates verified managed installation for both CLI and app-server callers.
 pub struct ManagedWorkflowService {
     store: ManagedWorkflowStore,
+    workflow_root: AbsolutePathBuf,
     management_root: AbsolutePathBuf,
     fetch_root: AbsolutePathBuf,
 }
@@ -78,6 +83,7 @@ impl ManagedWorkflowService {
         let store = ManagedWorkflowStore::create(codex_home, workflow_root)?;
         Ok(Self {
             store,
+            workflow_root: workflow_root.clone(),
             management_root: codex_home.join(".workflow-management"),
             fetch_root: codex_home.join(".workflow-fetch"),
         })
