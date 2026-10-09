@@ -20,6 +20,8 @@ use super::store::ManagedWorkflowStore;
 use super::store::WorkflowRelease;
 use super::store::ensure_fresh_target;
 
+#[cfg(any(unix, windows))]
+mod policy;
 mod update;
 
 pub use update::ManagedWorkflowRecord;

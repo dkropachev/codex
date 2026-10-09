@@ -10,6 +10,7 @@ use super::ManagedWorkflowService;
 use crate::managed::ResolvedWorkflowRelease;
 use crate::managed::WorkflowGitSource;
 use crate::managed::store::ManagedWorkflowReceipt;
+use crate::managed::store::WorkflowRelease;
 
 pub use crate::managed::store::WorkflowUpdatePolicy;
 
@@ -108,7 +109,17 @@ impl From<ResolvedWorkflowRelease> for WorkflowReleaseIdentity {
     }
 }
 
-fn check_release(
+impl From<&WorkflowRelease> for WorkflowReleaseIdentity {
+    fn from(release: &WorkflowRelease) -> Self {
+        Self {
+            tag: release.tag.clone(),
+            version: release.version.clone(),
+            commit: release.commit.clone(),
+        }
+    }
+}
+
+pub(super) fn check_release(
     receipt: &ManagedWorkflowReceipt,
     cancelled: &AtomicBool,
 ) -> anyhow::Result<ManagedWorkflowUpdate> {
