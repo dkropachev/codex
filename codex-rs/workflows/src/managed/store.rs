@@ -198,6 +198,59 @@ impl ManagedWorkflowStore {
         let _locked = self.lock_run(id, Some(cancelled))?;
         receipt::read_receipt(&self.receipts, id)
     }
+
+    #[cfg(any(unix, windows))]
+    pub(in crate::managed) fn read_locked_receipt(
+        &self,
+        locked: &LockedManagedWorkflow,
+    ) -> anyhow::Result<ManagedWorkflowReceipt> {
+        locked.ensure_store(self)?;
+        if publish::journal_exists(&self.journals, &locked.id)? {
+            self.recover_locked(locked)?;
+            if publish::journal_exists(&self.journals, &locked.id)? {
+                bail!("managed workflow has an unresolved transaction journal");
+            }
+        }
+        let receipt = receipt::read_receipt(&self.receipts, &locked.id)?;
+        let parent =
+            publish::active_parent(&self.active_root, &locked.id, publish::ParentMode::Existing)?
+                .context("managed workflow active parent disappeared")?;
+        let active = parent
+            .directory()
+            .existing_child(publish::leaf(&locked.id)?)?;
+        let marker = journal::read_marker(&active)?;
+        if marker.id != locked.id || marker.release != receipt.installed {
+            bail!("managed workflow active marker does not match its receipt");
+        }
+        Ok(receipt)
+    }
+
+    #[cfg(any(unix, windows))]
+    pub(in crate::managed) fn write_locked_receipt(
+        &self,
+        locked: &LockedManagedWorkflow,
+        expected: &ManagedWorkflowReceipt,
+        next: &ManagedWorkflowReceipt,
+    ) -> anyhow::Result<()> {
+        let current = self.read_locked_receipt(locked)?;
+        if current != *expected {
+            bail!("managed workflow receipt changed before policy mutation");
+        }
+        if next.id != current.id
+            || next.source != current.source
+            || next.installed != current.installed
+        {
+            bail!("managed workflow policy mutation changed installation identity");
+        }
+        if let Err(error) = receipt::write_receipt(&self.receipts, next, /*replace*/ true) {
+            if matches!(receipt::read_receipt(&self.receipts, &locked.id), Ok(written) if written == *next)
+            {
+                return Ok(());
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
     pub(in crate::managed) fn create(
         codex_home: &AbsolutePathBuf,
         workflow_root: &AbsolutePathBuf,

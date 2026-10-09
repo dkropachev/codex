@@ -515,3 +515,129 @@ fn sandboxed_local_dependency_install_publishes_verified_tree() {
             .exists()
     );
 }
+
+#[test]
+fn policy_and_exact_dismissal_persist_without_changing_installation() {
+    let root = tempfile::tempdir().expect("root");
+    let repository = root.path().join("source");
+    source(&repository, "team/build", /*tagged*/ true);
+    let service = ManagedWorkflowService::new(
+        &absolute(root.path()),
+        &absolute(&root.path().join("workflows")),
+    )
+    .expect("service");
+    let cancelled = AtomicBool::new(false);
+    service
+        .install(ManagedWorkflowInstallRequest {
+            source: repository.to_str().expect("UTF-8 source"),
+            dependency_runtime: None,
+            cancelled: &cancelled,
+        })
+        .expect("install initial release");
+    let original = service.list_installed().expect("initial receipt")[0].clone();
+    let automatic = service
+        .set_policy(
+            "team/build",
+            &original.installed,
+            WorkflowUpdatePolicy::Automatic,
+            &cancelled,
+        )
+        .expect("automatic policy");
+    assert_eq!(automatic.policy, WorkflowUpdatePolicy::Automatic);
+    assert_eq!(automatic.installed, original.installed);
+    assert_eq!(
+        service.list_installed().expect("persisted policy"),
+        vec![automatic.clone()]
+    );
+    let mut stale_installed = original.installed;
+    stale_installed.commit = "f".repeat(40);
+    assert!(
+        service
+            .set_policy(
+                "team/build",
+                &stale_installed,
+                WorkflowUpdatePolicy::Manual,
+                &cancelled,
+            )
+            .is_err()
+    );
+
+    fs::write(repository.join("package.json"), r#"{"version":"1.2.4"}"#).expect("next version");
+    git(&repository, &["add", "--all"]);
+    git(
+        &repository,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "next release",
+        ],
+    );
+    git(&repository, &["tag", "v1.2.4"]);
+    let check = service
+        .check_update("team/build", &cancelled)
+        .expect("available update");
+    let ManagedWorkflowUpdate::Available {
+        release,
+        dismissed: false,
+    } = check.update
+    else {
+        panic!("expected available release");
+    };
+    let dismissed = service
+        .dismiss_release("team/build", &automatic.installed, &release, &cancelled)
+        .expect("dismiss exact release");
+    assert_eq!(dismissed.dismissed_release, Some(release.clone()));
+    assert!(matches!(
+        service
+            .check_update("team/build", &cancelled)
+            .expect("dismissed update")
+            .update,
+        ManagedWorkflowUpdate::Available {
+            dismissed: true,
+            ..
+        }
+    ));
+    assert_eq!(
+        service.list_installed().expect("persisted dismissal"),
+        vec![dismissed]
+    );
+
+    fs::write(repository.join("package.json"), r#"{"version":"1.2.5"}"#).expect("newer version");
+    git(&repository, &["add", "--all"]);
+    git(
+        &repository,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "newer release",
+        ],
+    );
+    git(&repository, &["tag", "v1.2.5"]);
+    assert!(
+        service
+            .dismiss_release("team/build", &automatic.installed, &release, &cancelled)
+            .is_err()
+    );
+    assert!(matches!(
+        service
+            .check_update("team/build", &cancelled)
+            .expect("newer update")
+            .update,
+        ManagedWorkflowUpdate::Available {
+            dismissed: false,
+            ..
+        }
+    ));
+}
