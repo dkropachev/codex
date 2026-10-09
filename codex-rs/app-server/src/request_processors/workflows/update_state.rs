@@ -25,9 +25,7 @@ use tokio::sync::watch;
 use crate::error_code::invalid_params;
 use crate::outgoing_message::OutgoingMessageSender;
 
-#[path = "dependency_runtime.rs"]
-mod dependency_runtime;
-use dependency_runtime::DependencyRuntimePaths;
+use super::dependency_runtime::DependencyRuntimePaths;
 
 const MAX_CHECKS_IN_FLIGHT: usize = 4;
 const MAX_PAGE_LIMIT: usize = 100;
@@ -54,6 +52,7 @@ pub(super) struct WorkflowUpdates {
     recovered: watch::Receiver<bool>,
     config: Arc<Config>,
     notification_tx: watch::Sender<u64>,
+    mutation_tx: watch::Sender<u64>,
 }
 
 impl WorkflowUpdates {
@@ -65,6 +64,7 @@ impl WorkflowUpdates {
         }));
         let (recovered_tx, recovered) = watch::channel(false);
         let (notification_tx, mut notification_rx) = watch::channel(0);
+        let (mutation_tx, mut mutation_rx) = watch::channel(0_u64);
         tokio::spawn(async move {
             while notification_rx.changed().await.is_ok() {
                 let generation = *notification_rx.borrow_and_update();
@@ -82,11 +82,41 @@ impl WorkflowUpdates {
             Some(recovered_tx),
             ScanMode::Startup,
         ));
+        let worker_config = Arc::clone(&config);
+        let worker_snapshot = Arc::clone(&snapshot);
+        let worker_recovered = recovered.clone();
+        let worker_notifications = notification_tx.clone();
+        tokio::spawn(async move {
+            let mut completed = worker_notifications.subscribe();
+            while mutation_rx.changed().await.is_ok() {
+                loop {
+                    let result = refresh_snapshot(
+                        Arc::clone(&worker_config),
+                        Arc::clone(&worker_snapshot),
+                        worker_recovered.clone(),
+                        worker_notifications.clone(),
+                    )
+                    .await;
+                    if result.started {
+                        break;
+                    }
+                    loop {
+                        if !worker_snapshot.read().await.scanning {
+                            break;
+                        }
+                        if completed.changed().await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
         Self {
             snapshot,
             recovered,
             config,
             notification_tx,
+            mutation_tx,
         }
     }
 
@@ -98,34 +128,18 @@ impl WorkflowUpdates {
     }
 
     pub(super) async fn refresh(&self) -> WorkflowCheckUpdatesResponse {
-        self.wait_for_recovery().await;
-        let scan_id = {
-            let mut state = self.snapshot.write().await;
-            if state.scanning {
-                return WorkflowCheckUpdatesResponse {
-                    scan_id: state.scan_id,
-                    started: false,
-                };
-            }
-            state.scanning = true;
-            state.scan_id = state.scan_id.saturating_add(1);
-            state.generation = state.generation.saturating_add(1);
-            state.data.clear();
-            state.error = None;
-            self.notification_tx.send_replace(state.generation);
-            state.scan_id
-        };
-        tokio::spawn(run_scan(
+        refresh_snapshot(
             Arc::clone(&self.config),
-            self.notification_tx.clone(),
             Arc::clone(&self.snapshot),
-            None,
-            ScanMode::Explicit,
-        ));
-        WorkflowCheckUpdatesResponse {
-            scan_id,
-            started: true,
-        }
+            self.recovered.clone(),
+            self.notification_tx.clone(),
+        )
+        .await
+    }
+
+    pub(super) fn refresh_after_mutation(&self) {
+        self.mutation_tx
+            .send_modify(|revision| *revision = revision.saturating_add(1));
     }
 
     pub(super) async fn read(
@@ -165,6 +179,44 @@ impl WorkflowUpdates {
             next_cursor,
             error: snapshot.error.clone(),
         })
+    }
+}
+
+async fn refresh_snapshot(
+    config: Arc<Config>,
+    snapshot: Arc<RwLock<Snapshot>>,
+    mut recovered: watch::Receiver<bool>,
+    notification_tx: watch::Sender<u64>,
+) -> WorkflowCheckUpdatesResponse {
+    if !*recovered.borrow() {
+        let _ = recovered.changed().await;
+    }
+    let scan_id = {
+        let mut state = snapshot.write().await;
+        if state.scanning {
+            return WorkflowCheckUpdatesResponse {
+                scan_id: state.scan_id,
+                started: false,
+            };
+        }
+        state.scanning = true;
+        state.scan_id = state.scan_id.saturating_add(1);
+        state.generation = state.generation.saturating_add(1);
+        state.data.clear();
+        state.error = None;
+        notification_tx.send_replace(state.generation);
+        state.scan_id
+    };
+    tokio::spawn(run_scan(
+        config,
+        notification_tx,
+        snapshot,
+        None,
+        ScanMode::Explicit,
+    ));
+    WorkflowCheckUpdatesResponse {
+        scan_id,
+        started: true,
     }
 }
 

@@ -1531,6 +1531,18 @@ impl MessageProcessor {
             ClientRequest::WorkflowCheckUpdates { .. } => {
                 self.workflow_list_processor.check_updates().await
             }
+            ClientRequest::WorkflowUpdate { params, .. } => {
+                self.workflow_list_processor.update_release(params).await
+            }
+            ClientRequest::WorkflowSetPolicy { params, .. } => {
+                self.workflow_list_processor.set_policy(params).await
+            }
+            ClientRequest::WorkflowDismiss { params, .. } => {
+                self.workflow_list_processor.dismiss_release(params).await
+            }
+            ClientRequest::WorkflowUninstall { params, .. } => {
+                self.workflow_list_processor.uninstall(params).await
+            }
             ClientRequest::ThreadApproveGuardianDeniedAction { params, .. } => {
                 self.thread_processor
                     .thread_approve_guardian_denied_action(&request_id, params)

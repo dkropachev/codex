@@ -135,3 +135,67 @@ pub struct WorkflowCheckUpdatesResponse {
     /// False means this request joined an active scan and scheduled no new check.
     pub started: bool,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS, ExperimentalApi)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowUpdateParams {
+    pub id: String,
+    pub expected_installed: WorkflowReleaseIdentity,
+    pub expected_available: WorkflowReleaseIdentity,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowUpdateResponse {
+    pub installed: WorkflowReleaseIdentity,
+    pub cleanup_pending: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS, ExperimentalApi)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowSetPolicyParams {
+    pub id: String,
+    pub expected_installed: WorkflowReleaseIdentity,
+    pub policy: WorkflowUpdatePolicy,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowSetPolicyResponse {
+    pub managed: ManagedWorkflowInfo,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS, ExperimentalApi)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowDismissParams {
+    pub id: String,
+    pub expected_installed: WorkflowReleaseIdentity,
+    pub release: WorkflowReleaseIdentity,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowDismissResponse {
+    pub managed: ManagedWorkflowInfo,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS, ExperimentalApi)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowUninstallParams {
+    pub id: String,
+    pub expected_installed: WorkflowReleaseIdentity,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowUninstallResponse {
+    pub cleanup_pending: bool,
+}

@@ -752,6 +752,30 @@ client_request_definitions! {
         serialization: None,
         response: v2::WorkflowCheckUpdatesResponse,
     },
+    #[experimental("workflow/update")]
+    WorkflowUpdate => "workflow/update" {
+        params: v2::WorkflowUpdateParams,
+        serialization: None,
+        response: v2::WorkflowUpdateResponse,
+    },
+    #[experimental("workflow/setPolicy")]
+    WorkflowSetPolicy => "workflow/setPolicy" {
+        params: v2::WorkflowSetPolicyParams,
+        serialization: None,
+        response: v2::WorkflowSetPolicyResponse,
+    },
+    #[experimental("workflow/dismiss")]
+    WorkflowDismiss => "workflow/dismiss" {
+        params: v2::WorkflowDismissParams,
+        serialization: None,
+        response: v2::WorkflowDismissResponse,
+    },
+    #[experimental("workflow/uninstall")]
+    WorkflowUninstall => "workflow/uninstall" {
+        params: v2::WorkflowUninstallParams,
+        serialization: None,
+        response: v2::WorkflowUninstallResponse,
+    },
     ThreadApproveGuardianDeniedAction => "thread/approveGuardianDeniedAction" {
         params: v2::ThreadApproveGuardianDeniedActionParams,
         serialization: thread_id(params.thread_id),

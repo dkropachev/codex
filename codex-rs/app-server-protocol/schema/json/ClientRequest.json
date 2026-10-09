@@ -5999,6 +5999,37 @@
         "mode"
       ],
       "type": "object"
+    },
+    "WorkflowReleaseIdentity": {
+      "properties": {
+        "commit": {
+          "type": "string"
+        },
+        "tag": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "commit"
+      ],
+      "type": "object"
+    },
+    "WorkflowUpdatePolicy": {
+      "enum": [
+        "prompt",
+        "automatic",
+        "manual"
+      ],
+      "type": "string"
     }
   },
   "description": "Request from the client to the server.",
