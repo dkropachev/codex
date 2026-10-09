@@ -133,6 +133,79 @@ fn explicit_update_replaces_a_dismissed_release_and_retains_policy() {
 }
 
 #[test]
+fn automatic_update_observes_current_policy_and_exact_dismissal_under_lock() {
+    let (root, service, installed) = fixture();
+    let source = root.path().join("source");
+    commit_release(&source, "1.1.0");
+    let release = available(&service);
+    let cancelled = AtomicBool::new(false);
+    service
+        .set_policy(
+            "team/build",
+            &installed,
+            WorkflowUpdatePolicy::Manual,
+            &cancelled,
+        )
+        .expect("manual policy");
+    assert_eq!(
+        service
+            .update_automatic(ManagedWorkflowUpdateRequest {
+                id: "team/build",
+                expected_installed: &installed,
+                expected_available: &release,
+                dependency_runtime: None,
+                cancelled: &cancelled,
+            })
+            .expect("skip manual policy"),
+        None
+    );
+    service
+        .set_policy(
+            "team/build",
+            &installed,
+            WorkflowUpdatePolicy::Automatic,
+            &cancelled,
+        )
+        .expect("automatic policy");
+    service
+        .dismiss_release("team/build", &installed, &release, &cancelled)
+        .expect("dismiss release");
+    assert_eq!(
+        service
+            .update_automatic(ManagedWorkflowUpdateRequest {
+                id: "team/build",
+                expected_installed: &installed,
+                expected_available: &release,
+                dependency_runtime: None,
+                cancelled: &cancelled,
+            })
+            .expect("skip dismissed release"),
+        None
+    );
+    assert_eq!(
+        service.list_installed().expect("records")[0].installed,
+        installed
+    );
+
+    commit_release(&source, "1.2.0");
+    let newer = available(&service);
+    let updated = service
+        .update_automatic(ManagedWorkflowUpdateRequest {
+            id: "team/build",
+            expected_installed: &installed,
+            expected_available: &newer,
+            dependency_runtime: None,
+            cancelled: &cancelled,
+        })
+        .expect("newer automatic release");
+    assert!(updated.is_some());
+    assert_eq!(
+        service.list_installed().expect("records")[0].installed,
+        newer
+    );
+}
+
+#[test]
 fn update_rejects_dirty_payload_and_stale_release_without_replacing_it() {
     let (root, service, installed) = fixture();
     commit_release(&root.path().join("source"), "1.1.0");

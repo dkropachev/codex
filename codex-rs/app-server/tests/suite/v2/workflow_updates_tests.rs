@@ -22,6 +22,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_workflows::ManagedWorkflowInstallRequest;
 use codex_workflows::ManagedWorkflowService;
 use codex_workflows::ScaffoldRequest;
+use codex_workflows::WorkflowUpdatePolicy;
 use codex_workflows::scaffold_workflow;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -38,6 +39,7 @@ fn install_local_workflow(
     sources: &Path,
     id: &str,
     command: &str,
+    policy: WorkflowUpdatePolicy,
     cancelled: &AtomicBool,
 ) -> Result<PathBuf> {
     let source = scaffold_workflow(
@@ -63,14 +65,110 @@ fn install_local_workflow(
             .status()?;
         anyhow::ensure!(status.success(), "Git command failed: {arguments:?}");
     }
-    service.install(ManagedWorkflowInstallRequest {
-        source: source
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("source path"))?,
-        dependency_runtime: None,
-        cancelled,
-    })?;
+    service.install_with_policy(
+        ManagedWorkflowInstallRequest {
+            source: source
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("source path"))?,
+            dependency_runtime: None,
+            cancelled,
+        },
+        policy,
+    )?;
     Ok(source)
+}
+
+fn commit_tagged_release(source: &Path, tag: &str) -> Result<()> {
+    let package_path = source.join("package.json");
+    let mut package: serde_json::Value = serde_json::from_slice(&fs::read(&package_path)?)?;
+    package["version"] = json!(tag.trim_start_matches('v'));
+    fs::write(&package_path, serde_json::to_vec_pretty(&package)?)?;
+    fs::write(source.join("release.txt"), tag)?;
+    for arguments in [
+        &["add", "--all"][..],
+        &["-c", "commit.gpgsign=false", "commit", "-qm", tag][..],
+        &["tag", tag][..],
+    ] {
+        let status = Command::new("git")
+            .current_dir(source)
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com")
+            .args(arguments)
+            .status()?;
+        anyhow::ensure!(status.success(), "Git command failed: {arguments:?}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn startup_reports_prompt_manual_and_dismissed_releases_without_installing() -> Result<()> {
+    let home = TempDir::new()?;
+    let sources = TempDir::new()?;
+    let home_path = AbsolutePathBuf::from_absolute_path_checked(home.path())?;
+    let service = ManagedWorkflowService::new(&home_path, &home_path.join("workflows"))?;
+    let cancelled = AtomicBool::new(false);
+    for (id, command, policy) in [
+        (
+            "team/dismissed",
+            "team-dismissed",
+            WorkflowUpdatePolicy::Automatic,
+        ),
+        ("team/manual", "team-manual", WorkflowUpdatePolicy::Manual),
+        ("team/prompt", "team-prompt", WorkflowUpdatePolicy::Prompt),
+    ] {
+        let source =
+            install_local_workflow(&service, sources.path(), id, command, policy, &cancelled)?;
+        commit_tagged_release(&source, "v1.1.0")?;
+    }
+    let checked = service.check_update("team/dismissed", &cancelled)?;
+    let codex_workflows::ManagedWorkflowUpdate::Available { release, .. } = checked.update else {
+        anyhow::bail!("expected a dismissible release");
+    };
+    service.dismiss_release(
+        "team/dismissed",
+        &checked.workflow.installed,
+        &release,
+        &cancelled,
+    )?;
+    let before = service.list_installed()?;
+    fs::write(
+        home.path().join("config.toml"),
+        "[features]\nworkflows = true\n",
+    )?;
+    let mut server = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized()
+        .await?;
+    completed_updates(&mut server).await?;
+    let snapshot: WorkflowUpdatesReadResponse = server
+        .request(|request_id| ClientRequest::WorkflowUpdatesRead {
+            request_id,
+            params: WorkflowUpdatesReadParams {
+                cursor: None,
+                limit: Some(10),
+            },
+        })
+        .await?;
+    assert_eq!(
+        snapshot
+            .data
+            .into_iter()
+            .map(|entry| (entry.id, entry.status, entry.dismissed))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "team/dismissed".into(),
+                WorkflowUpdateStatus::Available,
+                true
+            ),
+            ("team/manual".into(), WorkflowUpdateStatus::Available, false),
+            ("team/prompt".into(), WorkflowUpdateStatus::Available, false),
+        ]
+    );
+    assert_eq!(service.list_installed()?, before);
+    Ok(())
 }
 
 async fn completed_websocket_updates(
@@ -126,6 +224,7 @@ async fn workflow_updates_snapshot_survives_restart_and_reports_local_source_err
         sources.path(),
         "team/build",
         "team-build",
+        WorkflowUpdatePolicy::Prompt,
         &cancelled,
     )?;
     let moved_source = install_local_workflow(
@@ -133,6 +232,7 @@ async fn workflow_updates_snapshot_survives_restart_and_reports_local_source_err
         sources.path(),
         "team/check",
         "team-check",
+        WorkflowUpdatePolicy::Prompt,
         &cancelled,
     )?;
     fs::rename(moved_source, sources.path().join("moved-check"))?;
@@ -274,6 +374,7 @@ async fn workflow_updates_snapshot_is_retained_for_a_reconnected_client() -> Res
         sources.path(),
         "team/reconnect",
         "team-reconnect",
+        WorkflowUpdatePolicy::Prompt,
         &AtomicBool::new(false),
     )?;
     fs::write(
@@ -334,5 +435,123 @@ async fn workflow_updates_snapshot_is_retained_for_a_reconnected_client() -> Res
     let retained = completed_websocket_updates(&mut reconnected, &mut next_id).await?;
     assert_eq!(retained, first);
     process.kill().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn automatic_startup_update_installs_release_but_explicit_check_only_reports_it() -> Result<()>
+{
+    let home = TempDir::new()?;
+    let sources = TempDir::new()?;
+    let home_path = AbsolutePathBuf::from_absolute_path_checked(home.path())?;
+    let service = ManagedWorkflowService::new(&home_path, &home_path.join("workflows"))?;
+    let cancelled = AtomicBool::new(false);
+    let source = install_local_workflow(
+        &service,
+        sources.path(),
+        "team/automatic",
+        "team-automatic",
+        WorkflowUpdatePolicy::Automatic,
+        &cancelled,
+    )?;
+    commit_tagged_release(&source, "v1.1.0")?;
+    fs::write(
+        home.path().join("config.toml"),
+        "[features]\nworkflows = true\n",
+    )?;
+    let mut server = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized()
+        .await?;
+    let startup = completed_updates(&mut server).await?;
+    assert_eq!(startup.data[0].status, WorkflowUpdateStatus::Current);
+    assert_eq!(
+        service.list_installed()?[0].installed.tag.as_deref(),
+        Some("v1.1.0")
+    );
+    assert_eq!(
+        fs::read_to_string(home.path().join("workflows/team/automatic/release.txt"))?,
+        "v1.1.0"
+    );
+
+    commit_tagged_release(&source, "v1.2.0")?;
+    let refresh: WorkflowCheckUpdatesResponse = server
+        .request(|request_id| ClientRequest::WorkflowCheckUpdates {
+            request_id,
+            params: WorkflowCheckUpdatesParams {},
+        })
+        .await?;
+    assert!(refresh.started);
+    let checked = completed_updates(&mut server).await?;
+    assert_eq!(checked.scan_id, refresh.scan_id);
+    assert_eq!(checked.data[0].status, WorkflowUpdateStatus::Available);
+    assert_eq!(
+        checked.data[0]
+            .release
+            .as_ref()
+            .and_then(|release| release.tag.as_deref()),
+        Some("v1.2.0")
+    );
+    assert_eq!(
+        service.list_installed()?[0].installed.tag.as_deref(),
+        Some("v1.1.0")
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn automatic_update_dependency_runtime_failure_preserves_installed_release() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = TempDir::new()?;
+    let sources = TempDir::new()?;
+    let tools = TempDir::new()?;
+    let fake_bun = tools.path().join("bun");
+    fs::write(&fake_bun, "#!/bin/sh\nexit 99\n")?;
+    fs::set_permissions(&fake_bun, fs::Permissions::from_mode(0o755))?;
+    let child_path = format!("{}:{}", tools.path().display(), std::env::var("PATH")?);
+    let home_path = AbsolutePathBuf::from_absolute_path_checked(home.path())?;
+    let service = ManagedWorkflowService::new(&home_path, &home_path.join("workflows"))?;
+    let cancelled = AtomicBool::new(false);
+    let source = install_local_workflow(
+        &service,
+        sources.path(),
+        "team/sandbox",
+        "team-sandbox",
+        WorkflowUpdatePolicy::Automatic,
+        &cancelled,
+    )?;
+    let before = service.list_installed()?;
+    let package_path = source.join("package.json");
+    let mut package: serde_json::Value = serde_json::from_slice(&fs::read(&package_path)?)?;
+    package["dependencies"] = json!({"dep": "1.0.0"});
+    fs::write(&package_path, serde_json::to_vec_pretty(&package)?)?;
+    fs::write(
+        source.join("bun.lock"),
+        r#"{"lockfileVersion":1,"workspaces":{"":{"dependencies":{"dep":"1.0.0"}}},"packages":{"dep":["dep@1.0.0","",{},"integrity"]}}"#,
+    )?;
+    commit_tagged_release(&source, "v1.1.0")?;
+    fs::write(
+        home.path().join("config.toml"),
+        "[features]\nworkflows = true\n",
+    )?;
+    let mut server = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .with_env_overrides(&[("PATH", Some(&child_path))])
+        .build_initialized()
+        .await?;
+    let snapshot = completed_updates(&mut server).await?;
+    assert_eq!(snapshot.data[0].status, WorkflowUpdateStatus::Error);
+    assert!(snapshot.data[0].error.as_deref().is_some_and(|error| {
+        error.contains("managed Bun install failed") || error.contains("sandbox")
+    }));
+    assert_eq!(service.list_installed()?, before);
+    assert!(
+        !home
+            .path()
+            .join("workflows/team/sandbox/release.txt")
+            .exists()
+    );
     Ok(())
 }

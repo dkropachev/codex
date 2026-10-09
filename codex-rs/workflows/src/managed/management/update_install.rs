@@ -9,6 +9,7 @@ use super::ManagedWorkflowInstallation;
 use super::ManagedWorkflowService;
 use super::update::ManagedWorkflowUpdate;
 use super::update::WorkflowReleaseIdentity;
+use super::update::WorkflowUpdatePolicy;
 use crate::managed::ResolvedWorkflowRelease;
 use crate::managed::WorkflowGitSource;
 use crate::managed::fetch;
@@ -18,7 +19,7 @@ use crate::managed::store::ManagedWorkflowCommitOutcome;
 use crate::managed::store::ReceiptIdentity;
 use crate::managed::store::WorkflowRelease;
 
-/// Inputs for explicitly replacing one installed managed workflow release.
+/// Inputs for replacing one installed managed workflow release.
 pub struct ManagedWorkflowUpdateRequest<'a> {
     pub id: &'a str,
     pub expected_installed: &'a WorkflowReleaseIdentity,
@@ -27,12 +28,36 @@ pub struct ManagedWorkflowUpdateRequest<'a> {
     pub cancelled: &'a AtomicBool,
 }
 
+#[derive(Clone, Copy)]
+enum UpdateMode {
+    Explicit,
+    Automatic,
+}
+
 impl ManagedWorkflowService {
     /// Installs the exact latest eligible release, including one previously dismissed.
     pub fn update(
         &self,
         request: ManagedWorkflowUpdateRequest<'_>,
     ) -> anyhow::Result<ManagedWorkflowInstallation> {
+        self.update_with_mode(request, UpdateMode::Explicit)?
+            .context("explicit workflow update unexpectedly skipped")
+    }
+
+    /// Installs only while the current receipt still permits this automatic release.
+    /// Returns `None` when policy or exact-release dismissal changed during a scan.
+    pub fn update_automatic(
+        &self,
+        request: ManagedWorkflowUpdateRequest<'_>,
+    ) -> anyhow::Result<Option<ManagedWorkflowInstallation>> {
+        self.update_with_mode(request, UpdateMode::Automatic)
+    }
+
+    fn update_with_mode(
+        &self,
+        request: ManagedWorkflowUpdateRequest<'_>,
+        mode: UpdateMode,
+    ) -> anyhow::Result<Option<ManagedWorkflowInstallation>> {
         let ManagedWorkflowUpdateRequest {
             id,
             expected_installed,
@@ -47,14 +72,23 @@ impl ManagedWorkflowService {
         if WorkflowReleaseIdentity::from(&previous.installed) != *expected_installed {
             bail!("managed workflow release changed before update");
         }
+        if matches!(mode, UpdateMode::Automatic)
+            && previous.policy != WorkflowUpdatePolicy::Automatic
+        {
+            return Ok(None);
+        }
         let ManagedWorkflowUpdate::Available {
-            release: available, ..
+            release: available,
+            dismissed,
         } = super::update::check_release(&previous, cancelled)?
         else {
             bail!("managed workflow has no eligible update");
         };
         if &available != expected_available {
             bail!("managed workflow available release changed before update");
+        }
+        if matches!(mode, UpdateMode::Automatic) && dismissed {
+            return Ok(None);
         }
         let source = WorkflowGitSource::parse(&previous.source)
             .context("managed workflow source is unavailable")?;
@@ -112,12 +146,12 @@ impl ManagedWorkflowService {
                 bail!("managed workflow update rolled back");
             }
         };
-        Ok(ManagedWorkflowInstallation {
+        Ok(Some(ManagedWorkflowInstallation {
             id: id.to_owned(),
             source: previous.source,
             release,
             cleanup_pending,
-        })
+        }))
     }
 }
 
