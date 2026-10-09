@@ -16,6 +16,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_workflows::ManagedWorkflowRecord;
 use codex_workflows::ManagedWorkflowService;
 use codex_workflows::ManagedWorkflowUpdate;
+use codex_workflows::ManagedWorkflowUpdateRequest;
+use codex_workflows::WorkflowUpdatePolicy;
 use futures::StreamExt;
 use tokio::sync::RwLock;
 use tokio::sync::watch;
@@ -23,10 +25,20 @@ use tokio::sync::watch;
 use crate::error_code::invalid_params;
 use crate::outgoing_message::OutgoingMessageSender;
 
+#[path = "dependency_runtime.rs"]
+mod dependency_runtime;
+use dependency_runtime::DependencyRuntimePaths;
+
 const MAX_CHECKS_IN_FLIGHT: usize = 4;
 const MAX_PAGE_LIMIT: usize = 100;
 const MAX_SNAPSHOT_ENTRIES: usize = 1_024;
 const MAX_ERROR_CHARS: usize = 2_048;
+
+#[derive(Clone, Copy)]
+enum ScanMode {
+    Startup,
+    Explicit,
+}
 
 #[derive(Default)]
 struct Snapshot {
@@ -68,6 +80,7 @@ impl WorkflowUpdates {
             notification_tx.clone(),
             Arc::clone(&snapshot),
             Some(recovered_tx),
+            ScanMode::Startup,
         ));
         Self {
             snapshot,
@@ -107,6 +120,7 @@ impl WorkflowUpdates {
             self.notification_tx.clone(),
             Arc::clone(&self.snapshot),
             None,
+            ScanMode::Explicit,
         ));
         WorkflowCheckUpdatesResponse {
             scan_id,
@@ -159,8 +173,11 @@ async fn run_scan(
     notification_tx: watch::Sender<u64>,
     snapshot: Arc<RwLock<Snapshot>>,
     recovered_tx: Option<watch::Sender<bool>>,
+    mode: ScanMode,
 ) {
-    let prepared = match tokio::task::spawn_blocking(move || prepare(config.as_ref())).await {
+    let prepare_config = Arc::clone(&config);
+    let prepared = match tokio::task::spawn_blocking(move || prepare(prepare_config.as_ref())).await
+    {
         Ok(result) => result,
         Err(error) => Err(error.into()),
     };
@@ -188,7 +205,7 @@ async fn run_scan(
     if let Ok(Some((service, records))) = prepared
         && !records.is_empty()
     {
-        run_checks(service, records, snapshot, notification_tx).await;
+        run_checks(service, records, snapshot, notification_tx, config, mode).await;
     }
 }
 
@@ -216,17 +233,45 @@ async fn run_checks(
     records: Vec<ManagedWorkflowRecord>,
     snapshot: Arc<RwLock<Snapshot>>,
     notification_tx: watch::Sender<u64>,
+    config: Arc<Config>,
+    mode: ScanMode,
 ) {
     let mut checks = futures::stream::iter(records.into_iter().map(|record| {
         let service = Arc::clone(&service);
+        let config = Arc::clone(&config);
         async move {
             let id = record.id.clone();
-            let checked = tokio::task::spawn_blocking(move || {
-                service.check_update(&id, &AtomicBool::new(false))
+            let installed = record.installed.clone();
+            let policy = record.policy;
+            let checked = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                let cancelled = AtomicBool::new(false);
+                let checked = service.check_update(&id, &cancelled)?;
+                if matches!(mode, ScanMode::Startup)
+                    && policy == WorkflowUpdatePolicy::Automatic
+                    && let ManagedWorkflowUpdate::Available {
+                        release,
+                        dismissed: false,
+                    } = &checked.update
+                {
+                    let runtime = DependencyRuntimePaths::from_config(config.as_ref())?;
+                    let updated = service.update_automatic(ManagedWorkflowUpdateRequest {
+                        id: &id,
+                        expected_installed: &installed,
+                        expected_available: release,
+                        dependency_runtime: runtime.runtime(config.as_ref()),
+                        cancelled: &cancelled,
+                    })?;
+                    return if updated.is_some() {
+                        Ok(ManagedWorkflowUpdate::Current)
+                    } else {
+                        Ok(service.check_update(&id, &cancelled)?.update)
+                    };
+                }
+                Ok(checked.update)
             })
             .await;
             let update = match checked {
-                Ok(Ok(check)) => check.update,
+                Ok(Ok(update)) => update,
                 Ok(Err(error)) => ManagedWorkflowUpdate::Error(format!("{error:#}")),
                 Err(error) => ManagedWorkflowUpdate::Error(error.to_string()),
             };
