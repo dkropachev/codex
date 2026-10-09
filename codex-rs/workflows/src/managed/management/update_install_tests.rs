@@ -30,7 +30,7 @@ fn git(root: &Path, args: &[&str]) {
     );
 }
 
-fn commit_release(root: &Path, version: &str) {
+fn commit_release(root: &Path, version: &str, tagged: bool) {
     fs::write(
         root.join("package.json"),
         format!(r#"{{"version":"{version}"}}"#),
@@ -46,10 +46,14 @@ fn commit_release(root: &Path, version: &str) {
         root,
         &["-c", "commit.gpgsign=false", "commit", "-qm", version],
     );
-    git(root, &["tag", &format!("v{version}")]);
+    if tagged {
+        git(root, &["tag", &format!("v{version}")]);
+    }
 }
 
-fn fixture() -> (
+fn fixture(
+    tagged: bool,
+) -> (
     tempfile::TempDir,
     ManagedWorkflowService,
     WorkflowReleaseIdentity,
@@ -60,7 +64,7 @@ fn fixture() -> (
     fs::create_dir(source.join("src")).expect("source directory");
     fs::write(source.join("workflow.yaml"), MANIFEST).expect("manifest");
     git(&source, &["init", "-q"]);
-    commit_release(&source, "1.0.0");
+    commit_release(&source, "1.0.0", tagged);
     let home = AbsolutePathBuf::from_absolute_path_checked(root.path()).expect("home");
     let workflows = AbsolutePathBuf::from_absolute_path_checked(root.path().join("workflows"))
         .expect("workflows");
@@ -93,8 +97,8 @@ fn available(service: &ManagedWorkflowService) -> WorkflowReleaseIdentity {
 
 #[test]
 fn explicit_update_replaces_a_dismissed_release_and_retains_policy() {
-    let (root, service, installed) = fixture();
-    commit_release(&root.path().join("source"), "1.1.0");
+    let (root, service, installed) = fixture(/*tagged*/ true);
+    commit_release(&root.path().join("source"), "1.1.0", /*tagged*/ true);
     let release = available(&service);
     let cancelled = AtomicBool::new(false);
     service
@@ -134,8 +138,8 @@ fn explicit_update_replaces_a_dismissed_release_and_retains_policy() {
 
 #[test]
 fn update_rejects_dirty_payload_and_stale_release_without_replacing_it() {
-    let (root, service, installed) = fixture();
-    commit_release(&root.path().join("source"), "1.1.0");
+    let (root, service, installed) = fixture(/*tagged*/ true);
+    commit_release(&root.path().join("source"), "1.1.0", /*tagged*/ true);
     let release = available(&service);
     let cancelled = AtomicBool::new(false);
     let stale = WorkflowReleaseIdentity {
@@ -189,5 +193,94 @@ fn update_rejects_dirty_payload_and_stale_release_without_replacing_it() {
     assert_eq!(
         fs::read_to_string(active).expect("active source"),
         "modified locally\n"
+    );
+}
+
+#[test]
+fn untagged_head_update_replaces_the_exact_checked_commit() {
+    let (root, service, installed) = fixture(/*tagged*/ false);
+    commit_release(&root.path().join("source"), "1.1.0", /*tagged*/ false);
+    let release = available(&service);
+    assert_eq!(release.tag, None);
+    let cancelled = AtomicBool::new(false);
+    service
+        .update(ManagedWorkflowUpdateRequest {
+            id: "team/build",
+            expected_installed: &installed,
+            expected_available: &release,
+            dependency_runtime: None,
+            cancelled: &cancelled,
+        })
+        .expect("update HEAD release");
+    assert_eq!(
+        service.list_installed().expect("records")[0].installed,
+        release
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("workflows/team/build/src/workflow.ts"))
+            .expect("active source"),
+        "export default '1.1.0';\n"
+    );
+}
+
+#[test]
+fn dependency_failure_preserves_the_installed_release() {
+    let (root, service, installed) = fixture(/*tagged*/ true);
+    let source = root.path().join("source");
+    commit_release(&source, "1.1.0", /*tagged*/ true);
+    fs::create_dir_all(source.join("vendor/dep")).expect("dependency");
+    fs::write(
+        source.join("package.json"),
+        r#"{"name":"team-build","version":"1.1.0","dependencies":{"dep":"file:vendor/dep"}}"#,
+    )
+    .expect("dependency package");
+    fs::write(
+        source.join("vendor/dep/package.json"),
+        r#"{"name":"dep","version":"1.0.0","main":"index.js"}"#,
+    )
+    .expect("dependency manifest");
+    fs::write(source.join("vendor/dep/index.js"), "export default 1;\n")
+        .expect("dependency source");
+    fs::write(
+        source.join("bun.lock"),
+        r#"{"lockfileVersion":1,"configVersion":1,"workspaces":{"":{"name":"team-build","dependencies":{"dep":"file:vendor/dep"}}},"packages":{"dep":["dep@file:vendor/dep",{}]}}"#,
+    )
+    .expect("text lock");
+    git(&source, &["add", "--all"]);
+    git(
+        &source,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "dependencies",
+        ],
+    );
+    git(&source, &["tag", "-f", "v1.1.0"]);
+    let release = available(&service);
+    let cancelled = AtomicBool::new(false);
+    let error = service
+        .update(ManagedWorkflowUpdateRequest {
+            id: "team/build",
+            expected_installed: &installed,
+            expected_available: &release,
+            dependency_runtime: None,
+            cancelled: &cancelled,
+        })
+        .expect_err("Bun runtime is required");
+    assert!(
+        error
+            .to_string()
+            .contains("require Bun and a local sandbox")
+    );
+    assert_eq!(
+        service.list_installed().expect("records")[0].installed,
+        installed
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("workflows/team/build/src/workflow.ts"))
+            .expect("active source"),
+        "export default '1.0.0';\n"
     );
 }
