@@ -6,6 +6,7 @@ use anyhow::Context;
 use anyhow::Result;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use tempfile::TempDir;
 
 const MANIFEST: &str = "apiVersion: 1\nid: team/build\ntitle: Team Build\ncallableName: team-build\ndescription: Build workflow\nvalidation:\n  commands: []\n  coverage:\n    positive: true\n    load: true\n    autocomplete: true\n    negative: true\n";
@@ -233,5 +234,190 @@ fn reserved_alias_can_be_run_explicitly() -> Result<()> {
         .assert()
         .failure()
         .stderr(contains("not a canonical package"));
+    Ok(())
+}
+
+#[test]
+fn managed_discovery_shows_release_and_refuses_direct_edits() -> Result<()> {
+    let home = TempDir::new()?;
+    let project = TempDir::new()?;
+    let source = project.path().join("source");
+    create_source(&source, "team/build")?;
+    fs::write(
+        home.path().join("config.toml"),
+        "[features]\nworkflows = true\n",
+    )?;
+    codex(home.path(), project.path())?
+        .args([
+            "workflow",
+            "install",
+            source.to_str().context("source path is UTF-8")?,
+            "--policy",
+            "automatic",
+        ])
+        .assert()
+        .success();
+    let commit = String::from_utf8(
+        Command::new("git")
+            .current_dir(&source)
+            .args(["rev-parse", "HEAD"])
+            .output()?
+            .stdout,
+    )?
+    .trim()
+    .to_owned();
+    let source_url = url::Url::from_file_path(source.canonicalize()?)
+        .map_err(|_| anyhow::anyhow!("source URL"))?
+        .to_string();
+    let expected = json!({
+        "source": source_url,
+        "installed": {"tag": "v1.0.0", "version": "1.0.0", "commit": commit},
+        "policy": "automatic",
+        "dismissedRelease": null,
+    });
+    let listing = codex(home.path(), project.path())?
+        .args(["workflow", "list", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let listing: serde_json::Value = serde_json::from_slice(&listing)?;
+    assert_eq!(listing[0]["managed"], expected);
+    let shown = codex(home.path(), project.path())?
+        .args(["workflow", "show", "team/build", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let shown: serde_json::Value = serde_json::from_slice(&shown)?;
+    assert_eq!(shown["workflow"]["managed"], expected);
+    codex(home.path(), project.path())?
+        .args(["workflow", "status", "team/build"])
+        .assert()
+        .success()
+        .stdout(contains("managed v1.0.0; policy automatic"));
+
+    let active = home.path().join("workflows/team/build/workflow.yaml");
+    let before = fs::read_to_string(&active)?;
+    for args in [
+        vec!["describe", "team/build", "changed"],
+        vec!["docs", "team/build", "changed"],
+        vec!["edit", "team/build", "changed"],
+        vec!["repair", "team/build"],
+        vec!["fix", "team/build"],
+    ] {
+        codex(home.path(), project.path())?
+            .arg("workflow")
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(contains("is a managed workflow"));
+    }
+    assert_eq!(fs::read_to_string(&active)?, before);
+    assert!(!active.with_file_name("README.md").exists());
+
+    let sibling = home.path().join("workflows/zz-override");
+    fs::create_dir(&sibling)?;
+    fs::write(sibling.join("workflow.yaml"), &before)?;
+    let sibling_list = codex(home.path(), project.path())?
+        .args(["workflow", "list", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let sibling_list: serde_json::Value = serde_json::from_slice(&sibling_list)?;
+    assert!(sibling_list[0].get("managed").is_none());
+    codex(home.path(), project.path())?
+        .args(["workflow", "describe", "team/build", "Sibling edit"])
+        .assert()
+        .success();
+    assert_eq!(fs::read_to_string(&active)?, before);
+    fs::remove_dir_all(sibling)?;
+
+    let project_workflow = project.path().join(".codex/workflows/team/build");
+    fs::create_dir_all(&project_workflow)?;
+    fs::write(project_workflow.join("workflow.yaml"), &before)?;
+    let project_list = codex(home.path(), project.path())?
+        .args(["workflow", "list", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let project_list: serde_json::Value = serde_json::from_slice(&project_list)?;
+    assert!(project_list[0].get("managed").is_none());
+    let project_show = codex(home.path(), project.path())?
+        .args(["workflow", "show", "team/build", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let project_show: serde_json::Value = serde_json::from_slice(&project_show)?;
+    assert!(project_show["workflow"].get("managed").is_none());
+    let project_status = codex(home.path(), project.path())?
+        .args(["workflow", "status", "team/build"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(!String::from_utf8_lossy(&project_status).contains("managed"));
+    codex(home.path(), project.path())?
+        .args(["workflow", "describe", "team/build", "Project edit"])
+        .assert()
+        .success();
+    assert_eq!(fs::read_to_string(&active)?, before);
+    fs::remove_dir_all(project_workflow)?;
+
+    let changed_id = before.replace("id: team/build", "id: team/other");
+    fs::write(&active, &changed_id)?;
+    codex(home.path(), project.path())?
+        .args(["workflow", "describe", "team/other", "Forbidden edit"])
+        .assert()
+        .failure()
+        .stderr(contains("is a managed workflow"));
+    assert_eq!(fs::read_to_string(&active)?, changed_id);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn developer_views_work_with_symlinked_root_and_read_only_home() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::symlink;
+
+    let home = TempDir::new()?;
+    let project = TempDir::new()?;
+    let workflow = project.path().join("developer-workflows/review");
+    fs::create_dir_all(&workflow)?;
+    fs::write(
+        workflow.join("workflow.yaml"),
+        "id: review\ncommand: review\nuserDescription: Developer workflow\n",
+    )?;
+    symlink(
+        workflow.parent().context("developer root")?,
+        home.path().join("workflows"),
+    )?;
+    fs::write(
+        home.path().join("config.toml"),
+        "[features]\nworkflows = true\n",
+    )?;
+    let original = fs::metadata(home.path())?.permissions();
+    fs::set_permissions(home.path(), fs::Permissions::from_mode(/*mode*/ 0o500))?;
+    let listing = codex(home.path(), project.path())?
+        .args(["workflow", "list", "--json"])
+        .output()?;
+    fs::set_permissions(home.path(), original)?;
+    anyhow::ensure!(
+        listing.status.success(),
+        "list failed: {}",
+        String::from_utf8_lossy(&listing.stderr)
+    );
+    let listing: serde_json::Value = serde_json::from_slice(&listing.stdout)?;
+    assert_eq!(listing[0]["id"], "review");
     Ok(())
 }
