@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Child;
 use std::process::Command;
@@ -157,6 +158,13 @@ fn managed_identity_survives_locale_and_timezone_changes() -> Result<()> {
             .env("LC_ALL", locale)
             .env("TZ", timezone)
             .output()?;
+        let _ = writeln!(
+            std::io::stderr(),
+            "managed identity action={action} status={} stdout={} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         ensure!(
             output.status.success(),
             "daemon {action} failed: {}",
@@ -486,7 +494,7 @@ fn manual_update_rejects_an_unowned_installation() -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InitialDaemon {
     Missing,
     Legacy,
@@ -547,6 +555,10 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
     let cli_before = daemon.codex.canonicalize()?;
     let mut command = daemon.command();
     command.args(["app-server", "daemon", action]);
+    let _ = writeln!(
+        std::io::stderr(),
+        "packaged daemon action={action} initial={initial:?}: launch"
+    );
     // A freshly copied executable can briefly remain busy on Linux CI workers.
     let mut retries = 0;
     let result = loop {
@@ -561,6 +573,11 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
         retries += 1;
         std::thread::sleep(Duration::from_millis(/*millis*/ 10));
     };
+    let _ = writeln!(
+        std::io::stderr(),
+        "packaged daemon action={action} initial={initial:?}: launch status={}",
+        result.status
+    );
     ensure!(
         result.status.success(),
         "{}",
@@ -608,6 +625,10 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
             .command()
             .args(["app-server", "daemon", "update", "--from-cli"])
             .output()?;
+        let _ = writeln!(
+            std::io::stderr(),
+            "packaged daemon: unconfirmed update returned"
+        );
         assert!(!refused.status.success());
         assert!(String::from_utf8_lossy(&refused.stderr).contains("rerun with --yes"));
         assert_eq!(daemon.pid(initial_pid_file)?, original_pid);
@@ -621,6 +642,10 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
             .command()
             .args(["app-server", "daemon", "update", "--from-cli", "--yes"])
             .output()?;
+        let _ = writeln!(
+            std::io::stderr(),
+            "packaged daemon: invalid update returned"
+        );
         assert!(!invalid.status.success());
         assert_eq!(daemon.pid(initial_pid_file)?, original_pid);
         assert_eq!(initial_current.canonicalize()?, original);
@@ -639,6 +664,7 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
             .command()
             .args(["app-server", "daemon", "update", "--from-cli", "--yes"])
             .output()?;
+        let _ = writeln!(std::io::stderr(), "packaged daemon: replacement returned");
         ensure!(
             replaced.status.success(),
             "{}",
