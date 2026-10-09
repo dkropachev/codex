@@ -36,7 +36,8 @@ pub struct WorkflowCli {
 
     /// Workflow command and arguments, such as `list`, `validate <id>`,
     /// `repair <id>` / `fix <id>`, `recover <id>`, `run <id> --input '{...}'`,
-    /// or a registered workflow alias.
+    /// `install <source>`, `update <id>`, or a registered workflow alias.
+    /// Use `run <alias>` when an alias has the same name as a management command.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
 }
@@ -128,6 +129,14 @@ impl From<&WorkflowCommand> for JsonWorkflowCommand {
 
 pub async fn run(cli: WorkflowCli, config: &Config) -> anyhow::Result<()> {
     ensure_workflows_enabled(config)?;
+    if cli.args.first().is_some_and(|command| {
+        matches!(
+            command.as_str(),
+            "install" | "check-updates" | "update" | "set-policy" | "dismiss" | "uninstall"
+        )
+    }) {
+        return super::managed::run(&cli.args, config);
+    }
     let commands = discover_workflow_commands(config.codex_home.as_path(), config.cwd.as_path());
     let command = parse_workflow_command(&cli.args, &commands)?;
     match command {
