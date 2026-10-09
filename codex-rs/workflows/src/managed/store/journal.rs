@@ -22,6 +22,7 @@ const MAX_TRANSACTION_ID_BYTES: usize = 128;
 pub(super) enum ManagedWorkflowOperation {
     Install,
     Replace,
+    Uninstall,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -30,6 +31,7 @@ pub(super) enum ManagedWorkflowNextAction {
     MoveCurrentAside,
     PublishRelease,
     WriteReceipt,
+    RemoveReceipt,
     Cleanup,
 }
 
@@ -90,6 +92,25 @@ impl ManagedWorkflowJournal {
         Ok(journal)
     }
 
+    pub(super) fn new_uninstall(
+        transaction_id: String,
+        previous_receipt: ManagedWorkflowReceipt,
+        evidence: ActivationPayloadEvidence,
+    ) -> anyhow::Result<Self> {
+        let journal = Self {
+            schema_version: JOURNAL_SCHEMA_VERSION,
+            transaction_id,
+            id: previous_receipt.id.clone(),
+            operation: ManagedWorkflowOperation::Uninstall,
+            previous_receipt: Some(previous_receipt.clone()),
+            next_receipt: previous_receipt,
+            evidence,
+            next_action: ManagedWorkflowNextAction::MoveCurrentAside,
+        };
+        journal.validate()?;
+        Ok(journal)
+    }
+
     pub(super) fn validate(&self) -> anyhow::Result<()> {
         if self.schema_version != JOURNAL_SCHEMA_VERSION {
             bail!("unsupported managed workflow journal schema version");
@@ -102,8 +123,13 @@ impl ManagedWorkflowJournal {
         }
         match (&self.operation, &self.previous_receipt) {
             (ManagedWorkflowOperation::Install, None) => {
-                if self.next_action == ManagedWorkflowNextAction::MoveCurrentAside {
-                    bail!("fresh install cannot move an existing release aside");
+                if !matches!(
+                    self.next_action,
+                    ManagedWorkflowNextAction::PublishRelease
+                        | ManagedWorkflowNextAction::WriteReceipt
+                        | ManagedWorkflowNextAction::Cleanup
+                ) {
+                    bail!("fresh install has an invalid next action");
                 }
             }
             (ManagedWorkflowOperation::Replace, Some(previous)) => {
@@ -111,9 +137,27 @@ impl ManagedWorkflowJournal {
                 if previous.id != self.id {
                     bail!("managed workflow journal previous receipt id does not match");
                 }
+                if self.next_action == ManagedWorkflowNextAction::RemoveReceipt {
+                    bail!("replacement cannot remove its receipt");
+                }
+            }
+            (ManagedWorkflowOperation::Uninstall, Some(previous)) => {
+                previous.serialized_bytes()?;
+                if previous.id != self.id || self.next_receipt != *previous {
+                    bail!("uninstall journal does not match previous receipt");
+                }
+                if !matches!(
+                    self.next_action,
+                    ManagedWorkflowNextAction::MoveCurrentAside
+                        | ManagedWorkflowNextAction::RemoveReceipt
+                        | ManagedWorkflowNextAction::Cleanup
+                ) {
+                    bail!("uninstall journal has an invalid next action");
+                }
             }
             (ManagedWorkflowOperation::Install, Some(_))
-            | (ManagedWorkflowOperation::Replace, None) => {
+            | (ManagedWorkflowOperation::Replace, None)
+            | (ManagedWorkflowOperation::Uninstall, None) => {
                 bail!("managed workflow journal operation and previous receipt disagree");
             }
         }

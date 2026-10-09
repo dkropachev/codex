@@ -22,6 +22,8 @@ mod recovery;
 #[cfg(any(unix, windows))]
 mod replace;
 mod stage;
+#[cfg(any(unix, windows))]
+mod uninstall;
 #[cfg(windows)]
 mod windows_security;
 
@@ -38,14 +40,20 @@ use fs::SecureDirectory;
 use lock::LockMode;
 use lock::ManagedFileLock;
 use prepare::PreparedWorkflowRelease;
-use receipt::ManagedWorkflowReceipt;
+pub(in crate::managed) use receipt::ManagedWorkflowReceipt;
+pub(in crate::managed) use receipt::WorkflowRelease;
+pub use receipt::WorkflowUpdatePolicy;
 
 pub(in crate::managed) use operation::ManagedBunOperationDirectory;
 
 #[cfg(any(unix, windows))]
 pub(in crate::managed) use expected::ExpectedCurrent;
 #[cfg(any(unix, windows))]
+pub(in crate::managed) use expected::ReceiptIdentity;
+#[cfg(any(unix, windows))]
 pub(in crate::managed) use publish::ManagedWorkflowCommitOutcome;
+#[cfg(any(unix, windows))]
+pub(in crate::managed) use publish::ensure_fresh_target;
 
 /// Owns the private, same-filesystem metadata layout for managed workflows.
 pub(in crate::managed) struct ManagedWorkflowStore {
@@ -63,7 +71,7 @@ pub(in crate::managed) struct LockedManagedWorkflow {
     #[cfg(any(unix, windows))]
     management_identity: (u64, u64),
     _global: ManagedFileLock,
-    _workflow: ManagedFileLock,
+    _workflows: Vec<ManagedFileLock>,
 }
 
 #[cfg(any(unix, windows))]
@@ -78,7 +86,7 @@ impl LockedManagedWorkflow {
 
 pub(in crate::managed) struct ManagedWorkflowRunGuard {
     _global: ManagedFileLock,
-    _workflow: ManagedFileLock,
+    _workflows: Vec<ManagedFileLock>,
 }
 
 pub(in crate::managed) struct ManagedWorkflowRecoveryGuard {
@@ -134,6 +142,18 @@ impl ManagedWorkflowStore {
         replace::recover_replace(self, locked)
     }
 
+    /// Removes a verified managed release through a durable transaction.
+    #[allow(dead_code, reason = "used by workflow lifecycle management")]
+    #[cfg(any(unix, windows))]
+    pub(in crate::managed) fn commit_uninstall(
+        &self,
+        locked: &LockedManagedWorkflow,
+        expected: &ExpectedCurrent,
+    ) -> anyhow::Result<ManagedWorkflowCommitOutcome> {
+        locked.ensure_store(self)?;
+        uninstall::commit_uninstall(self, locked, expected)
+    }
+
     /// Copies a verified release into operation-private staging and binds it to a journal marker.
     #[expect(
         clippy::too_many_arguments,
@@ -170,6 +190,99 @@ impl ManagedWorkflowStore {
         let global = self.management.open_lock_file("managed.lock")?;
         let _global = ManagedFileLock::acquire(global, LockMode::Exclusive, cancelled)?;
         catalog::collect_receipts(&self.receipts, cancelled)
+    }
+
+    pub(in crate::managed) fn read_managed_receipt(
+        &self,
+        id: &str,
+        cancelled: &AtomicBool,
+    ) -> anyhow::Result<ManagedWorkflowReceipt> {
+        let _locked = self.lock_run(id, Some(cancelled))?;
+        receipt::read_receipt(&self.receipts, id)
+    }
+
+    #[cfg(any(unix, windows))]
+    pub(in crate::managed) fn read_locked_receipt(
+        &self,
+        locked: &LockedManagedWorkflow,
+    ) -> anyhow::Result<ManagedWorkflowReceipt> {
+        locked.ensure_store(self)?;
+        if publish::journal_exists(&self.journals, &locked.id)? {
+            self.recover_locked(locked)?;
+            if publish::journal_exists(&self.journals, &locked.id)? {
+                bail!("managed workflow has an unresolved transaction journal");
+            }
+        }
+        let receipt = receipt::read_receipt(&self.receipts, &locked.id)?;
+        let parent =
+            publish::active_parent(&self.active_root, &locked.id, publish::ParentMode::Existing)?
+                .context("managed workflow active parent disappeared")?;
+        let active = parent
+            .directory()
+            .existing_child(publish::leaf(&locked.id)?)?;
+        let marker = journal::read_marker(&active)?;
+        if marker.id != locked.id || marker.release != receipt.installed {
+            bail!("managed workflow active marker does not match its receipt");
+        }
+        Ok(receipt)
+    }
+
+    #[cfg(any(unix, windows))]
+    pub(in crate::managed) fn read_locked_verified_receipt(
+        &self,
+        locked: &LockedManagedWorkflow,
+        cancelled: &AtomicBool,
+    ) -> anyhow::Result<ManagedWorkflowReceipt> {
+        let receipt = self.read_locked_receipt(locked)?;
+        let parent =
+            publish::active_parent(&self.active_root, &locked.id, publish::ParentMode::Existing)?
+                .context("managed workflow active parent disappeared")?;
+        let active = parent
+            .directory()
+            .existing_child(publish::leaf(&locked.id)?)?;
+        let retained = active.identity()?;
+        let marker = journal::read_marker(&active)?;
+        let evidence = crate::managed::integrity::published_payload_evidence(
+            active.path().as_path(),
+            crate::managed::fetch::VERIFICATION_LIMITS,
+            crate::runner::CommandDeadline::after(std::time::Duration::from_secs(/*secs*/ 60)),
+            Some(cancelled),
+        )?;
+        if evidence.sha256 != marker.evidence_digest {
+            bail!("managed workflow active payload differs from its marker");
+        }
+        let named = SecureDirectory::open_root(active.path())?;
+        if named.identity()? != retained {
+            bail!("managed workflow active directory changed during verification");
+        }
+        Ok(receipt)
+    }
+
+    #[cfg(any(unix, windows))]
+    pub(in crate::managed) fn write_locked_receipt(
+        &self,
+        locked: &LockedManagedWorkflow,
+        expected: &ManagedWorkflowReceipt,
+        next: &ManagedWorkflowReceipt,
+    ) -> anyhow::Result<()> {
+        let current = self.read_locked_receipt(locked)?;
+        if current != *expected {
+            bail!("managed workflow receipt changed before policy mutation");
+        }
+        if next.id != current.id
+            || next.source != current.source
+            || next.installed != current.installed
+        {
+            bail!("managed workflow policy mutation changed installation identity");
+        }
+        if let Err(error) = receipt::write_receipt(&self.receipts, next, /*replace*/ true) {
+            if matches!(receipt::read_receipt(&self.receipts, &locked.id), Ok(written) if written == *next)
+            {
+                return Ok(());
+            }
+            return Err(error);
+        }
+        Ok(())
     }
     pub(in crate::managed) fn create(
         codex_home: &AbsolutePathBuf,
@@ -246,8 +359,7 @@ impl ManagedWorkflowStore {
         receipt::validate_id(id)?;
         let global = self.management.open_lock_file("managed.lock")?;
         let global = ManagedFileLock::acquire(global, LockMode::Shared, cancelled)?;
-        let workflow = self.workflow_lock_file(id)?;
-        let workflow = ManagedFileLock::acquire(workflow, LockMode::Exclusive, cancelled)?;
+        let workflows = self.workflow_locks(id, LockMode::Exclusive, cancelled)?;
         #[cfg(any(unix, windows))]
         let management_identity = self.management.identity()?;
         Ok(LockedManagedWorkflow {
@@ -255,7 +367,7 @@ impl ManagedWorkflowStore {
             #[cfg(any(unix, windows))]
             management_identity,
             _global: global,
-            _workflow: workflow,
+            _workflows: workflows,
         })
     }
 
@@ -267,11 +379,10 @@ impl ManagedWorkflowStore {
         receipt::validate_id(id)?;
         let global = self.management.open_lock_file("managed.lock")?;
         let global = ManagedFileLock::acquire(global, LockMode::Shared, cancelled)?;
-        let workflow = self.workflow_lock_file(id)?;
-        let workflow = ManagedFileLock::acquire(workflow, LockMode::Shared, cancelled)?;
+        let workflows = self.workflow_locks(id, LockMode::Shared, cancelled)?;
         Ok(ManagedWorkflowRunGuard {
             _global: global,
-            _workflow: workflow,
+            _workflows: workflows,
         })
     }
 
@@ -297,6 +408,22 @@ impl ManagedWorkflowStore {
             .as_ref()
             .unwrap_or(&self.locks)
             .open_lock_file(&format!("{leaf}.lock"))
+    }
+
+    fn workflow_locks(
+        &self,
+        id: &str,
+        leaf_mode: LockMode,
+        cancelled: Option<&AtomicBool>,
+    ) -> anyhow::Result<Vec<ManagedFileLock>> {
+        let mut locks = Vec::new();
+        for (separator, _) in id.match_indices('/') {
+            let file = self.workflow_lock_file(&id[..separator])?;
+            locks.push(ManagedFileLock::acquire(file, LockMode::Shared, cancelled)?);
+        }
+        let file = self.workflow_lock_file(id)?;
+        locks.push(ManagedFileLock::acquire(file, leaf_mode, cancelled)?);
+        Ok(locks)
     }
 }
 

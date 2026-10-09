@@ -24,15 +24,39 @@ enum WorkflowGitSourceKind {
 pub struct WorkflowGitSource(WorkflowGitSourceKind);
 
 impl WorkflowGitSource {
-    /// Returns a credential-free remote spelling suitable for receipt v1.
+    /// Returns a credential-free source spelling suitable for receipt v1.
     #[allow(dead_code, reason = "used by managed receipt publication")]
-    pub(in crate::managed) fn receipt_source(&self) -> anyhow::Result<&str> {
+    pub(in crate::managed) fn receipt_source(&self) -> anyhow::Result<String> {
         match &self.0 {
-            WorkflowGitSourceKind::Https(source) | WorkflowGitSourceKind::Ssh(source) => Ok(source),
-            WorkflowGitSourceKind::Local(_) => {
-                anyhow::bail!("local workflow source cannot be persisted without an absolute path")
+            WorkflowGitSourceKind::Https(source) | WorkflowGitSourceKind::Ssh(source) => {
+                Ok(source.clone())
             }
+            WorkflowGitSourceKind::Local(path) => Url::from_file_path(path.as_path())
+                .map(Into::into)
+                .map_err(|()| anyhow!(INVALID_SOURCE)),
         }
+    }
+
+    /// Checks a stored local source without requiring the repository to still exist.
+    pub(in crate::managed) fn validate_receipt_file_url(source: &str) -> Result<()> {
+        let url = Url::parse(source).map_err(|_| anyhow!(INVALID_SOURCE))?;
+        ensure!(
+            url.scheme() == "file"
+                && url.host_str().is_none()
+                && url.port().is_none()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none(),
+            INVALID_SOURCE
+        );
+        let path = url.to_file_path().map_err(|()| anyhow!(INVALID_SOURCE))?;
+        ensure!(
+            !path.to_str().is_some_and(is_network_path)
+                && Url::from_file_path(&path).is_ok_and(|canonical| canonical.as_str() == source),
+            INVALID_SOURCE
+        );
+        Ok(())
     }
 
     /// Parses and validates a Git source before it is passed to Git.

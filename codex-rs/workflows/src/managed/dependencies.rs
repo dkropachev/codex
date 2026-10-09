@@ -10,6 +10,9 @@ mod bun;
 mod install;
 mod lockfile;
 
+pub(in crate::managed) use install::ManagedDependencyMaterializationOutcome;
+pub(in crate::managed) use install::ManagedDependencyMaterializationRequest;
+pub(in crate::managed) use install::materialize_managed_dependencies;
 pub(in crate::managed) use lockfile::ManagedBunLockfile;
 
 const DEPENDENCY_SECTIONS: [&str; 4] = [

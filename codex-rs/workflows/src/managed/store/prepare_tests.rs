@@ -128,9 +128,14 @@ pub(in crate::managed::store) fn verified_release_with_source(
         /*cancelled*/ None,
     )
     .expect("verify release");
+    let receipt_source = if synthetic_remote {
+        "https://example.com/team/build.git".to_string()
+    } else {
+        source_url.receipt_source().expect("local receipt source")
+    };
     let receipt = ManagedWorkflowReceipt::new(
         "team/build".into(),
-        "https://example.com/team/build.git".into(),
+        receipt_source,
         WorkflowRelease {
             tag: release.tag,
             version: release.version.map(|version| version.to_string()),
@@ -291,7 +296,7 @@ fn prepare_preserves_contained_dependency_symlink() {
 }
 
 #[test]
-fn prepare_rejects_local_source_before_creating_staging() {
+fn prepare_accepts_local_source_with_canonical_receipt() {
     let root = tempfile::tempdir().expect("store root");
     let store = store(root.path());
     let lock = store
@@ -300,7 +305,7 @@ fn prepare_rejects_local_source_before_creating_staging() {
     let (_source_staging, verified, receipt, _) = verified_release(
         /*with_dependencies*/ false, /*synthetic_remote*/ false,
     );
-    let error = store
+    let prepared = store
         .prepare_release(
             &lock,
             verified,
@@ -310,18 +315,13 @@ fn prepare_rejects_local_source_before_creating_staging() {
             crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 5)),
             /*cancelled*/ None,
         )
-        .err()
-        .expect("local source must fail");
-    assert!(
-        error.to_string().contains("local workflow source"),
-        "{error:#}"
-    );
+        .expect("prepare local release");
     assert!(
         store
             .staging
             .list_names(/*maximum_entries*/ 10, /*cancelled*/ None)
             .expect("staging entries")
-            .is_empty()
+            .contains(&prepared.staging.name().to_owned())
     );
 }
 
