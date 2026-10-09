@@ -22,7 +22,7 @@ pub(in crate::managed) struct WorkflowRelease {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(in crate::managed) enum WorkflowUpdatePolicy {
+pub enum WorkflowUpdatePolicy {
     Prompt,
     Automatic,
     Manual,

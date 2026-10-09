@@ -18,8 +18,15 @@ use super::store::ManagedWorkflowCommitOutcome;
 use super::store::ManagedWorkflowReceipt;
 use super::store::ManagedWorkflowStore;
 use super::store::WorkflowRelease;
-use super::store::WorkflowUpdatePolicy;
 use super::store::ensure_fresh_target;
+
+mod update;
+
+pub use update::ManagedWorkflowRecord;
+pub use update::ManagedWorkflowUpdate;
+pub use update::ManagedWorkflowUpdateCheck;
+pub use update::WorkflowReleaseIdentity;
+pub use update::WorkflowUpdatePolicy;
 
 /// Bun and mandatory sandbox inputs for a release that declares dependencies.
 pub struct ManagedWorkflowDependencyRuntime<'a> {

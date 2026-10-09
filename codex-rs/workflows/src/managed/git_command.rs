@@ -41,6 +41,45 @@ pub(super) fn resolve_workflow_git_release(
     resolve_workflow_git_release_with_git(OsStr::new("git"), source, cancelled)
 }
 
+/// Resolves one previously installed tag, including annotated-tag peeling.
+pub(super) fn resolve_installed_workflow_tag(
+    source: &WorkflowGitSource,
+    tag: &str,
+    cancelled: &AtomicBool,
+) -> anyhow::Result<ResolvedWorkflowRelease> {
+    let working_directory = tempfile::tempdir().context("failed to isolate Git tag check")?;
+    let mut command = trusted_git_command(OsStr::new("git"), working_directory.path());
+    command
+        .args(["ls-remote", "--"])
+        .arg(source.as_os_str())
+        .arg(format!("refs/tags/{tag}"))
+        .arg(format!("refs/tags/{tag}^{{}}"))
+        .env("GIT_DIR", working_directory.path().join("isolated.git"));
+    let (status, stdout, _, oversized) = crate::runner::run_bounded_command(
+        command,
+        GIT_COMMAND_TIMEOUT,
+        MAX_GIT_OUTPUT_BYTES,
+        Some(cancelled),
+    )
+    .context("installed Git tag check could not start or complete")?;
+    if oversized {
+        bail!("installed Git tag metadata exceeded its limit");
+    }
+    if !status.success() {
+        bail!("installed Git tag check failed with status {status}");
+    }
+    if stdout.is_empty() {
+        bail!("installed managed workflow release tag disappeared");
+    }
+    let output =
+        std::str::from_utf8(&stdout).context("installed Git tag metadata was not UTF-8")?;
+    let release = super::release::resolve_workflow_release(output)?;
+    if release.tag.as_deref() != Some(tag) {
+        bail!("installed Git tag check returned an unexpected release");
+    }
+    Ok(release)
+}
+
 fn resolve_workflow_git_release_with_git(
     git: &OsStr,
     source: &WorkflowGitSource,

@@ -42,7 +42,7 @@ use lock::ManagedFileLock;
 use prepare::PreparedWorkflowRelease;
 pub(in crate::managed) use receipt::ManagedWorkflowReceipt;
 pub(in crate::managed) use receipt::WorkflowRelease;
-pub(in crate::managed) use receipt::WorkflowUpdatePolicy;
+pub use receipt::WorkflowUpdatePolicy;
 
 pub(in crate::managed) use operation::ManagedBunOperationDirectory;
 
@@ -188,6 +188,15 @@ impl ManagedWorkflowStore {
         let global = self.management.open_lock_file("managed.lock")?;
         let _global = ManagedFileLock::acquire(global, LockMode::Exclusive, cancelled)?;
         catalog::collect_receipts(&self.receipts, cancelled)
+    }
+
+    pub(in crate::managed) fn read_managed_receipt(
+        &self,
+        id: &str,
+        cancelled: &AtomicBool,
+    ) -> anyhow::Result<ManagedWorkflowReceipt> {
+        let _locked = self.lock_run(id, Some(cancelled))?;
+        receipt::read_receipt(&self.receipts, id)
     }
     pub(in crate::managed) fn create(
         codex_home: &AbsolutePathBuf,
