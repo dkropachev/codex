@@ -49,6 +49,8 @@ pub(in crate::managed) use operation::ManagedBunOperationDirectory;
 #[cfg(any(unix, windows))]
 pub(in crate::managed) use expected::ExpectedCurrent;
 #[cfg(any(unix, windows))]
+pub(in crate::managed) use expected::ReceiptIdentity;
+#[cfg(any(unix, windows))]
 pub(in crate::managed) use publish::ManagedWorkflowCommitOutcome;
 #[cfg(any(unix, windows))]
 pub(in crate::managed) use publish::ensure_fresh_target;
@@ -221,6 +223,37 @@ impl ManagedWorkflowStore {
         let marker = journal::read_marker(&active)?;
         if marker.id != locked.id || marker.release != receipt.installed {
             bail!("managed workflow active marker does not match its receipt");
+        }
+        Ok(receipt)
+    }
+
+    #[cfg(any(unix, windows))]
+    pub(in crate::managed) fn read_locked_verified_receipt(
+        &self,
+        locked: &LockedManagedWorkflow,
+        cancelled: &AtomicBool,
+    ) -> anyhow::Result<ManagedWorkflowReceipt> {
+        let receipt = self.read_locked_receipt(locked)?;
+        let parent =
+            publish::active_parent(&self.active_root, &locked.id, publish::ParentMode::Existing)?
+                .context("managed workflow active parent disappeared")?;
+        let active = parent
+            .directory()
+            .existing_child(publish::leaf(&locked.id)?)?;
+        let retained = active.identity()?;
+        let marker = journal::read_marker(&active)?;
+        let evidence = crate::managed::integrity::published_payload_evidence(
+            active.path().as_path(),
+            crate::managed::fetch::VERIFICATION_LIMITS,
+            crate::runner::CommandDeadline::after(std::time::Duration::from_secs(/*secs*/ 60)),
+            Some(cancelled),
+        )?;
+        if evidence.sha256 != marker.evidence_digest {
+            bail!("managed workflow active payload differs from its marker");
+        }
+        let named = SecureDirectory::open_root(active.path())?;
+        if named.identity()? != retained {
+            bail!("managed workflow active directory changed during verification");
         }
         Ok(receipt)
     }
