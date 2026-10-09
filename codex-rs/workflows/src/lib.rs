@@ -43,6 +43,8 @@ pub use managed::ManagedWorkflowInstallRequest;
 pub use managed::ManagedWorkflowInstallation;
 pub use managed::ManagedWorkflowRecord;
 pub use managed::ManagedWorkflowService;
+#[cfg(any(unix, windows))]
+pub use managed::ManagedWorkflowUninstallation;
 pub use managed::ManagedWorkflowUpdate;
 pub use managed::ManagedWorkflowUpdateCheck;
 #[cfg(any(unix, windows))]

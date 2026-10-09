@@ -74,6 +74,7 @@ fn install(service: &ManagedWorkflowService, root: &Path, cancelled: &AtomicBool
     service
         .install(super::super::ManagedWorkflowInstallRequest {
             source: root.to_str().expect("UTF-8 source"),
+            policy: WorkflowUpdatePolicy::Prompt,
             dependency_runtime: None,
             cancelled,
         })

@@ -22,10 +22,14 @@ use super::store::ensure_fresh_target;
 
 #[cfg(any(unix, windows))]
 mod policy;
+#[cfg(any(unix, windows))]
+mod uninstall;
 mod update;
 #[cfg(any(unix, windows))]
 mod update_install;
 
+#[cfg(any(unix, windows))]
+pub use uninstall::ManagedWorkflowUninstallation;
 pub use update::ManagedWorkflowRecord;
 pub use update::ManagedWorkflowUpdate;
 pub use update::ManagedWorkflowUpdateCheck;
@@ -43,6 +47,7 @@ pub struct ManagedWorkflowDependencyRuntime<'a> {
 /// Inputs for installing one exact release from a local or remote Git source.
 pub struct ManagedWorkflowInstallRequest<'a> {
     pub source: &'a str,
+    pub policy: WorkflowUpdatePolicy,
     pub dependency_runtime: Option<ManagedWorkflowDependencyRuntime<'a>>,
     pub cancelled: &'a AtomicBool,
 }
@@ -86,6 +91,7 @@ impl ManagedWorkflowService {
     ) -> anyhow::Result<ManagedWorkflowInstallation> {
         let ManagedWorkflowInstallRequest {
             source,
+            policy,
             dependency_runtime,
             cancelled,
         } = request;
@@ -118,7 +124,7 @@ impl ManagedWorkflowService {
                 version: release.version.as_ref().map(ToString::to_string),
                 commit: release.advertised_object_id.clone(),
             },
-            WorkflowUpdatePolicy::Prompt,
+            policy,
         )?;
         let prepared = self.store.prepare_release(
             &locked,
