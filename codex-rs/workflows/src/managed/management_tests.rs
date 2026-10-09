@@ -84,7 +84,6 @@ fn installs_tagged_and_untagged_local_releases_with_prompt_policy() {
         let cancelled = AtomicBool::new(false);
         let request = ManagedWorkflowInstallRequest {
             source: &source,
-            policy: WorkflowUpdatePolicy::Prompt,
             dependency_runtime: None,
             cancelled: &cancelled,
         };
@@ -123,7 +122,6 @@ fn refuses_install_inside_an_existing_managed_release() {
     service
         .install(ManagedWorkflowInstallRequest {
             source: ancestor_source.to_str().expect("UTF-8 path"),
-            policy: WorkflowUpdatePolicy::Prompt,
             dependency_runtime: None,
             cancelled: &cancelled,
         })
@@ -135,7 +133,6 @@ fn refuses_install_inside_an_existing_managed_release() {
     let error = service
         .install(ManagedWorkflowInstallRequest {
             source: child_source.to_str().expect("UTF-8 path"),
-            policy: WorkflowUpdatePolicy::Prompt,
             dependency_runtime: None,
             cancelled: &cancelled,
         })
@@ -166,7 +163,6 @@ fn duplicate_install_keeps_the_published_release() {
     let installed = service
         .install(ManagedWorkflowInstallRequest {
             source,
-            policy: WorkflowUpdatePolicy::Prompt,
             dependency_runtime: None,
             cancelled: &cancelled,
         })
@@ -179,7 +175,6 @@ fn duplicate_install_keeps_the_published_release() {
         service
             .install(ManagedWorkflowInstallRequest {
                 source,
-                policy: WorkflowUpdatePolicy::Prompt,
                 dependency_runtime: None,
                 cancelled: &cancelled,
             })
@@ -213,7 +208,6 @@ fn unavailable_remote_source_keeps_the_store_empty() {
         service
             .install(ManagedWorkflowInstallRequest {
                 source: "https://127.0.0.1:1/workflow.git",
-                policy: WorkflowUpdatePolicy::Prompt,
                 dependency_runtime: None,
                 cancelled: &cancelled,
             })
@@ -245,7 +239,6 @@ fn ssh_remote_service_install_round_trip() {
         let installed = service
             .install(ManagedWorkflowInstallRequest {
                 source: "ssh://git@localhost/repo.git",
-                policy: WorkflowUpdatePolicy::Prompt,
                 dependency_runtime: None,
                 cancelled: &cancelled,
             })
@@ -332,7 +325,6 @@ fn unmanaged_target_is_never_replaced() {
         service
             .install(ManagedWorkflowInstallRequest {
                 source: repository.to_str().expect("UTF-8 path"),
-                policy: WorkflowUpdatePolicy::Prompt,
                 dependency_runtime: None,
                 cancelled: &cancelled,
             })
@@ -401,7 +393,6 @@ fn dependency_install_requires_runtime_before_publication() {
     let error = service
         .install(ManagedWorkflowInstallRequest {
             source: repository.to_str().expect("UTF-8 path"),
-            policy: WorkflowUpdatePolicy::Prompt,
             dependency_runtime: None,
             cancelled: &cancelled,
         })
@@ -441,7 +432,6 @@ fn unavailable_sandbox_preserves_uninstalled_dependency_release() {
     let error = service
         .install(ManagedWorkflowInstallRequest {
             source: repository.to_str().expect("UTF-8 path"),
-            policy: WorkflowUpdatePolicy::Prompt,
             dependency_runtime: Some(ManagedWorkflowDependencyRuntime {
                 bun_executable: &bun,
                 sandbox: LocalSandboxRuntime {
@@ -494,7 +484,6 @@ fn sandboxed_local_dependency_install_publishes_verified_tree() {
     let installed = service
         .install(ManagedWorkflowInstallRequest {
             source: repository.to_str().expect("UTF-8 path"),
-            policy: WorkflowUpdatePolicy::Prompt,
             dependency_runtime: Some(ManagedWorkflowDependencyRuntime {
                 bun_executable: &bun,
                 sandbox: LocalSandboxRuntime {
@@ -541,7 +530,6 @@ fn policy_and_exact_dismissal_persist_without_changing_installation() {
     service
         .install(ManagedWorkflowInstallRequest {
             source: repository.to_str().expect("UTF-8 source"),
-            policy: WorkflowUpdatePolicy::Prompt,
             dependency_runtime: None,
             cancelled: &cancelled,
         })
@@ -677,7 +665,6 @@ fn policy_mutations_reject_a_marker_that_no_longer_matches_the_receipt() {
     service
         .install(ManagedWorkflowInstallRequest {
             source: repository.to_str().expect("UTF-8 source"),
-            policy: WorkflowUpdatePolicy::Prompt,
             dependency_runtime: None,
             cancelled: &cancelled,
         })
