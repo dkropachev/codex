@@ -430,7 +430,7 @@ fn rejects_symlinked_required_directories_and_installed_dependencies() {
     fs::remove_dir_all(root.join("src/tests")).expect("remove tests directory");
     symlink(&outside_tests, root.join("src/tests")).expect("link tests directory");
     let mut findings = BTreeSet::new();
-    validate_required_layout(&root, &mut findings);
+    validate_required_layout(&root, &mut findings, ExecutableLayout::Developer);
     assert!(
         findings
             .iter()

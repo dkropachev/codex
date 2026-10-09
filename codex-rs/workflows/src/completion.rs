@@ -83,7 +83,10 @@ pub fn complete_workflow_cancellable(
         .and_then(|()| WorkflowPackage::load(root))
         .and_then(|package| {
             crate::validation::validate_executable_package_cancellable(
-                &package, deadline, &cancelled,
+                &package,
+                deadline,
+                &cancelled,
+                crate::validation::ExecutableLayout::Developer,
             )?;
             Ok(package)
         }) {
