@@ -49,12 +49,14 @@ fn uninstall_requires_the_current_release_and_removes_its_receipt() {
     let service = ManagedWorkflowService::new(&home, &workflows).expect("service");
     let cancelled = AtomicBool::new(false);
     service
-        .install(ManagedWorkflowInstallRequest {
-            source: source.to_str().expect("source path"),
-            policy: WorkflowUpdatePolicy::Manual,
-            dependency_runtime: None,
-            cancelled: &cancelled,
-        })
+        .install_with_policy(
+            ManagedWorkflowInstallRequest {
+                source: source.to_str().expect("source path"),
+                dependency_runtime: None,
+                cancelled: &cancelled,
+            },
+            WorkflowUpdatePolicy::Manual,
+        )
         .expect("install managed workflow");
     let record = &service.list_installed().expect("records")[0];
     assert_eq!(record.policy, WorkflowUpdatePolicy::Manual);

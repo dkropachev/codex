@@ -47,7 +47,6 @@ pub struct ManagedWorkflowDependencyRuntime<'a> {
 /// Inputs for installing one exact release from a local or remote Git source.
 pub struct ManagedWorkflowInstallRequest<'a> {
     pub source: &'a str,
-    pub policy: WorkflowUpdatePolicy,
     pub dependency_runtime: Option<ManagedWorkflowDependencyRuntime<'a>>,
     pub cancelled: &'a AtomicBool,
 }
@@ -89,9 +88,17 @@ impl ManagedWorkflowService {
         &self,
         request: ManagedWorkflowInstallRequest<'_>,
     ) -> anyhow::Result<ManagedWorkflowInstallation> {
+        self.install_with_policy(request, WorkflowUpdatePolicy::Prompt)
+    }
+
+    /// Installs the selected release with the requested update policy.
+    pub fn install_with_policy(
+        &self,
+        request: ManagedWorkflowInstallRequest<'_>,
+        policy: WorkflowUpdatePolicy,
+    ) -> anyhow::Result<ManagedWorkflowInstallation> {
         let ManagedWorkflowInstallRequest {
             source,
-            policy,
             dependency_runtime,
             cancelled,
         } = request;
