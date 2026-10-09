@@ -24,21 +24,72 @@ pub struct WorkflowCommandOptionHint {
 }
 
 pub fn discover_workflow_commands(codex_home: &Path, cwd: &Path) -> Vec<WorkflowCommand> {
+    match discover_workflow_commands_with_budget(codex_home, cwd, None) {
+        Ok(commands) => commands,
+        Err(error) => unreachable!("unbounded workflow discovery failed: {error}"),
+    }
+}
+
+/// Discovers commands while bounding filesystem traversal for client requests.
+pub fn discover_workflow_commands_bounded(
+    codex_home: &Path,
+    cwd: &Path,
+) -> anyhow::Result<Vec<WorkflowCommand>> {
+    discover_workflow_commands_with_budget(codex_home, cwd, Some(0))
+}
+
+const MAX_DISCOVERY_ENTRIES: usize = 4_096;
+const MAX_DISCOVERY_DEPTH: usize = 32;
+
+fn discover_workflow_commands_with_budget(
+    codex_home: &Path,
+    cwd: &Path,
+    mut budget: Option<usize>,
+) -> anyhow::Result<Vec<WorkflowCommand>> {
     let mut commands = BTreeMap::new();
-    discover_in_root(&codex_home.join("workflows"), &mut commands);
-    discover_in_root(&cwd.join(".codex").join("workflows"), &mut commands);
-    commands.into_values().collect()
+    discover_in_root(&codex_home.join("workflows"), &mut commands, &mut budget)?;
+    discover_in_root(
+        &cwd.join(".codex").join("workflows"),
+        &mut commands,
+        &mut budget,
+    )?;
+    Ok(commands.into_values().collect())
 }
 
-fn discover_in_root(root: &Path, commands: &mut BTreeMap<String, WorkflowCommand>) {
-    discover_in_dir(root, root, commands);
+fn discover_in_root(
+    root: &Path,
+    commands: &mut BTreeMap<String, WorkflowCommand>,
+    budget: &mut Option<usize>,
+) -> anyhow::Result<()> {
+    discover_in_dir(root, root, commands, budget, /*depth*/ 0)
 }
 
-fn discover_in_dir(root: &Path, dir: &Path, commands: &mut BTreeMap<String, WorkflowCommand>) {
+fn discover_in_dir(
+    root: &Path,
+    dir: &Path,
+    commands: &mut BTreeMap<String, WorkflowCommand>,
+    budget: &mut Option<usize>,
+    depth: usize,
+) -> anyhow::Result<()> {
+    if budget.is_some() && depth > MAX_DISCOVERY_DEPTH {
+        anyhow::bail!("workflow discovery exceeded its directory depth limit");
+    }
     let Ok(entries) = fs::read_dir(dir) else {
-        return;
+        return Ok(());
     };
-    let mut entries = entries.flatten().collect::<Vec<_>>();
+    let mut collected = Vec::new();
+    for entry in entries {
+        if let Some(entries_seen) = budget.as_mut() {
+            *entries_seen += 1;
+            if *entries_seen > MAX_DISCOVERY_ENTRIES {
+                anyhow::bail!("workflow discovery exceeded its directory entry limit");
+            }
+        }
+        if let Ok(entry) = entry {
+            collected.push(entry);
+        }
+    }
+    let mut entries = collected;
     entries.sort_by_key(std::fs::DirEntry::file_name);
     let is_package_root = dir.join("workflow.yaml").is_file();
     for entry in entries {
@@ -55,8 +106,9 @@ fn discover_in_dir(root: &Path, dir: &Path, commands: &mut BTreeMap<String, Work
         if let Some(command) = load_command(root, &workflow_dir) {
             commands.insert(command.id.clone(), command);
         }
-        discover_in_dir(root, &workflow_dir, commands);
+        discover_in_dir(root, &workflow_dir, commands, budget, depth + 1)?;
     }
+    Ok(())
 }
 
 fn is_package_internal_directory(name: &std::ffi::OsStr) -> bool {
