@@ -6914,6 +6914,19 @@
         "samplePaths"
       ],
       "type": "object"
+    },
+    "WorkflowUpdatesChangedNotification": {
+      "properties": {
+        "generation": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "generation"
+      ],
+      "type": "object"
     }
   },
   "description": "Notification sent from the server to the client.",
@@ -6937,6 +6950,26 @@
         "params"
       ],
       "title": "ErrorNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "workflow/updatesChanged"
+          ],
+          "title": "Workflow/updatesChangedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/WorkflowUpdatesChangedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Workflow/updatesChangedNotification",
       "type": "object"
     },
     {
