@@ -561,6 +561,10 @@ fn policy_and_exact_dismissal_persist_without_changing_installation() {
             )
             .is_err()
     );
+    assert_eq!(
+        service.list_installed().expect("after stale policy"),
+        vec![automatic.clone()]
+    );
 
     fs::write(repository.join("package.json"), r#"{"version":"1.2.4"}"#).expect("next version");
     git(&repository, &["add", "--all"]);
@@ -592,7 +596,7 @@ fn policy_and_exact_dismissal_persist_without_changing_installation() {
     let dismissed = service
         .dismiss_release("team/build", &automatic.installed, &release, &cancelled)
         .expect("dismiss exact release");
-    assert_eq!(dismissed.dismissed_release, Some(release.clone()));
+    assert_eq!(dismissed.dismissed_release, Some(release));
     assert!(matches!(
         service
             .check_update("team/build", &cancelled)
@@ -625,10 +629,20 @@ fn policy_and_exact_dismissal_persist_without_changing_installation() {
         ],
     );
     git(&repository, &["tag", "v1.2.5"]);
+    let before_stale_dismissal = service.list_installed().expect("before stale dismissal");
     assert!(
         service
-            .dismiss_release("team/build", &automatic.installed, &release, &cancelled)
+            .dismiss_release(
+                "team/build",
+                &automatic.installed,
+                &automatic.installed,
+                &cancelled,
+            )
             .is_err()
+    );
+    assert_eq!(
+        service.list_installed().expect("after stale dismissal"),
+        before_stale_dismissal
     );
     assert!(matches!(
         service
@@ -640,4 +654,52 @@ fn policy_and_exact_dismissal_persist_without_changing_installation() {
             ..
         }
     ));
+}
+
+#[test]
+fn policy_mutations_reject_a_marker_that_no_longer_matches_the_receipt() {
+    let root = tempfile::tempdir().expect("root");
+    let repository = root.path().join("source");
+    source(&repository, "team/build", /*tagged*/ true);
+    let service = ManagedWorkflowService::new(
+        &absolute(root.path()),
+        &absolute(&root.path().join("workflows")),
+    )
+    .expect("service");
+    let cancelled = AtomicBool::new(false);
+    service
+        .install(ManagedWorkflowInstallRequest {
+            source: repository.to_str().expect("UTF-8 source"),
+            dependency_runtime: None,
+            cancelled: &cancelled,
+        })
+        .expect("install release");
+    let before = service.list_installed().expect("initial receipt");
+    fs::write(
+        root.path()
+            .join("workflows/team/build/codex-managed-workflow"),
+        b"invalid marker",
+    )
+    .expect("tamper manager marker");
+    assert!(
+        service
+            .set_policy(
+                "team/build",
+                &before[0].installed,
+                WorkflowUpdatePolicy::Automatic,
+                &cancelled,
+            )
+            .is_err()
+    );
+    assert!(
+        service
+            .dismiss_release(
+                "team/build",
+                &before[0].installed,
+                &before[0].installed,
+                &cancelled,
+            )
+            .is_err()
+    );
+    assert_eq!(service.list_installed().expect("unchanged receipt"), before);
 }
