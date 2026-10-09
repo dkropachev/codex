@@ -73,6 +73,7 @@ fn fixture(
     service
         .install(ManagedWorkflowInstallRequest {
             source: source.to_str().expect("source path"),
+            policy: WorkflowUpdatePolicy::Prompt,
             dependency_runtime: None,
             cancelled: &cancelled,
         })

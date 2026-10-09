@@ -20,6 +20,8 @@ pub use management::ManagedWorkflowInstallRequest;
 pub use management::ManagedWorkflowInstallation;
 pub use management::ManagedWorkflowRecord;
 pub use management::ManagedWorkflowService;
+#[cfg(any(unix, windows))]
+pub use management::ManagedWorkflowUninstallation;
 pub use management::ManagedWorkflowUpdate;
 pub use management::ManagedWorkflowUpdateCheck;
 #[cfg(any(unix, windows))]
