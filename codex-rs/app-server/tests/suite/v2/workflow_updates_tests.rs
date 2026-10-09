@@ -34,7 +34,7 @@ use super::connection_handling_websocket::read_response_for_id;
 use super::connection_handling_websocket::send_request;
 use super::connection_handling_websocket::spawn_websocket_server;
 
-fn install_local_workflow(
+pub(super) fn install_local_workflow(
     service: &ManagedWorkflowService,
     sources: &Path,
     id: &str,
@@ -78,7 +78,7 @@ fn install_local_workflow(
     Ok(source)
 }
 
-fn commit_tagged_release(source: &Path, tag: &str) -> Result<()> {
+pub(super) fn commit_tagged_release(source: &Path, tag: &str) -> Result<()> {
     let package_path = source.join("package.json");
     let mut package: serde_json::Value = serde_json::from_slice(&fs::read(&package_path)?)?;
     package["version"] = json!(tag.trim_start_matches('v'));
@@ -191,7 +191,9 @@ async fn completed_websocket_updates(
     .await?
 }
 
-async fn completed_updates(server: &mut TestAppServer) -> Result<WorkflowUpdatesReadResponse> {
+pub(super) async fn completed_updates(
+    server: &mut TestAppServer,
+) -> Result<WorkflowUpdatesReadResponse> {
     tokio::time::timeout(Duration::from_secs(/*secs*/ 30), async {
         loop {
             let response: WorkflowUpdatesReadResponse = server
