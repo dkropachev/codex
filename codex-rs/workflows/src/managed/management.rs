@@ -23,12 +23,16 @@ use super::store::ensure_fresh_target;
 #[cfg(any(unix, windows))]
 mod policy;
 mod update;
+#[cfg(any(unix, windows))]
+mod update_install;
 
 pub use update::ManagedWorkflowRecord;
 pub use update::ManagedWorkflowUpdate;
 pub use update::ManagedWorkflowUpdateCheck;
 pub use update::WorkflowReleaseIdentity;
 pub use update::WorkflowUpdatePolicy;
+#[cfg(any(unix, windows))]
+pub use update_install::ManagedWorkflowUpdateRequest;
 
 /// Bun and mandatory sandbox inputs for a release that declares dependencies.
 pub struct ManagedWorkflowDependencyRuntime<'a> {
@@ -99,30 +103,7 @@ impl ManagedWorkflowService {
         ensure_fresh_target(&self.store, &locked, &ExpectedCurrent::Absent)?;
         let deadline =
             crate::runner::CommandDeadline::after(Duration::from_secs(/*secs*/ 300));
-        if staged.dependencies().sources.has_dependencies {
-            let runtime = dependency_runtime
-                .context("managed workflow dependencies require Bun and a local sandbox")?;
-            match materialize_managed_dependencies(
-                ManagedDependencyMaterializationRequest {
-                    package: &package,
-                    dependencies: staged.dependencies(),
-                    management_root: &self.management_root,
-                    bun_executable: runtime.bun_executable,
-                    deadline,
-                    limits: crate::runner::CommandOutputLimits {
-                        stdout_bytes: 64 * 1024,
-                        stderr_bytes: 64 * 1024,
-                    },
-                    cancelled: Some(cancelled),
-                },
-                runtime.sandbox,
-            )? {
-                ManagedDependencyMaterializationOutcome::Materialized => {}
-                ManagedDependencyMaterializationOutcome::SandboxUnavailable(reason) => {
-                    bail!("managed workflow sandbox is unavailable: {reason:?}");
-                }
-            }
-        }
+        self.materialize_dependencies(&package, &staged, dependency_runtime, deadline, cancelled)?;
         let verified = integrity::verify_post_install(
             staged,
             fetch::VERIFICATION_LIMITS,
@@ -165,6 +146,41 @@ impl ManagedWorkflowService {
             release,
             cleanup_pending,
         })
+    }
+
+    fn materialize_dependencies(
+        &self,
+        package: &crate::WorkflowPackage,
+        staged: &fetch::StagedWorkflowRelease,
+        runtime: Option<ManagedWorkflowDependencyRuntime<'_>>,
+        deadline: crate::runner::CommandDeadline,
+        cancelled: &AtomicBool,
+    ) -> anyhow::Result<()> {
+        if !staged.dependencies().sources.has_dependencies {
+            return Ok(());
+        }
+        let runtime =
+            runtime.context("managed workflow dependencies require Bun and a local sandbox")?;
+        match materialize_managed_dependencies(
+            ManagedDependencyMaterializationRequest {
+                package,
+                dependencies: staged.dependencies(),
+                management_root: &self.management_root,
+                bun_executable: runtime.bun_executable,
+                deadline,
+                limits: crate::runner::CommandOutputLimits {
+                    stdout_bytes: 64 * 1024,
+                    stderr_bytes: 64 * 1024,
+                },
+                cancelled: Some(cancelled),
+            },
+            runtime.sandbox,
+        )? {
+            ManagedDependencyMaterializationOutcome::Materialized => Ok(()),
+            ManagedDependencyMaterializationOutcome::SandboxUnavailable(reason) => {
+                bail!("managed workflow sandbox is unavailable: {reason:?}")
+            }
+        }
     }
 }
 

@@ -22,6 +22,8 @@ pub use management::ManagedWorkflowRecord;
 pub use management::ManagedWorkflowService;
 pub use management::ManagedWorkflowUpdate;
 pub use management::ManagedWorkflowUpdateCheck;
+#[cfg(any(unix, windows))]
+pub use management::ManagedWorkflowUpdateRequest;
 pub use management::WorkflowReleaseIdentity;
 pub use management::WorkflowUpdatePolicy;
 pub use release::ResolvedWorkflowRelease;
