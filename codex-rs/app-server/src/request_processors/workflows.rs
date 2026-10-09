@@ -60,6 +60,17 @@ impl WorkflowListProcessor {
         Ok(Some(updates.read(params).await?.into()))
     }
 
+    pub(crate) async fn check_updates(
+        &self,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let Some(updates) = &self.updates else {
+            return Err(method_not_found(
+                "workflow management requires the workflows feature",
+            ));
+        };
+        Ok(Some(updates.refresh().await.into()))
+    }
+
     pub(crate) async fn list(
         &self,
         params: WorkflowListParams,

@@ -1528,6 +1528,9 @@ impl MessageProcessor {
             ClientRequest::WorkflowUpdatesRead { params, .. } => {
                 self.workflow_list_processor.updates_read(params).await
             }
+            ClientRequest::WorkflowCheckUpdates { .. } => {
+                self.workflow_list_processor.check_updates().await
+            }
             ClientRequest::ThreadApproveGuardianDeniedAction { params, .. } => {
                 self.thread_processor
                     .thread_approve_guardian_denied_action(&request_id, params)
