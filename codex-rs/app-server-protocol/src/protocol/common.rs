@@ -740,6 +740,12 @@ client_request_definitions! {
         serialization: None,
         response: v2::WorkflowListResponse,
     },
+    #[experimental("workflow/updatesRead")]
+    WorkflowUpdatesRead => "workflow/updatesRead" {
+        params: v2::WorkflowUpdatesReadParams,
+        serialization: None,
+        response: v2::WorkflowUpdatesReadResponse,
+    },
     ThreadApproveGuardianDeniedAction => "thread/approveGuardianDeniedAction" {
         params: v2::ThreadApproveGuardianDeniedActionParams,
         serialization: thread_id(params.thread_id),
@@ -1932,6 +1938,8 @@ pub struct FuzzyFileSearchSessionCompletedNotification {
 server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
+    #[experimental("workflow/updatesChanged")]
+    WorkflowUpdatesChanged => "workflow/updatesChanged" (v2::WorkflowUpdatesChangedNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
     ThreadStatusChanged => "thread/status/changed" (v2::ThreadStatusChangedNotification),
     ThreadArchived => "thread/archived" (v2::ThreadArchivedNotification),

@@ -165,6 +165,8 @@ mod web_search;
 mod windows_sandbox_setup;
 #[path = "workflow_list_tests.rs"]
 mod workflow_list;
+#[path = "workflow_updates_tests.rs"]
+mod workflow_updates;
 #[cfg(unix)]
 #[path = "workflows__thread_command.rs"]
 mod workflows_thread_command;

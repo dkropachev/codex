@@ -582,7 +582,8 @@ impl MessageProcessor {
             Arc::clone(&config),
             config_manager,
         );
-        let workflow_list_processor = WorkflowListProcessor::new(Arc::clone(&config));
+        let workflow_list_processor =
+            WorkflowListProcessor::new(Arc::clone(&config), outgoing.clone());
 
         Self {
             turn_admission,
@@ -1523,6 +1524,9 @@ impl MessageProcessor {
             }
             ClientRequest::WorkflowList { params, .. } => {
                 self.workflow_list_processor.list(params).await
+            }
+            ClientRequest::WorkflowUpdatesRead { params, .. } => {
+                self.workflow_list_processor.updates_read(params).await
             }
             ClientRequest::ThreadApproveGuardianDeniedAction { params, .. } => {
                 self.thread_processor

@@ -88,6 +88,7 @@ from .v2_all import TurnStartedNotification
 from .v2_all import WarningNotification
 from .v2_all import WindowsSandboxSetupCompletedNotification
 from .v2_all import WindowsWorldWritableWarningNotification
+from .v2_all import WorkflowUpdatesChangedNotification
 
 KnownNotificationPayload: TypeAlias = (
     AccountLoginCompletedNotification
@@ -171,6 +172,7 @@ KnownNotificationPayload: TypeAlias = (
     | WarningNotification
     | WindowsSandboxSetupCompletedNotification
     | WindowsWorldWritableWarningNotification
+    | WorkflowUpdatesChangedNotification
 )
 
 NOTIFICATION_MODELS: dict[str, type[KnownNotificationPayload]] = {
@@ -257,6 +259,7 @@ NOTIFICATION_MODELS: dict[str, type[KnownNotificationPayload]] = {
     "warning": WarningNotification,
     "windows/worldWritableWarning": WindowsWorldWritableWarningNotification,
     "windowsSandbox/setupCompleted": WindowsSandboxSetupCompletedNotification,
+    "workflow/updatesChanged": WorkflowUpdatesChangedNotification,
 }
 
 DIRECT_TURN_ID_NOTIFICATION_TYPES: tuple[type[BaseModel], ...] = (

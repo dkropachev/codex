@@ -4671,6 +4671,26 @@
           "properties": {
             "method": {
               "enum": [
+                "workflow/updatesChanged"
+              ],
+              "title": "Workflow/updatesChangedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/WorkflowUpdatesChangedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Workflow/updatesChangedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/started"
               ],
               "title": "Thread/startedNotificationMethod",
@@ -27066,6 +27086,41 @@
         ],
         "type": "object"
       },
+      "WorkflowUpdateEntry": {
+        "properties": {
+          "dismissed": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "release": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/WorkflowReleaseIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/definitions/v2/WorkflowUpdateStatus"
+          }
+        },
+        "required": [
+          "dismissed",
+          "id",
+          "status"
+        ],
+        "type": "object"
+      },
       "WorkflowUpdatePolicy": {
         "enum": [
           "prompt",
@@ -27073,6 +27128,30 @@
           "manual"
         ],
         "type": "string"
+      },
+      "WorkflowUpdateStatus": {
+        "enum": [
+          "pending",
+          "current",
+          "available",
+          "error"
+        ],
+        "type": "string"
+      },
+      "WorkflowUpdatesChangedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "generation": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "generation"
+        ],
+        "title": "WorkflowUpdatesChangedNotification",
+        "type": "object"
       },
       "WorkspaceMessage": {
         "properties": {

@@ -652,7 +652,10 @@ export type { WindowsSandboxSetupStartResponse } from "./WindowsSandboxSetupStar
 export type { WindowsWorldWritableWarningNotification } from "./WindowsWorldWritableWarningNotification";
 export type { WorkflowReleaseIdentity } from "./WorkflowReleaseIdentity";
 export type { WorkflowSummary } from "./WorkflowSummary";
+export type { WorkflowUpdateEntry } from "./WorkflowUpdateEntry";
 export type { WorkflowUpdatePolicy } from "./WorkflowUpdatePolicy";
+export type { WorkflowUpdateStatus } from "./WorkflowUpdateStatus";
+export type { WorkflowUpdatesChangedNotification } from "./WorkflowUpdatesChangedNotification";
 export type { WorkspaceMessage } from "./WorkspaceMessage";
 export type { WorkspaceMessageType } from "./WorkspaceMessageType";
 export type { WorkspaceRouting } from "./WorkspaceRouting";
