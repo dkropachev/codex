@@ -101,7 +101,7 @@ fn validate_workflow_cancellable_with_tools(
 ) -> anyhow::Result<ValidationReport> {
     ensure_not_cancelled(cancelled)?;
     let mut findings = BTreeSet::new();
-    validate_required_layout(root, &mut findings);
+    validate_required_layout(root, &mut findings, ExecutableLayout::Developer);
     validate_legacy_metadata(root, &mut findings);
 
     let package = match WorkflowPackage::load(root) {
@@ -162,6 +162,7 @@ pub(crate) fn validate_executable_package_cancellable(
     package: &WorkflowPackage,
     deadline: crate::runner::CommandDeadline,
     cancelled: &AtomicBool,
+    layout: ExecutableLayout,
 ) -> anyhow::Result<()> {
     validate_executable_package_with_limit(
         package,
@@ -169,7 +170,14 @@ pub(crate) fn validate_executable_package_cancellable(
             deadline,
             cancelled,
         },
+        layout,
     )
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum ExecutableLayout {
+    Developer,
+    Published,
 }
 
 #[derive(Clone, Copy)]
@@ -195,10 +203,11 @@ impl ExecutableValidation<'_> {
 fn validate_executable_package_with_limit(
     package: &WorkflowPackage,
     validation: ExecutableValidation<'_>,
+    layout: ExecutableLayout,
 ) -> anyhow::Result<()> {
     validation.check()?;
     let mut findings = BTreeSet::new();
-    validate_required_layout(&package.root, &mut findings);
+    validate_required_layout(&package.root, &mut findings, layout);
     validate_package_json(package, &mut findings);
     validation.check()?;
     match validation.scan(&package.root) {
@@ -215,7 +224,9 @@ fn validate_executable_package_with_limit(
     validate_coverage(package, &mut findings);
     validate_gitignore(&package.root, &mut findings);
     validation.check()?;
-    validation.validate_git_layout(&package.root, &mut findings);
+    if layout == ExecutableLayout::Developer {
+        validation.validate_git_layout(&package.root, &mut findings);
+    }
     validation.check()?;
     if findings.is_empty() {
         Ok(())
@@ -254,7 +265,11 @@ fn validate_module_load_cancellable(
     Ok(())
 }
 
-fn validate_required_layout(root: &Path, findings: &mut BTreeSet<ValidationFinding>) {
+fn validate_required_layout(
+    root: &Path,
+    findings: &mut BTreeSet<ValidationFinding>,
+    layout: ExecutableLayout,
+) {
     for relative in REQUIRED_FILES {
         if !is_package_regular_file(root, Path::new(relative)) {
             findings.insert(ValidationFinding::new(
@@ -275,7 +290,9 @@ fn validate_required_layout(root: &Path, findings: &mut BTreeSet<ValidationFindi
             "missing required package directory `state`",
         ));
     }
-    if !is_package_regular_directory(root, Path::new(".git")) {
+    if layout == ExecutableLayout::Developer
+        && !is_package_regular_directory(root, Path::new(".git"))
+    {
         findings.insert(ValidationFinding::new(
             "layout",
             "workflow package is not initialized as a git repository",

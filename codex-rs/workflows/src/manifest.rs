@@ -161,6 +161,21 @@ impl WorkflowPackage {
             &package,
             crate::runner::CommandDeadline::after(crate::runner::EXECUTABLE_VALIDATION_TIMEOUT),
             cancelled,
+            crate::validation::ExecutableLayout::Developer,
+        )?;
+        Ok(package)
+    }
+
+    pub(crate) fn load_published_executable_cancellable(
+        root: &Path,
+        cancelled: &AtomicBool,
+    ) -> anyhow::Result<Self> {
+        let package = Self::load(root)?;
+        crate::validation::validate_executable_package_cancellable(
+            &package,
+            crate::runner::CommandDeadline::after(crate::runner::EXECUTABLE_VALIDATION_TIMEOUT),
+            cancelled,
+            crate::validation::ExecutableLayout::Published,
         )?;
         Ok(package)
     }
