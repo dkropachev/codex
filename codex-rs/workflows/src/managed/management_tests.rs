@@ -596,7 +596,7 @@ fn policy_and_exact_dismissal_persist_without_changing_installation() {
     let dismissed = service
         .dismiss_release("team/build", &automatic.installed, &release, &cancelled)
         .expect("dismiss exact release");
-    assert_eq!(dismissed.dismissed_release, Some(release));
+    assert_eq!(dismissed.dismissed_release, Some(release.clone()));
     assert!(matches!(
         service
             .check_update("team/build", &cancelled)
@@ -632,12 +632,7 @@ fn policy_and_exact_dismissal_persist_without_changing_installation() {
     let before_stale_dismissal = service.list_installed().expect("before stale dismissal");
     assert!(
         service
-            .dismiss_release(
-                "team/build",
-                &automatic.installed,
-                &automatic.installed,
-                &cancelled,
-            )
+            .dismiss_release("team/build", &automatic.installed, &release, &cancelled)
             .is_err()
     );
     assert_eq!(
@@ -675,6 +670,30 @@ fn policy_mutations_reject_a_marker_that_no_longer_matches_the_receipt() {
         })
         .expect("install release");
     let before = service.list_installed().expect("initial receipt");
+    fs::write(repository.join("package.json"), r#"{"version":"1.2.4"}"#)
+        .expect("available version");
+    git(&repository, &["add", "--all"]);
+    git(
+        &repository,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "available release",
+        ],
+    );
+    git(&repository, &["tag", "v1.2.4"]);
+    let check = service
+        .check_update("team/build", &cancelled)
+        .expect("available release");
+    let ManagedWorkflowUpdate::Available { release, .. } = check.update else {
+        panic!("expected release to dismiss");
+    };
     fs::write(
         root.path()
             .join("workflows/team/build/codex-managed-workflow"),
@@ -693,12 +712,7 @@ fn policy_mutations_reject_a_marker_that_no_longer_matches_the_receipt() {
     );
     assert!(
         service
-            .dismiss_release(
-                "team/build",
-                &before[0].installed,
-                &before[0].installed,
-                &cancelled,
-            )
+            .dismiss_release("team/build", &before[0].installed, &release, &cancelled,)
             .is_err()
     );
     assert_eq!(service.list_installed().expect("unchanged receipt"), before);
