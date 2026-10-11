@@ -1,5 +1,4 @@
 use super::*;
-use crate::agent::api::AgentControl;
 use crate::agent::api::AgentInput;
 use crate::agent::api::SpawnRequest;
 use crate::agent::child_config::SpawnConfigOptions;
@@ -16,6 +15,7 @@ use crate::model_policy::ModelPolicySource;
 use crate::model_policy::apply_model_policy;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v1;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::ToolSpec;
 
 #[derive(Default)]
@@ -112,6 +112,7 @@ async fn handle_spawn_agent(
     .await
     .map_err(FunctionCallError::RespondToModel)?;
     let mut config = prepared.config;
+    let fork_mode = args.fork_context.then_some(SpawnAgentForkMode::FullHistory);
     let spawn_source = thread_spawn_source(
         session.thread_id,
         &turn.session_source,
@@ -142,8 +143,8 @@ async fn handle_spawn_agent(
             input: AgentInput::UserInput(input_items),
             source: spawn_source,
             options: SpawnAgentOptions {
-                fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
-                fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
+                fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
+                fork_mode: fork_mode.clone(),
                 parent_thread_id: Some(session.thread_id),
                 parent_turn_id: Some(turn.sub_id.clone()),
                 root_turn_id: turn.turn_metadata_state.root_turn_id(),
@@ -154,7 +155,16 @@ async fn handle_spawn_agent(
             },
         })
         .await
-        .map_err(collab_spawn_error);
+        .map_err(|err| {
+            record_collab_spawn_failure(
+                &turn.session_telemetry,
+                turn.config.apps_mcp_product_sku.as_deref(),
+                &err,
+                fork_mode.as_ref(),
+                MultiAgentVersion::V1,
+            );
+            collab_spawn_error(err)
+        });
     let (new_thread_id, status) = match &result {
         Ok((spawned_agent, _)) => (Some(spawned_agent.thread_id), spawned_agent.status.clone()),
         Err(_) => (None, AgentStatus::NotFound),

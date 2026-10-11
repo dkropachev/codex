@@ -380,6 +380,7 @@ fn plan_type_name(plan_type: PlanType) -> String {
         PlanType::Go => "go",
         PlanType::Plus => "plus",
         PlanType::Pro => "pro",
+        PlanType::ProMax => "pro_max",
         PlanType::ProLite => "pro_lite",
         PlanType::Team => "team",
         PlanType::SelfServeBusinessProLite => "self_serve_business_prolite",

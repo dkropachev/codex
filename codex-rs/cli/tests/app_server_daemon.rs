@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Child;
 use std::process::Command;
@@ -157,6 +158,13 @@ fn managed_identity_survives_locale_and_timezone_changes() -> Result<()> {
             .env("LC_ALL", locale)
             .env("TZ", timezone)
             .output()?;
+        let _ = writeln!(
+            std::io::stderr(),
+            "managed identity action={action} status={} stdout={} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         ensure!(
             output.status.success(),
             "daemon {action} failed: {}",
@@ -187,8 +195,19 @@ fn managed_identity_survives_locale_and_timezone_changes() -> Result<()> {
             );
         } else if action == "version" {
             assert_eq!(output["backend"], "pid");
-            assert_eq!(daemon.pid("app-server-updater.pid")?, updater_pid);
-            assert_eq!(std::fs::read(&pid_file)?, original);
+            let observed_updater = daemon.pid("app-server-updater.pid");
+            let _ = writeln!(
+                std::io::stderr(),
+                "managed identity updater={observed_updater:?} expected={updater_pid}"
+            );
+            assert_eq!(observed_updater?, updater_pid);
+            let observed_record = std::fs::read(&pid_file)?;
+            let _ = writeln!(
+                std::io::stderr(),
+                "managed identity pid record unchanged={}",
+                observed_record == original
+            );
+            assert_eq!(observed_record, original);
 
             // Finish startup promotion before deliberately restoring a legacy record.
             let updater_socket = daemon
@@ -200,6 +219,7 @@ fn managed_identity_survives_locale_and_timezone_changes() -> Result<()> {
                 ensure!(Instant::now() < deadline, "updater did not become ready");
                 std::thread::sleep(Duration::from_millis(50));
             }
+            let _ = writeln!(std::io::stderr(), "managed identity updater socket ready");
             let mut legacy: Value = serde_json::from_slice(&original)?;
             legacy
                 .as_object_mut()
@@ -217,6 +237,12 @@ fn managed_identity_survives_locale_and_timezone_changes() -> Result<()> {
             // Restore the native identity before assertions so Drop can stop the daemon.
             std::fs::write(&pid_file, &original)?;
             let result = result?;
+            let _ = writeln!(
+                std::io::stderr(),
+                "managed identity legacy status={} stderr={}",
+                result.status,
+                String::from_utf8_lossy(&result.stderr)
+            );
             assert!(!result.status.success());
             assert_eq!(preserved?, legacy_bytes);
             let stderr =
@@ -486,7 +512,7 @@ fn manual_update_rejects_an_unowned_installation() -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InitialDaemon {
     Missing,
     Legacy,
@@ -547,6 +573,36 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
     let cli_before = daemon.codex.canonicalize()?;
     let mut command = daemon.command();
     command.args(["app-server", "daemon", action]);
+    let _ = writeln!(
+        std::io::stderr(),
+        "packaged daemon action={action} initial={initial:?}: launch"
+    );
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let diagnostic_state = state.clone();
+    let watchdog = std::thread::spawn(move || {
+        if matches!(
+            done_rx.recv_timeout(Duration::from_secs(/*secs*/ 60)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ) {
+            for name in ["app-server.stderr.log", "app-server-updater.stderr.log"] {
+                let path = diagnostic_state.join(name);
+                let contents = std::fs::read_to_string(&path).unwrap_or_default();
+                let tail = contents
+                    .chars()
+                    .rev()
+                    .take(/*n*/ 3_000)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect::<String>();
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "packaged daemon {}: {tail}",
+                    path.display()
+                );
+            }
+        }
+    });
     // A freshly copied executable can briefly remain busy on Linux CI workers.
     let mut retries = 0;
     let result = loop {
@@ -561,6 +617,13 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
         retries += 1;
         std::thread::sleep(Duration::from_millis(/*millis*/ 10));
     };
+    let _ = done_tx.send(());
+    let _ = watchdog.join();
+    let _ = writeln!(
+        std::io::stderr(),
+        "packaged daemon action={action} initial={initial:?}: launch status={}",
+        result.status
+    );
     ensure!(
         result.status.success(),
         "{}",
@@ -608,6 +671,10 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
             .command()
             .args(["app-server", "daemon", "update", "--from-cli"])
             .output()?;
+        let _ = writeln!(
+            std::io::stderr(),
+            "packaged daemon: unconfirmed update returned"
+        );
         assert!(!refused.status.success());
         assert!(String::from_utf8_lossy(&refused.stderr).contains("rerun with --yes"));
         assert_eq!(daemon.pid(initial_pid_file)?, original_pid);
@@ -621,6 +688,10 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
             .command()
             .args(["app-server", "daemon", "update", "--from-cli", "--yes"])
             .output()?;
+        let _ = writeln!(
+            std::io::stderr(),
+            "packaged daemon: invalid update returned"
+        );
         assert!(!invalid.status.success());
         assert_eq!(daemon.pid(initial_pid_file)?, original_pid);
         assert_eq!(initial_current.canonicalize()?, original);
@@ -639,6 +710,7 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
             .command()
             .args(["app-server", "daemon", "update", "--from-cli", "--yes"])
             .output()?;
+        let _ = writeln!(std::io::stderr(), "packaged daemon: replacement returned");
         ensure!(
             replaced.status.success(),
             "{}",

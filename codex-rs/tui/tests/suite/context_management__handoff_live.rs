@@ -425,7 +425,7 @@ async fn spawn_tui(
             rows: 60,
             cols: 160,
         },
-        /*inherited_fds*/ &[],
+        /*inherited_fds*/ codex_utils_pty::ChildFds::Inherited(&[]),
     )
     .await
 }

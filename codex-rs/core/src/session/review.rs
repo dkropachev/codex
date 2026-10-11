@@ -110,7 +110,7 @@ pub(super) async fn review(sess: &Arc<Session>, sub_id: String, review_request: 
                 text_elements: Vec::new(),
             }],
             client_id: None,
-            acceptance_order: None,
+            metadata: Default::default(),
         }],
         ReviewTask::new(),
     )

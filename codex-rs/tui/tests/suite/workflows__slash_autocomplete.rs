@@ -154,7 +154,7 @@ IFS= read -r _completion_ack
         &env,
         &None,
         TerminalSize { rows: 24, cols: 80 },
-        /*inherited_fds*/ &[],
+        /*inherited_fds*/ codex_utils_pty::ChildFds::Inherited(&[]),
     )
     .await?;
     let writer = spawned.session.writer_sender();
@@ -335,7 +335,7 @@ trust_level = "trusted"
         &env,
         &None,
         TerminalSize { rows: 24, cols: 80 },
-        /*inherited_fds*/ &[],
+        /*inherited_fds*/ codex_utils_pty::ChildFds::Inherited(&[]),
     )
     .await?;
     let writer = spawned.session.writer_sender();

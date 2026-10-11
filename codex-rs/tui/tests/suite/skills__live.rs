@@ -333,7 +333,7 @@ async fn spawn_tui(
         &env,
         &None,
         TerminalSize { rows: 24, cols: 80 },
-        /*inherited_fds*/ &[],
+        /*inherited_fds*/ codex_utils_pty::ChildFds::Inherited(&[]),
     )
     .await
 }

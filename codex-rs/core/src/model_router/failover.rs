@@ -112,6 +112,7 @@ pub(crate) fn model_router_failure_scope(err: &CodexErr) -> Option<ModelRouterFa
         | CodexErrorDetails::RequestTimeout
         | CodexErrorDetails::RateLimitExceeded(_)
         | CodexErrorDetails::ContextWindowExceeded
+        | CodexErrorDetails::FlexUnavailable
         | CodexErrorDetails::ServerOverloaded => Some(ModelRouterFailureScope::Model),
         CodexErrorDetails::UsageLimitReached(_)
         | CodexErrorDetails::UsageNotIncluded

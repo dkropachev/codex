@@ -51,7 +51,7 @@ fn account_ui_state_from_response_preserves_chatgpt_pool_details() {
             active_member: Some(StatusAccountPoolMemberDisplay {
                 id: "work-pro".to_string(),
                 email: Some("work@example.com".to_string()),
-                plan: Some("Pro".to_string()),
+                plan: Some("Pro (More)".to_string()),
             }),
             member_count: 2,
             unavailable_count: 1,
