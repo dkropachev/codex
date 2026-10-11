@@ -59,7 +59,9 @@ fn failed_response_preserves_usage_limit_details() {
             "limit_window_minutes": 15
         }
     });
-    let ApiError::UsageLimitReached(error) = parse_failed_response(Some(response), None) else {
+    let ApiError::UsageLimitReached(error) =
+        parse_failed_response(Some(response), /*usage_limit_snapshot*/ None)
+    else {
         panic!("expected usage limit error");
     };
     assert_eq!(error.plan_type, Some(PlanType::from_raw_value("pro")));
