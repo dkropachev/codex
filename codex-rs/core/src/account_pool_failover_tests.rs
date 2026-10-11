@@ -225,6 +225,7 @@ fn usage_limit_error(primary: RateLimitWindow) -> UsageLimitReachedError {
     UsageLimitReachedError {
         plan_type: None,
         resets_at: None,
+        limit_window_minutes: None,
         rate_limits: Some(Box::new(RateLimitSnapshot {
             limit_id: Some("codex".to_string()),
             limit_name: None,

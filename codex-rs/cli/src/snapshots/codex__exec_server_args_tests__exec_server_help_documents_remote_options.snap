@@ -36,14 +36,22 @@ Options:
 
           [default: isolate]
 
+      --disable <FEATURE>
+          Disable a feature (repeatable). Equivalent to `-c
+          features.<name>=false`
+
+      --proxy-private-ips-via-upstream
+          Allow permitted private IP destinations to use the configured upstream
+          proxy. If no valid upstream proxy applies to the request protocol,
+          connect directly. Loopback stays local. This flag does not require
+          upstream routing
+
+          [env: CODEX_EXEC_SERVER_PROXY_PRIVATE_IPS_VIA_UPSTREAM]
+
       --concurrent-requests <COUNT>
           Maximum number of requests to process concurrently on each connection
 
           [default: 1]
-
-      --disable <FEATURE>
-          Disable a feature (repeatable). Equivalent to `-c
-          features.<name>=false`
 
       --listen <URL>
           Transport endpoint URL. Supported values: `ws://IP:PORT` (default),
