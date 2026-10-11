@@ -159,10 +159,21 @@ impl App {
             || self.backtrack.primed
             || self.backtrack.overlay_preview_active
             || self.composer_hint(width).is_some()
+            || self
+                .chat_widget
+                .usage_notice(width.saturating_sub(/*rhs*/ 2))
+                .is_some()
         {
             return None;
         }
         let current = self.turn_tips.current.as_mut()?;
+        // Once painted, keep the working row stable while interacting with the transcript.
+        // Initial exposure and completion tips still wait for an idle, following viewport.
+        if (!self.transcript_view.is_following() || self.transcript_view.has_active_interaction())
+            && !(current.shown && matches!(current.phase, Phase::Working))
+        {
+            return None;
+        }
         if self.chat_widget.thread_id() != Some(current.thread_id) {
             return None;
         }

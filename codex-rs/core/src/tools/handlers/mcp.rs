@@ -231,6 +231,7 @@ impl McpHandler {
             cancellation_token,
             call_id,
             tool_name,
+            source,
             payload,
             ..
         } = invocation;
@@ -261,6 +262,7 @@ impl McpHandler {
             prepared_mcp_call,
             self.hook_tool_name(),
             tool_name,
+            &source,
             payload,
         )
         .await;
