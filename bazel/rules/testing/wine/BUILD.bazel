@@ -42,7 +42,8 @@ rust_binary(
 
 wine_rust_test(
     name = "wine-test-support-unit-tests",
-    timeout = "short",
+    # Wine startup and process teardown can exceed one minute on loaded CI runners.
+    timeout = "moderate",
     crate = ":wine_test_support",
     windows_binaries = {
         "wine-smoke": ":windows-smoke",
