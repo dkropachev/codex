@@ -49,9 +49,6 @@ use wiremock::ResponseTemplate;
 use super::analytics::mount_analytics_capture;
 use super::analytics::wait_for_matching_analytics_event;
 
-use super::analytics::mount_analytics_capture;
-use super::analytics::wait_for_matching_analytics_event;
-
 // macOS and Windows Bazel CI can spend tens of seconds starting app-server
 // subprocesses or processing test RPCs under load.
 #[cfg(any(target_os = "macos", windows))]
@@ -127,6 +124,7 @@ async fn compaction_error_window_reaches_analytics(
     let compact_id = mcp
         .send_thread_compact_start_request(ThreadCompactStartParams {
             thread_id: thread_id.clone(),
+            source: None,
         })
         .await?;
     let _: ThreadCompactStartResponse =

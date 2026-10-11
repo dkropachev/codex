@@ -506,6 +506,7 @@ async fn migration_preserves_review_lifecycle_and_messages() {
             RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: Some("ordinary-interrupted".to_string()),
                 reason: TurnAbortReason::Interrupted,
+                error: None,
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
