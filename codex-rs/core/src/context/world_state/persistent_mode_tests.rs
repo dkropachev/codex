@@ -84,9 +84,7 @@ fn retained_persistent_instructions_are_replaced_or_retired_without_a_snapshot()
 fn oversized_persistent_instructions_are_truncated_below_context_limit() {
     let oversized = "configured persistent-mode guidance ".repeat(MAX_PERSISTENT_MODE_BODY_TOKENS);
     let state = PersistentModeState::new(
-        true,
-        &oversized,
-        /*send_user_message_async_available*/ false,
+        true, &oversized, /*send_user_message_async_available*/ false,
     );
 
     assert!(state.instructions.contains("tokens truncated"));

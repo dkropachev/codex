@@ -320,6 +320,9 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
                 }
                 rebuilt.push_str(suffix);
                 rebuilt
+            } else if let Some((prefix, value)) = line.split_once("Directory:") {
+                let padding = &value[..value.len() - value.trim_start().len()];
+                format!("{prefix}Directory:{padding}[[workspace]]")
             } else {
                 line
             }

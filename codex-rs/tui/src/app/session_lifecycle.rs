@@ -1015,6 +1015,12 @@ impl App {
             &self.cli_kv_overrides,
             &self.harness_overrides,
         );
+        let summary = session_summary(
+            self.chat_widget.token_usage(),
+            self.chat_widget.thread_id(),
+            self.chat_widget.thread_name(),
+            self.chat_widget.rollout_path().as_deref(),
+        );
         match app_server
             .start_thread_with_session_start_source(
                 &self.local_settings,
@@ -1038,15 +1044,6 @@ impl App {
                         self.agents_overview.input_states.insert(thread_id, input);
                     }
                 }
-                self.detach_current_thread_for_navigation(
-                    app_server,
-                    Some(started.session.thread_id),
-                )
-                .await;
-                self.local_settings = self.local_settings.reloaded(&config);
-                self.refresh_server_version_overview_notice(CODEX_CLI_VERSION);
-                self.config = config;
-
                 let name_error = if let Some(name) = new_thread_name {
                     match app_server
                         .thread_set_name(started.session.thread_id, name.clone())

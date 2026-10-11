@@ -59,6 +59,7 @@ use pretty_assertions::assert_eq;
 use ratatui::prelude::*;
 use std::sync::Arc;
 use tempfile::TempDir;
+use unicode_width::UnicodeWidthStr;
 
 #[test]
 fn stale_monthly_limit_marks_fresh_rolling_snapshot_stale() {
@@ -210,9 +211,12 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
                 }
             }
 
-            if let (Some(frame_width), Some(dir_pos), Some(pipe_idx)) =
-                (frame_width, line.find("Directory: "), line.rfind('│'))
-            {
+            if let (Some(frame_width), Some(dir_pos), Some(pipe_idx)) = (
+                line.rfind('│')
+                    .map(|index| UnicodeWidthStr::width(&line[..=index])),
+                line.find("Directory: "),
+                line.rfind('│'),
+            ) {
                 let prefix = &line[..dir_pos + "Directory: ".len()];
                 let suffix = &line[pipe_idx..];
                 let replacement = "[[workspace]]";
@@ -227,6 +231,9 @@ fn sanitize_directory(lines: Vec<String>) -> Vec<String> {
                 }
                 rebuilt.push_str(suffix);
                 rebuilt
+            } else if let Some((prefix, value)) = line.split_once("Directory:") {
+                let padding = &value[..value.len() - value.trim_start().len()];
+                format!("{prefix}Directory:{padding}[[workspace]]")
             } else {
                 line
             }

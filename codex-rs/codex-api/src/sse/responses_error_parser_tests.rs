@@ -63,6 +63,9 @@ fn failed_response_preserves_usage_limit_details() {
         panic!("expected usage limit error");
     };
     assert_eq!(error.plan_type, Some(PlanType::from_raw_value("pro")));
-    assert_eq!(error.resets_at, DateTime::<Utc>::from_timestamp(1738888888, 0));
+    assert_eq!(
+        error.resets_at,
+        DateTime::<Utc>::from_timestamp(1738888888, 0)
+    );
     assert_eq!(error.limit_window_minutes, Some(15));
 }

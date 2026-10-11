@@ -154,8 +154,6 @@ impl App {
             || !self.chat_widget.composer_is_empty()
             || self.chat_widget.is_external_writer_view()
             || self.chat_widget.has_queued_follow_up_messages()
-            || !self.transcript_view.is_following()
-            || self.transcript_view.has_active_interaction()
             || self.backtrack.primed
             || self.backtrack.overlay_preview_active
             || self.composer_hint(width).is_some()
