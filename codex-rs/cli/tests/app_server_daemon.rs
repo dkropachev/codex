@@ -11,6 +11,7 @@ use std::time::Instant;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
+use codex_utils_cargo_bin::copy_executable;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -41,7 +42,7 @@ impl TestDaemon {
         // Preserve the installed path without invalidating the shared CLI's Rosetta cache.
         #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
         {
-            std::fs::copy(&codex_source, &managed)?;
+            copy_executable(&codex_source, &managed)?;
             // Translate the fixture before timed daemon capability and readiness checks.
             ensure!(
                 Command::new(&managed)
@@ -54,8 +55,9 @@ impl TestDaemon {
             );
         }
         #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
-        std::fs::hard_link(&codex_source, &managed)
-            .or_else(|_| std::fs::copy(&codex_source, managed).map(|_| ()))?;
+        if std::fs::hard_link(&codex_source, &managed).is_err() {
+            copy_executable(&codex_source, &managed)?;
+        }
         std::fs::write(standalone.join("auto-update-version"), &release_name)?;
         std::os::unix::fs::symlink(
             PathBuf::from("releases").join(release_name),
@@ -530,7 +532,7 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
     for directory in ["bin", "codex-path", "codex-resources"] {
         std::fs::create_dir_all(package.join(directory))?;
     }
-    std::fs::copy(&daemon.codex, package.join("bin/codex"))?;
+    copy_executable(&daemon.codex, &package.join("bin/codex"))?;
     daemon.codex = package.join("bin/codex");
     for helper in [
         "bin/codex-code-mode-host",

@@ -115,7 +115,8 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
         vec![
             (63, "thread attachments".to_string()),
             (64, "threads creator identity".to_string()),
-            (65, "cleanup guardian thread metadata".to_string())
+            (65, "cleanup guardian thread metadata".to_string()),
+            (66, "threads archive sort indexes".to_string())
         ]
     );
 
