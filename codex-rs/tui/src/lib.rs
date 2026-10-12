@@ -133,6 +133,7 @@ mod markdown_copy;
 mod permission_discovery;
 mod pets;
 mod review_scope;
+mod security_setup;
 mod worktree_browser;
 pub use custom_terminal::Terminal;
 mod assistant_directives;
