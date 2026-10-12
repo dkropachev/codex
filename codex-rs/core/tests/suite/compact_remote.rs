@@ -572,14 +572,32 @@ async fn amazon_bedrock_automatic_compaction_uses_v2_responses_endpoint() -> Res
     )
     .await;
 
-    harness
-        .test()
-        .submit_turn("before automatic compact")
-        .await?;
-    harness
-        .test()
-        .submit_turn("after automatic compact")
-        .await?;
+    // This remote compaction path can take longer than the shared turn timeout on loaded runners.
+    for prompt in ["before automatic compact", "after automatic compact"] {
+        harness
+            .test()
+            .codex
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: prompt.to_string(),
+                text_elements: Vec::new(),
+            }]))
+            .await?;
+        let EventMsg::TurnStarted(started) = wait_for_event_with_timeout(
+            &harness.test().codex,
+            |event| matches!(event, EventMsg::TurnStarted(_)),
+            Duration::from_secs(60),
+        )
+        .await
+        else {
+            unreachable!("waited for turn start")
+        };
+        wait_for_event_with_timeout(
+            &harness.test().codex,
+            |event| matches!(event, EventMsg::TurnComplete(complete) if complete.turn_id == started.turn_id),
+            Duration::from_secs(60),
+        )
+        .await;
+    }
 
     let response_requests = response_mock.requests();
     assert_eq!(response_requests.len(), 3);
