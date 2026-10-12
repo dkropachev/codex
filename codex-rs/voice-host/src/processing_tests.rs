@@ -91,14 +91,23 @@ fn rendered_reference_changes_decoded_echo_capture() {
 
 #[test]
 fn real_encoder_produces_twenty_millisecond_opus_packets() {
+    // Keep adaptive capture processing out of this encoder and resampler test.
     for rate in [44_100, 48_000] {
-        let mut processor = Processor::new(rate, /*output_rate*/ 48_000).unwrap();
+        let mut capture = Converter::new(rate).unwrap();
+        let mut encoder = opus::Encoder::new(
+            /*sample_rate*/ 48_000,
+            opus::Channels::Mono,
+            opus::Application::Voip,
+        )
+        .unwrap();
+        let mut pending = Vec::new();
         let mut packets = Vec::new();
-        for block in 0..40 {
+        let start = Instant::now();
+        for block in 0..200 {
             let mut frame = Frame {
                 samples: [0.0; 256],
                 len: 256,
-                at: Instant::now(),
+                at: start + Duration::from_secs_f64(block as f64 * 256.0 / f64::from(rate)),
                 generation: 2,
             };
             for (index, sample) in frame.samples.iter_mut().enumerate() {
@@ -107,7 +116,17 @@ fn real_encoder_produces_twenty_millisecond_opus_packets() {
                     + 0.4 * (std::f32::consts::TAU * 659.0 * position).sin())
                     * 0.35;
             }
-            packets.extend(processor.capture(&frame, || frame.at).unwrap());
+            capture.push(&frame).unwrap();
+            while let Some((_, samples)) = capture.next() {
+                pending.extend(samples);
+                if pending.len() == 960 {
+                    let mut packet = vec![0; 1275];
+                    let len = encoder.encode_float(&pending, &mut packet).unwrap();
+                    packet.truncate(len);
+                    packets.push(packet);
+                    pending.clear();
+                }
+            }
         }
         assert!(!packets.is_empty());
         let mut decoder = opus::Decoder::new(/*sample_rate*/ 48_000, opus::Channels::Mono).unwrap();
@@ -116,7 +135,7 @@ fn real_encoder_produces_twenty_millisecond_opus_packets() {
             let mut output = [0.0; 960];
             assert_eq!(
                 decoder
-                    .decode_float(&packet.data, &mut output, /*fec*/ false)
+                    .decode_float(&packet, &mut output, /*fec*/ false)
                     .unwrap(),
                 960
             );
