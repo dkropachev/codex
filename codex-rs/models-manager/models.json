@@ -65,7 +65,7 @@
           "description": "Maximum reasoning with automatic task delegation"
         }
       ],
-      "shell_type": "unified_exec",
+      "shell_type": "shell_command",
       "visibility": "list",
       "minimal_client_version": "0.153.0",
       "supported_in_api": true,
@@ -159,7 +159,7 @@
         "team"
       ],
       "supports_search_tool": true,
-      "supports_experimental_context": true,
+      "supports_experimental_context": false,
       "default_service_tier": null,
       "service_tiers": [
         {
@@ -756,7 +756,7 @@
           "description": "Maximum reasoning with automatic task delegation"
         }
       ],
-      "shell_type": "unified_exec",
+      "shell_type": "shell_command",
       "visibility": "list",
       "minimal_client_version": "0.144.0",
       "supported_in_api": true,
@@ -813,6 +813,7 @@
         "team"
       ],
       "supports_search_tool": true,
+      "supports_experimental_context": false,
       "default_service_tier": null,
       "service_tiers": [
         {
@@ -892,7 +893,7 @@
           "description": "Maximum reasoning with automatic task delegation"
         }
       ],
-      "shell_type": "unified_exec",
+      "shell_type": "shell_command",
       "visibility": "list",
       "minimal_client_version": "0.144.0",
       "supported_in_api": true,
@@ -949,6 +950,7 @@
         "team"
       ],
       "supports_search_tool": true,
+      "supports_experimental_context": false,
       "default_service_tier": null,
       "service_tiers": [
         {
@@ -1024,7 +1026,7 @@
           "description": "Maximum reasoning depth for the hardest problems"
         }
       ],
-      "shell_type": "unified_exec",
+      "shell_type": "shell_command",
       "visibility": "list",
       "minimal_client_version": "0.144.0",
       "supported_in_api": true,
@@ -1085,6 +1087,7 @@
         "team"
       ],
       "supports_search_tool": true,
+      "supports_experimental_context": false,
       "default_service_tier": null,
       "service_tiers": [
         {
@@ -1384,7 +1387,7 @@
           "description": "Extra high reasoning depth for complex problems"
         }
       ],
-      "shell_type": "unified_exec",
+      "shell_type": "shell_command",
       "visibility": "list",
       "minimal_client_version": "0.124.0",
       "supported_in_api": true,
@@ -1435,6 +1438,7 @@
         "team"
       ],
       "supports_search_tool": true,
+      "supports_experimental_context": false,
       "default_service_tier": null,
       "service_tiers": [
         {
@@ -1510,7 +1514,7 @@
           "description": "Maximum reasoning depth for the hardest problems"
         }
       ],
-      "shell_type": "unified_exec",
+      "shell_type": "shell_command",
       "visibility": "hide",
       "minimal_client_version": "0.98.0",
       "supported_in_api": true,
@@ -1567,6 +1571,7 @@
         "team"
       ],
       "supports_search_tool": true,
+      "supports_experimental_context": false,
       "default_service_tier": null,
       "service_tiers": [
         {

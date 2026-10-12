@@ -407,7 +407,7 @@ async fn reconnect_restores_pending_plan_without_automatic_transfer() {
     let (mut restored, mut restored_events, mut restored_ops) =
         make_chatwidget_manual(/*model_override*/ None).await;
     restored.thread_id = Some(source_thread_id);
-    restored.restore_reconnected_input(input_state);
+    restored.restore_reconnected_input(input_state, &[]);
     restored.on_plan_item_completed(
         "- Finish after the next prompt".to_string(),
         "deferred-plan-turn".to_string(),

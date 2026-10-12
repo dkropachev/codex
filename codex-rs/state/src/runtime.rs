@@ -48,7 +48,8 @@ mod memory_versions;
 mod model_router;
 mod projects;
 mod queued_items;
-mod recovery;
+pub(crate) mod reclamation;
+pub(crate) mod recovery;
 mod remote_control;
 mod rollout_migration;
 #[cfg(test)]
@@ -99,8 +100,6 @@ pub use model_router::ModelRouterUsageQuery;
 pub use model_router::ModelRouterUsageSummary;
 pub use model_router::ModelRouterUsageTotals;
 pub use queued_items::SqliteQueueStore;
-pub use recovery::RuntimeDbBackup;
-pub(super) use recovery::RuntimeDbInitError;
 pub use recovery::backup_runtime_db_for_fresh_start;
 pub use recovery::is_sqlite_corruption_error;
 pub use recovery::runtime_db_path_for_corruption_error;
@@ -149,6 +148,7 @@ pub struct StateRuntime {
     thread_queue: SqliteQueueStore,
     thread_updated_at_millis: Arc<AtomicI64>,
     thread_recency_at_millis: Arc<AtomicI64>,
+    reclamation: Arc<reclamation::SqliteReclamationWorker>,
 }
 
 impl StateRuntime {
@@ -304,6 +304,7 @@ impl StateRuntime {
         let thread_updated_at_millis = thread_updated_at_millis.unwrap_or(0);
         let thread_recency_at_millis = thread_recency_at_millis.unwrap_or(0);
         let runtime = Arc::new(Self {
+            reclamation: reclamation::SqliteReclamationWorker::spawn(sqlite.clone()),
             thread_goals: GoalStore::new(Arc::clone(&goals_pool)),
             memories: MemoryStore::new(Arc::clone(&memories_pool), Arc::clone(&pool)),
             memories_v2: Arc::new(tokio::sync::OnceCell::new()),
@@ -354,6 +355,7 @@ impl StateRuntime {
 
     /// Close all SQLite pools and wait for outstanding pool workers to exit.
     pub async fn close(&self) {
+        self.reclamation.close().await;
         self.thread_queue.close().await;
         self.memories.close().await;
         if let Some(memories) = self.memories_v2.get() {

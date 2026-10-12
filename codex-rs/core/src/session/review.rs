@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
@@ -58,8 +59,13 @@ pub(super) async fn review(sess: &Arc<Session>, sub_id: String, review_request: 
     let resolved = match resolved {
         Ok(resolved) => resolved,
         Err(err) => {
-            sess.emit_turn_error_lifecycle(turn_context.as_ref(), CodexErrorInfo::Other)
-                .await;
+            let error_details = CodexErrorDetails::InvalidRequest(err.to_string());
+            sess.emit_turn_error_lifecycle(
+                turn_context.as_ref(),
+                CodexErrorInfo::Other,
+                &error_details,
+            )
+            .await;
             sess.send_event(
                 &turn_context,
                 EventMsg::Error(ErrorEvent {
