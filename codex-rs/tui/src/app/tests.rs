@@ -60,6 +60,8 @@ mod patch_approval_tests;
 mod permission_selection_tests;
 #[path = "tests/plan_handoff_transfer.rs"]
 mod plan_handoff_transfer;
+#[path = "tests/projectless_tests.rs"]
+mod projectless_tests;
 #[path = "tests/unavailable_commands_tests.rs"]
 mod unavailable_commands;
 
