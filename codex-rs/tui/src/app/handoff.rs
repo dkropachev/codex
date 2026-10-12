@@ -236,6 +236,7 @@ impl App {
             &self.cli_kv_overrides,
             &self.harness_overrides,
         );
+        config.permissions = self.chat_widget.config_ref().permissions.clone();
         config.model = Some(preserved.model);
         config.model_reasoning_effort = preserved.reasoning_effort;
         config.service_tier = preserved.service_tier;
