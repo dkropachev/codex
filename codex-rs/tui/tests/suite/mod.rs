@@ -15,6 +15,8 @@ mod mcp_live;
 #[path = "plugins__live.rs"]
 mod plugins_live;
 #[cfg(unix)]
+mod provider_defaults;
+#[cfg(unix)]
 mod reconnect;
 mod resize_reflow;
 #[cfg(unix)]

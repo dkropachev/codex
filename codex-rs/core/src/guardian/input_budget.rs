@@ -11,7 +11,9 @@ use codex_guardian_context::effective_input_token_limit;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::user_input::UserInput;
 
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianBudgetOmission;
@@ -79,7 +81,7 @@ pub(crate) async fn check_pending(session: &Session, turn: &TurnContext) -> Code
 pub(crate) async fn finalize(
     session: &Session,
     step: &StepContext,
-    input: &mut [TurnInput],
+    input: &mut Vec<TurnInput>,
     history_truncation: HistoryTruncation,
 ) -> CodexResult<()> {
     let Some(pending) = session
@@ -89,7 +91,7 @@ pub(crate) async fn finalize(
     else {
         return Ok(());
     };
-    let [TurnInput::UserInput { content, .. }] = input else {
+    let [TurnInput::UserInput { content, .. }] = input.as_slice() else {
         return Err(CodexErr::InvalidRequest(
             "Guardian expects one review input".to_owned(),
         ));
@@ -198,35 +200,75 @@ pub(crate) async fn finalize(
                 );
         }
     }
-    let (mut bounded_content, metadata) = context
-        .into_annotated_user_inputs()
-        .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
-    let approval_request_start = bounded_content
-        .iter()
-        .position(|item| {
-            matches!(
-                item,
-                codex_protocol::user_input::UserInput::Text { text, .. }
-                    if text.starts_with(">>> APPROVAL REQUEST START\n")
-            )
-        })
-        .ok_or_else(|| CodexErr::InvalidRequest("Guardian approval request is missing".into()))?;
-    if let Err(message) =
-        crate::context::bound_guardian_model_input(&mut bounded_content, approval_request_start)
-    {
-        session
-            .services
-            .thread_extension_data
-            .insert(super::request_budget::ExhaustedReviewBudget::Detected);
-        return Err(CodexErr::InvalidRequest(message));
-    }
-    if metadata.is_some() {
-        input[0] = TurnInput::ResponseItem(codex_history::ResponseItemEnvelope {
-            item: session.response_item_from_user_input(bounded_content),
-            metadata,
-        });
-    } else {
-        *content = bounded_content;
+    match context.clone().into_annotated_user_inputs() {
+        Ok((mut user_input, metadata)) => {
+            let approval_request_start = user_input
+                .iter()
+                .position(|item| {
+                    matches!(
+                        item,
+                        UserInput::Text { text, .. }
+                            if text.starts_with(">>> APPROVAL REQUEST START\n")
+                    )
+                })
+                .ok_or_else(|| {
+                    CodexErr::InvalidRequest("Guardian approval request is missing".into())
+                })?;
+            if let Err(message) =
+                crate::context::bound_guardian_model_input(&mut user_input, approval_request_start)
+            {
+                session
+                    .services
+                    .thread_extension_data
+                    .insert(super::request_budget::ExhaustedReviewBudget::Detected);
+                return Err(CodexErr::InvalidRequest(message));
+            }
+            if metadata.is_some() {
+                input[0] = TurnInput::ResponseItem(codex_history::ResponseItemEnvelope {
+                    item: session.response_item_from_user_input(user_input),
+                    metadata,
+                });
+            } else if let TurnInput::UserInput { content, .. } = &mut input[0] {
+                *content = user_input;
+            }
+        }
+        Err(codex_guardian_context::SectionError::UnsupportedDelivery {
+            section: "conversation_transcript",
+        }) => {
+            *input = context
+                .into_annotated_messages()
+                .into_iter()
+                .map(|mut envelope| {
+                    // Preserve the ordinary user-content annotations on each text segment;
+                    // native messages retain the original author, recipient and ciphertext.
+                    if let ResponseItem::Message { role, content, .. } = &envelope.item
+                        && role == "user"
+                    {
+                        let user_input = content
+                            .iter()
+                            .map(|item| match item {
+                                ContentItem::InputText { text } => Ok(UserInput::Text {
+                                    text: text.clone(),
+                                    text_elements: Vec::new(),
+                                }),
+                                ContentItem::InputImage { image, detail } => Ok(UserInput::Image {
+                                    image: image.clone(),
+                                    detail: *detail,
+                                }),
+                                ContentItem::OutputText { .. } | ContentItem::InputAudio { .. } => {
+                                    Err(CodexErr::InvalidRequest(
+                                        "Unsupported Guardian input content".to_owned(),
+                                    ))
+                                }
+                            })
+                            .collect::<CodexResult<Vec<_>>>()?;
+                        envelope.item = session.response_item_from_user_input(user_input);
+                    }
+                    Ok(TurnInput::ResponseItem(envelope))
+                })
+                .collect::<CodexResult<Vec<_>>>()?;
+        }
+        Err(error) => return Err(CodexErr::InvalidRequest(error.to_string())),
     }
     step.turn.extension_data.insert(RetainedReviewContext {
         context: pending.0.retained_instructions(),

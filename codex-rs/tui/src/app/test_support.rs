@@ -35,6 +35,7 @@ pub(crate) async fn make_test_app() -> App {
         loader_overrides: LoaderOverrides::without_managed_config_for_tests(),
         cloud_config_bundle: CloudConfigBundleLoader::default(),
         runtime_approval_policy_override: None,
+        runtime_approvals_reviewer_override: None,
         runtime_permission_profile_override: None,
         pending_server_profiles: HashMap::new(),
         file_search,
@@ -69,6 +70,7 @@ pub(crate) async fn make_test_app() -> App {
         app_server_target: crate::AppServerTarget::Embedded,
         pending_right_click_paste: None,
         right_click_paste_environment: super::right_click_paste::PasteEnvironment {
+            primary: false,
             platform_default: true,
             ssh: false,
             wsl: false,
