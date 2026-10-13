@@ -204,10 +204,12 @@ impl ChatWidget {
                 option_display
             };
             items.push(SelectionItem {
-                name: format!("{current_branch} -> {display_branch}"),
+                name: format!(
+                    "{current_branch} -> {display_branch}{}",
+                    if is_default { " (default)" } else { "" }
+                ),
                 description: (pull_request_base.as_ref() == Some(&option))
                     .then(|| "Pull request base".to_string()),
-                is_default,
                 actions: vec![Box::new(move |tx: &AppEventSender| {
                     tx.send(AppEvent::StartReportReview {
                         thread_id,

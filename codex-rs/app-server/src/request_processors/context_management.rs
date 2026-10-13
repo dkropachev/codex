@@ -14,6 +14,7 @@ use super::invalid_request;
 
 pub(super) struct AcceptedTurnInput {
     pub(super) turn_id: String,
+    pub(super) root_turn_id: String,
     pub(super) started: bool,
 }
 
@@ -37,7 +38,7 @@ pub(super) async fn start_compaction(
         .await
         .map_err(|err| internal_error(format!("failed to start compaction: {err}")))?;
     match submission {
-        StartIfIdleSubmission::Started { turn_id } => Ok(turn_id),
+        StartIfIdleSubmission::Started { turn_id, .. } => Ok(turn_id),
         StartIfIdleSubmission::NotSubmitted { reason } => {
             let reason_debug = format!("{reason:?}");
             match reason {
@@ -72,9 +73,13 @@ pub(super) async fn submit_turn(
                 .start_user_turn_if_idle(request)
                 .await
                 .map(|submission| match submission {
-                    StartIfIdleSubmission::Started { turn_id } => {
-                        TurnInputSubmission::Started { turn_id }
-                    }
+                    StartIfIdleSubmission::Started {
+                        turn_id,
+                        root_turn_id,
+                    } => TurnInputSubmission::Started {
+                        turn_id,
+                        root_turn_id,
+                    },
                     StartIfIdleSubmission::NotSubmitted { reason } => {
                         TurnInputSubmission::NotSubmitted { reason }
                     }
@@ -85,12 +90,20 @@ pub(super) async fn submit_turn(
     .map_err(|err| internal_error(format!("failed to submit turn input: {err}")))?;
 
     match submission {
-        TurnInputSubmission::Started { turn_id } => Ok(AcceptedTurnInput {
+        TurnInputSubmission::Started {
             turn_id,
+            root_turn_id,
+        } => Ok(AcceptedTurnInput {
+            turn_id,
+            root_turn_id,
             started: true,
         }),
-        TurnInputSubmission::Steered { turn_id } => Ok(AcceptedTurnInput {
+        TurnInputSubmission::Steered {
             turn_id,
+            root_turn_id,
+        } => Ok(AcceptedTurnInput {
+            turn_id,
+            root_turn_id,
             started: false,
         }),
         TurnInputSubmission::NotSubmitted { reason } => {

@@ -1,9 +1,11 @@
 use codex_core::context::guardian_model_context_item_is_bounded;
 use codex_features::GuardianV2ConfigToml;
 use codex_features::GuardianV2TranscriptConfigToml;
+use codex_guardian_context::TRANSCRIPT_JSON_INSTRUCTIONS;
 use codex_guardian_context::truncate_text as truncate_entry;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::ResponseItemId;
+use codex_protocol::TranscriptFormat;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::GuardianV2ModelConfig;
@@ -39,6 +41,7 @@ fn extra_policy_reaches_templated_and_legacy_classifier_instructions() {
         ),
     ] {
         let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+            transcript_mode: Some(TranscriptFormat::Json),
             classifier_instructions: Some(template.to_owned()),
             ..Default::default()
         })
@@ -59,7 +62,9 @@ fn extra_policy_reaches_templated_and_legacy_classifier_instructions() {
             };
             assert_eq!(
                 text,
-                format!("{expected}{suffix}\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}")
+                format!(
+                    "{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n{expected}{suffix}\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
+                )
             );
         }
     }
@@ -68,8 +73,9 @@ fn extra_policy_reaches_templated_and_legacy_classifier_instructions() {
 #[test]
 fn template_policy_is_substituted_before_the_single_truncation() {
     let instructions = ResolvedModelMessages::bundled().guardian_classifier_instructions();
-    for max_tokens in [256, 1_000, 2_000] {
+    for max_tokens in [100, 256, 1_000, 2_000] {
         let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+            transcript_mode: Some(TranscriptFormat::Json),
             max_classifier_instruction_tokens: Some(max_tokens),
             ..Default::default()
         })
@@ -77,9 +83,12 @@ fn template_policy_is_substituted_before_the_single_truncation() {
         let policy = "The actual tenant policy.";
         assert_eq!(
             rendered_classifier_text(&config, policy),
-            truncate_entry(
-                &instructions.replace("{{ tenant_policy_config }}", policy),
-                max_tokens,
+            format!(
+                "{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n{}",
+                truncate_entry(
+                    &instructions.replace("{{ tenant_policy_config }}", policy),
+                    max_tokens,
+                )
             )
         );
         assert_eq!(config.classifier_instructions, instructions);
@@ -87,9 +96,10 @@ fn template_policy_is_substituted_before_the_single_truncation() {
 }
 
 #[test]
-fn evaluated_configuration_preserves_rendered_prompt_and_gate() {
+fn evaluated_configuration_preserves_gate_and_caps_only_configured_prompt() {
     let instructions = ResolvedModelMessages::bundled().guardian_classifier_instructions();
     let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+        transcript_mode: Some(TranscriptFormat::Json),
         classifier_instructions: Some(instructions.to_owned()),
         review_threshold: Some(0.5),
         reasoning_effort: Some(ReasoningEffort::Low),
@@ -107,18 +117,26 @@ fn evaluated_configuration_preserves_rendered_prompt_and_gate() {
     assert_eq!(config.max_parent_compaction_tokens, 10_000);
     assert_eq!(config.classifier_instructions, instructions);
 
-    for policy in ["Tenant policy.".to_owned(), "é".repeat(80_000)] {
-        // This is the exact pre-review rendering path used by the eval config.
-        let previous = truncate_entry(
-            &truncate_entry(
-                instructions,
-                /*max_tokens*/ MAX_CLASSIFIER_INSTRUCTION_TOKENS,
-            )
-            .replace("{{ tenant_policy_config }}", &policy),
-            /*max_tokens*/ MAX_CLASSIFIER_INSTRUCTION_TOKENS,
-        );
-        assert_eq!(rendered_classifier_text(&config, &policy), previous);
-    }
+    let policy = "Tenant policy.";
+    assert_eq!(
+        rendered_classifier_text(&config, policy),
+        format!(
+            "{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n{}",
+            instructions.replace("{{ tenant_policy_config }}", policy)
+        )
+    );
+
+    let long_policy = "é".repeat(80_000);
+    let rendered = config.render_classifier_instructions(&long_policy, "");
+    let (_, content) = rendered.clone().into_parts();
+    let (ContentItem::InputText { text }, _) = content.into_parts() else {
+        panic!("classifier instructions must be text");
+    };
+    assert!(text.starts_with(TRANSCRIPT_JSON_INSTRUCTIONS));
+    assert!(text.ends_with(CLASSIFICATION_OUTPUT_INSTRUCTIONS));
+    let mut item = ResponseItem::from(rendered);
+    item.set_id(Some(ResponseItemId::new("msg")));
+    assert!(guardian_model_context_item_is_bounded(&item));
 }
 
 #[test]
@@ -145,7 +163,11 @@ fn classifier_instructions_are_bounded_after_json_escaping() {
 
 #[test]
 fn model_prompt_and_explicit_threshold_precedence_are_preserved() {
-    let builtin = GuardianV2Config::from_overrides(GuardianV2ConfigToml::default()).unwrap();
+    let builtin = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+        transcript_mode: Some(TranscriptFormat::Json),
+        ..Default::default()
+    })
+    .unwrap();
     assert_eq!(builtin.review_threshold, 0.5);
     for prompt in [
         "Model-owned instructions.",
@@ -172,6 +194,7 @@ fn model_prompt_and_explicit_threshold_precedence_are_preserved() {
         );
 
         let local = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+            transcript_mode: Some(TranscriptFormat::Json),
             classifier_instructions: Some(String::new()),
             ..Default::default()
         })
@@ -192,6 +215,7 @@ fn model_prompt_and_explicit_threshold_precedence_are_preserved() {
         0.6,
     );
     let explicit = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+        transcript_mode: Some(TranscriptFormat::Json),
         review_threshold: Some(0.5),
         ..Default::default()
     })
@@ -206,7 +230,34 @@ fn model_prompt_and_explicit_threshold_precedence_are_preserved() {
 }
 
 #[test]
-fn legacy_classifier_prompts_keep_the_output_contract_after_truncation() {
+fn model_defaults_preserve_transcript_mode_and_matching_instructions() {
+    for format in [TranscriptFormat::Line, TranscriptFormat::Json] {
+        let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+            transcript_mode: Some(format),
+            ..Default::default()
+        })
+        .unwrap()
+        .with_model_defaults(Some(&GuardianV2ModelConfig {
+            classifier_instructions: Some("Model-owned prompt.".to_owned()),
+            ..Default::default()
+        }))
+        .unwrap();
+        assert_eq!(config.transcript.format, format);
+        let expected = format!(
+            "Model-owned prompt.\n\n# Security Policy\nPolicy.\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
+        );
+        assert_eq!(
+            rendered_classifier_text(&config, "Policy."),
+            match format {
+                TranscriptFormat::Line => expected,
+                TranscriptFormat::Json => format!("{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n{expected}"),
+            }
+        );
+    }
+}
+
+#[test]
+fn classifier_caps_preserve_complete_provenance_and_output_contract() {
     let prompt = "Return a JSON action_risk score. ".repeat(200);
     let policy = "Require approval for unsafe actions.";
     let model_defaults = GuardianV2ModelConfig {
@@ -215,26 +266,28 @@ fn legacy_classifier_prompts_keep_the_output_contract_after_truncation() {
         ..Default::default()
     };
     let local_override = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
-        classifier_instructions: Some(prompt.clone()),
+        transcript_mode: Some(TranscriptFormat::Json),
+        classifier_instructions: Some(prompt),
         max_classifier_instruction_tokens: Some(100),
         ..Default::default()
     })
     .unwrap();
-    let model_override = GuardianV2Config::from_overrides(GuardianV2ConfigToml::default())
-        .unwrap()
-        .with_model_defaults(Some(&model_defaults))
-        .unwrap();
+    let model_override = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+        transcript_mode: Some(TranscriptFormat::Json),
+        ..Default::default()
+    })
+    .unwrap()
+    .with_model_defaults(Some(&model_defaults))
+    .unwrap();
 
     for config in [local_override, model_override] {
         let rendered = rendered_classifier_text(&config, policy);
-        assert_eq!(
-            rendered,
-            truncate_entry(
-                &format!(
-                    "{prompt}\n\n# Security Policy\n{policy}\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
-                ),
-                /*max_tokens*/ 100,
-            )
+        let configured_prompt = rendered
+            .strip_prefix(&format!("{TRANSCRIPT_JSON_INSTRUCTIONS}\n\n"))
+            .expect("complete provenance instructions must survive the 100-token cap");
+        assert!(
+            configured_prompt.len()
+                <= codex_protocol::protocol::TruncationPolicy::Tokens(100).byte_budget()
         );
         assert!(rendered.ends_with(CLASSIFICATION_OUTPUT_INSTRUCTIONS));
     }
@@ -244,7 +297,7 @@ fn legacy_classifier_prompts_keep_the_output_contract_after_truncation() {
 fn model_runtime_settings_preserve_local_overrides() {
     let prompt = "legacy instructions ".repeat(3_000);
     let defaults = GuardianV2ModelConfig {
-        classifier_instructions: Some(prompt.clone()),
+        classifier_instructions: Some(prompt),
         max_classifier_instruction_tokens: Some(256),
         max_tool_call_lag: Some(1),
         async_classifier_conversation_token_limit: Some(80_000),
@@ -255,10 +308,13 @@ fn model_runtime_settings_preserve_local_overrides() {
         }),
         ..Default::default()
     };
-    let inherited = GuardianV2Config::from_overrides(GuardianV2ConfigToml::default())
-        .unwrap()
-        .with_model_defaults(Some(&defaults))
-        .unwrap();
+    let inherited = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+        transcript_mode: Some(TranscriptFormat::Json),
+        ..Default::default()
+    })
+    .unwrap()
+    .with_model_defaults(Some(&defaults))
+    .unwrap();
     assert_eq!(
         (
             inherited.max_classifier_instruction_tokens,
@@ -271,6 +327,7 @@ fn model_runtime_settings_preserve_local_overrides() {
     );
 
     let overridden = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+        transcript_mode: Some(TranscriptFormat::Json),
         max_classifier_instruction_tokens: Some(512),
         max_tool_call_lag: Some(4),
         async_classifier_conversation_token_limit: Some(120_000),
@@ -302,15 +359,16 @@ fn model_runtime_settings_preserve_local_overrides() {
     let default_capped = inherited
         .with_model_defaults(Some(&default_capped_defaults))
         .unwrap();
-    assert_eq!(
-        rendered_classifier_text(&default_capped, "Tenant policy."),
-        truncate_entry(
-            &format!(
-                "{prompt}\n\n# Security Policy\nTenant policy.\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
-            ),
-            /*max_tokens*/ MAX_CLASSIFIER_INSTRUCTION_TOKENS,
-        )
-    );
+    let rendered = default_capped.render_classifier_instructions("Tenant policy.", "");
+    let (_, content) = rendered.clone().into_parts();
+    let (ContentItem::InputText { text }, _) = content.into_parts() else {
+        panic!("classifier instructions must be text");
+    };
+    assert!(text.starts_with(TRANSCRIPT_JSON_INSTRUCTIONS));
+    assert!(text.ends_with(CLASSIFICATION_OUTPUT_INSTRUCTIONS));
+    let mut item = ResponseItem::from(rendered);
+    item.set_id(Some(ResponseItemId::new("msg")));
+    assert!(guardian_model_context_item_is_bounded(&item));
 }
 
 #[test]
@@ -322,6 +380,7 @@ fn classifier_mode_uses_local_override_then_model_default() {
         Some(AsyncClassifierMode::Conversation),
     ] {
         let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+            transcript_mode: Some(TranscriptFormat::Json),
             async_classifier_mode: local,
             ..Default::default()
         })

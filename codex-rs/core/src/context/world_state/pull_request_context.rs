@@ -3,6 +3,7 @@ use std::sync::Arc;
 use super::PreviousSectionState;
 use super::SectionTransition;
 use super::WorldStateSection;
+use super::WorldStateUpdate;
 use crate::context::ContextualUserFragment;
 use crate::context::PullRequestContext;
 
@@ -41,12 +42,16 @@ impl WorldStateSection for PullRequestContextState {
         if matches!(previous, PreviousSectionState::Known(previous) if previous == self.context.as_ref())
             || matches!(previous, PreviousSectionState::Unknown)
         {
-            return (Some(snapshot), None);
+            return (Some(snapshot), Vec::new());
         }
 
         (
             Some(snapshot.clone()),
-            Some(Box::new(snapshot) as Box<dyn ContextualUserFragment>),
+            vec![WorldStateUpdate::standalone(
+                WorldStateUpdate::boxed_fragment(
+                    Box::new(snapshot) as Box<dyn ContextualUserFragment>
+                ),
+            )],
         )
     }
 }

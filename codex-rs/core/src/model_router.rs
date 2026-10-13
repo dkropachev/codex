@@ -2998,6 +2998,7 @@ mod tests {
             supports_websockets: false,
             supports_standalone_web_search: false,
             include_internal_metadata: false,
+            capabilities: None,
         }
     }
 

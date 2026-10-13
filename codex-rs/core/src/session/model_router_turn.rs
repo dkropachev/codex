@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-use codex_features::Feature;
 use codex_model_provider::create_model_provider;
 use tracing::warn;
 
@@ -175,7 +174,7 @@ impl Session {
         let step_settings = Arc::new(ResolvedStepSettings::new(
             Arc::clone(&session_configuration.step_settings),
             model_info,
-            self.features.enabled(Feature::FastMode),
+            &self.features,
         ));
         let environments = previous.initial_environments.clone();
         let skills_snapshot = previous.skills_snapshot().as_ref().clone();
