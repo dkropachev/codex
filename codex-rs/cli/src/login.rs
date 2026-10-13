@@ -12,6 +12,7 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::AuthRouteConfig;
@@ -689,8 +690,62 @@ pub async fn run_logout(
 }
 
 async fn logout_account(config: &Config, account_home: &Path) -> std::io::Result<bool> {
+    let saved_scope = |auth: &AuthDotJson| {
+        let credential = match auth.auth_mode {
+            Some(AuthMode::PersonalAccessToken) => auth.personal_access_token.as_deref(),
+            Some(AuthMode::AgentIdentity) => match auth.agent_identity.as_ref() {
+                Some(AgentIdentityStorage::Jwt(jwt)) => Some(jwt.as_str()),
+                Some(AgentIdentityStorage::Record(_)) | None => None,
+            },
+            None if auth.personal_access_token.is_some() => auth.personal_access_token.as_deref(),
+            None | Some(_) => None,
+        };
+        credential.and_then(|credential| {
+            auth.ema_scope.as_ref().and_then(|stored| {
+                stored.for_credential(credential).map(|scope| {
+                    (
+                        stored.idp.credential_name(&scope),
+                        stored.idp.issuer.clone(),
+                    )
+                })
+            })
+        })
+    };
+
     // Cleanup is independent of the current feature gate. Retain the grant lock
     // through account removal so another process cannot commit a late login.
+    let mut saved_guards = Vec::new();
+    let mut saved_cleanup_failed = false;
+    let mut seen_scopes = std::collections::HashSet::new();
+    for mode in [
+        AuthCredentialsStoreMode::File,
+        AuthCredentialsStoreMode::Keyring,
+    ] {
+        match load_auth_dot_json(account_home, mode, config.auth_keyring_backend_kind()) {
+            Ok(Some(auth)) => {
+                if let Some((credential_name, issuer)) = saved_scope(&auth)
+                    && seen_scopes.insert((credential_name.clone(), issuer.clone()))
+                {
+                    match EnterpriseOAuthCredentialGuard::acquire(
+                        &credential_name,
+                        &issuer,
+                        config.auth_keyring_backend_kind(),
+                    )
+                    .await
+                    {
+                        Ok(guard) => {
+                            saved_cleanup_failed |= guard.delete_tokens().is_err();
+                            saved_guards.push(guard);
+                        }
+                        Err(_) => saved_cleanup_failed = true,
+                    }
+                }
+            }
+            Ok(None) => {}
+            // Report the unreadable store, but still clean scopes from other readable stores.
+            Err(_) => saved_cleanup_failed = true,
+        }
+    }
     let enterprise_guard = async {
         let Some(auth) = load_auth_dot_json(
             account_home,
@@ -713,37 +768,8 @@ async fn logout_account(config: &Config, account_home: &Path) -> std::io::Result
                 AuthMode::Chatgpt
             }
         });
-        let saved_scope = match mode {
-            AuthMode::PersonalAccessToken => auth.personal_access_token.as_deref(),
-            AuthMode::AgentIdentity => match auth.agent_identity.as_ref() {
-                Some(AgentIdentityStorage::Jwt(jwt)) => Some(jwt.as_str()),
-                Some(AgentIdentityStorage::Record(_)) | None => None,
-            },
-            AuthMode::Chatgpt
-            | AuthMode::ChatgptAuthTokens
-            | AuthMode::ApiKey
-            | AuthMode::Headers
-            | AuthMode::BedrockApiKey
-            | AuthMode::BedrockAccessKeys => None,
-        }
-        .and_then(|credential| {
-            auth.ema_scope.as_ref().and_then(|stored| {
-                stored.for_credential(credential).map(|scope| {
-                    (
-                        stored.idp.credential_name(&scope),
-                        stored.idp.issuer.clone(),
-                    )
-                })
-            })
-        });
-        if let Some((credential_name, issuer)) = saved_scope {
-            return EnterpriseOAuthCredentialGuard::acquire(
-                &credential_name,
-                &issuer,
-                config.auth_keyring_backend_kind(),
-            )
-            .await
-            .map(Some);
+        if saved_scope(&auth).is_some() {
+            return Ok(None);
         }
         let Some(profile) = &config.mcp_enterprise_managed_auth else {
             return Ok(None);
@@ -785,8 +811,12 @@ async fn logout_account(config: &Config, account_home: &Path) -> std::io::Result
         let Some(scope) = scope else {
             return Ok(None);
         };
+        let credential_name = profile.idp.credential_name(&scope);
+        if seen_scopes.contains(&(credential_name.clone(), profile.idp.issuer.clone())) {
+            return Ok(None);
+        }
         EnterpriseOAuthCredentialGuard::acquire(
-            &profile.idp.credential_name(&scope),
+            &credential_name,
             &profile.idp.issuer,
             config.auth_keyring_backend_kind(),
         )
@@ -794,22 +824,24 @@ async fn logout_account(config: &Config, account_home: &Path) -> std::io::Result
         .map(Some)
     }
     .await;
-    let cleanup_failed = match &enterprise_guard {
+    let legacy_cleanup_failed = match &enterprise_guard {
         Ok(Some(guard)) => guard.delete_tokens().is_err(),
         Ok(None) => false,
         Err(_) => true,
     };
-    if cleanup_failed {
+    if saved_cleanup_failed || legacy_cleanup_failed {
         eprintln!("Warning: failed to remove enterprise authorization; continuing account logout");
     }
 
-    logout_with_revoke(
+    let result = logout_with_revoke(
         account_home,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
         &config.auth_route_config(),
     )
-    .await
+    .await;
+    drop(saved_guards);
+    result
 }
 
 async fn logout_all_accounts(config: &Config) -> std::io::Result<bool> {

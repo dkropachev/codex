@@ -518,6 +518,70 @@ async fn logout_uses_verified_pat_scope_without_whoami() -> Result<()> {
 }
 
 #[tokio::test]
+async fn logout_finds_saved_pat_scope_after_file_to_keyring_switch() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(path("/backend-api/wham/config/bundle"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "config_toml": {"enterprise_managed": []},
+            "requirements_toml": {"enterprise_managed": []},
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "email": "user@example.com",
+            "chatgpt_user_id": "verified-user",
+            "chatgpt_account_id": "verified-workspace",
+            "chatgpt_plan_type": "enterprise",
+            "chatgpt_account_is_fedramp": false,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let home = TempDir::new()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "cli_auth_credentials_store = \"file\"\nchatgpt_base_url = \"{}/backend-api\"\n[mcp_enterprise_managed_auth.idp]\nissuer = \"https://idp.example\"\nclient_id = \"enterprise-client\"\n",
+            server.uri()
+        ),
+    )?;
+    codex_command(home.path())?
+        .current_dir(home.path())
+        .env("CODEX_AUTHAPI_BASE_URL", server.uri())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .args(["login", "--with-access-token"])
+        .write_stdin("at-pat-test\n")
+        .assert()
+        .success();
+    assert_eq!(
+        read_auth_json(home.path())?["ema_scope"]["user_id"],
+        "verified-user"
+    );
+
+    std::fs::write(
+        home.path().join("config.toml"),
+        "cli_auth_credentials_store = \"keyring\"\n",
+    )?;
+    // A failed lock exposes attempted grant cleanup without requiring an IdP keyring entry.
+    std::fs::write(home.path().join("mcp-oauth-locks"), "not a directory")?;
+    codex_command(home.path())?
+        .current_dir(home.path())
+        .env("CODEX_AUTHAPI_BASE_URL", "http://127.0.0.1:1")
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .args(["logout"])
+        .assert()
+        .success()
+        .stderr(contains("failed to remove enterprise authorization"));
+    assert!(!home.path().join("auth.json").exists());
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn logout_uses_stored_account_identity_with_ambient_access_token() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(path("/backend-api/wham/config/bundle"))
