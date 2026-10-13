@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
@@ -9,6 +10,8 @@ use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_config::RequirementSource;
+use codex_config::Sourced;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use codex_core::WaitForEnvironmentToolConfig;
@@ -3065,6 +3068,18 @@ async fn production_turn_keeps_rebalanced_catalogs_stable_after_compaction_and_r
             config.cloud_skill_enabled = true;
             config.model_provider.name = "Skills compaction test".to_string();
             config.model_post_turn_compact_threshold_percent = 50;
+            let stack = &config.config_layer_stack;
+            let mut requirements = stack.requirements().clone();
+            requirements.mcp_servers =
+                Some(Sourced::new(BTreeMap::new(), RequirementSource::Unknown));
+            let mut requirements_toml = stack.requirements_toml().clone();
+            requirements_toml.mcp_servers = Some(BTreeMap::new());
+            config.config_layer_stack = ConfigLayerStack::new(
+                stack.all_layers_low_to_high().cloned().collect(),
+                requirements,
+                requirements_toml,
+            )
+            .expect("fixture should exclude executor MCP servers");
             config
                 .features
                 .enable(Feature::DeferredExecutor)

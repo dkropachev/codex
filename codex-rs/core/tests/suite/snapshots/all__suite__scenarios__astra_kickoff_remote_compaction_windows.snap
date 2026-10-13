@@ -55,14 +55,11 @@ Settings:
         A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
         ### Skill roots
         - `r0` = `<SKILLS_ROOT>`
-        - `r1` = `<SKILLS_ROOT>`
-        - `r2` = `<PLUGINS_CACHE>/test`
+        - `r1` = `<PLUGINS_CACHE>/test`
         ### Available skills
-        - calendar:agenda: Plan a team agenda (file: r2/calendar/local/skills/agenda/SKILL.md)
-        - code-review: Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axe... to "review since X". (file: r1/code-review/SKILL.md) [hash=f2a05385fc678edb]
+        - calendar:agenda: Plan a team agenda (file: r1/calendar/local/skills/agenda/SKILL.md)
         - final-check: Review a final brief (file: r0/final-check/SKILL.md)
-        - find-skills: Helps users discover and install agent skills when they ask questions like "how do I do X...an installable skill. (file: r1/find-skills/SKILL.md) [hash=c78de2e2bcabf454]
-        - notes:summarize: Summarize team notes (file: r2/notes/local/skills/summarize/SKILL.md)
+        - notes:summarize: Summarize team notes (file: r1/notes/local/skills/summarize/SKILL.md)
         - outline: Draft a project outline (file: r0/outline/SKILL.md)
         </skills_instructions>
     [02] <permissions instructions>
@@ -237,14 +234,11 @@ Settings: same as window 1
         A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
         ### Skill roots
         - `r0` = `<SKILLS_ROOT>`
-        - `r1` = `<SKILLS_ROOT>`
-        - `r2` = `<PLUGINS_CACHE>/test`
+        - `r1` = `<PLUGINS_CACHE>/test`
         ### Available skills
-        - calendar:agenda: Plan a team agenda (file: r2/calendar/local/skills/agenda/SKILL.md)
-        - code-review: Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axe... to "review since X". (file: r1/code-review/SKILL.md) [hash=f2a05385fc678edb]
+        - calendar:agenda: Plan a team agenda (file: r1/calendar/local/skills/agenda/SKILL.md)
         - final-check: Review a final brief (file: r0/final-check/SKILL.md)
-        - find-skills: Helps users discover and install agent skills when they ask questions like "how do I do X...an installable skill. (file: r1/find-skills/SKILL.md) [hash=c78de2e2bcabf454]
-        - notes:summarize: Summarize team notes (file: r2/notes/local/skills/summarize/SKILL.md)
+        - notes:summarize: Summarize team notes (file: r1/notes/local/skills/summarize/SKILL.md)
         - outline: Draft a project outline (file: r0/outline/SKILL.md)
         </skills_instructions>
     [02] <permissions instructions>
