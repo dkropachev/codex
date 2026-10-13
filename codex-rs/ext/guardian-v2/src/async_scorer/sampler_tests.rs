@@ -53,6 +53,10 @@ use super::LunaSamplingRequest;
 use super::MAX_CONCURRENT_REQUESTS;
 use super::split_oversized_user_messages;
 
+#[path = "request_tests.rs"]
+mod request;
+#[path = "retained_sampling_tests.rs"]
+mod retained;
 #[path = "sampler_routing_tests.rs"]
 mod routing;
 
@@ -379,7 +383,7 @@ pub(in crate::async_scorer) async fn proxy_websocket_servers_with_http(
     Ok(format!("http://{address}/v1"))
 }
 
-pub(super) fn sampler_config(base_url: String) -> LunaSamplerConfig {
+pub(in crate::async_scorer) fn sampler_config(base_url: String) -> LunaSamplerConfig {
     LunaSamplerConfig {
         workspace_routing: codex_model_provider::WorkspaceRoutingContext::new(
             "https://chatgpt.com/backend-api".into(),
@@ -439,7 +443,7 @@ fn assert_classifier_instructions(request: &serde_json::Value) {
     );
 }
 
-pub(super) fn sample_request(parent_turn_id: &str) -> LunaSamplingRequest {
+pub(in crate::async_scorer) fn sample_request(parent_turn_id: &str) -> LunaSamplingRequest {
     LunaSamplingRequest {
         parent_response_id: None,
         instructions: classifier_instructions(),
@@ -875,7 +879,12 @@ async fn sampler_reuses_parent_compaction_only_for_matching_model_hashes() -> Re
         request.parent_compaction_hash = parent_hash.map(str::to_owned);
         request.input.insert(
             /*index*/ 0,
-            PreviousReviews::try_from_fragments(vec!["trusted review".to_owned()])?.into_message(),
+            PreviousReviews::try_from_fragments(vec![codex_guardian_context::PreviousReview {
+                id: ResponseItemId::from_server("review-trusted".to_owned()),
+                fragment: "trusted review".to_owned(),
+            }])?
+            .into_annotated_message()
+            .into_item(),
         );
 
         let result = sampler.sample(request).await;
@@ -1169,7 +1178,12 @@ async fn sampler_retries_expired_websockets_on_another_warm_connection() -> Resu
     let mut request = sample_request("turn-1");
     request.input.insert(
         /*index*/ 0,
-        PreviousReviews::try_from_fragments(vec!["trusted review".to_owned()])?.into_message(),
+        PreviousReviews::try_from_fragments(vec![codex_guardian_context::PreviousReview {
+            id: ResponseItemId::from_server("review-trusted".to_owned()),
+            fragment: "trusted review".to_owned(),
+        }])?
+        .into_annotated_message()
+        .into_item(),
     );
     request.input.insert(
         /*index*/ 1,

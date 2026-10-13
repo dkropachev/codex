@@ -1,6 +1,7 @@
 use super::ContextualUserFragment;
 use super::world_state::PreviousSectionState;
 use super::world_state::WorldStateSection;
+use crate::context::world_state::SectionTransition;
 use codex_features::TokenBudgetMode;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -91,19 +92,18 @@ impl WorldStateSection for TokenBudgetContext {
     const ID: &'static str = "context_window";
     type Snapshot = String;
 
-    fn snapshot(&self) -> Self::Snapshot {
-        match self.mode {
-            TokenBudgetMode::Thread => format!("thread:{}", self.thread_id),
-            TokenBudgetMode::Name => self.agent_path.to_string(),
-        }
-    }
-
     fn render_diff(
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn ContextualUserFragment>> {
-        matches!(previous, PreviousSectionState::Known(identity) if identity != &self.snapshot())
-            .then(|| Box::new(self.clone()) as Box<dyn ContextualUserFragment>)
+    ) -> SectionTransition<Self::Snapshot> {
+        let current = match self.mode {
+            TokenBudgetMode::Thread => format!("thread:{}", self.thread_id),
+            TokenBudgetMode::Name => self.agent_path.to_string(),
+        };
+        let fragment =
+            matches!(previous, PreviousSectionState::Known(identity) if identity != &current)
+                .then(|| Box::new(self.clone()) as Box<dyn ContextualUserFragment>);
+        (Some(current), fragment)
     }
 }
 

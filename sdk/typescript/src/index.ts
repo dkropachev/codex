@@ -46,3 +46,4 @@ export type {
   WorkflowUserInputRequest,
   WorkflowUserInputResponse,
 } from "./workflowContext";
+export type { CyberAccessProgram, TurnOptions } from "./turnOptions";

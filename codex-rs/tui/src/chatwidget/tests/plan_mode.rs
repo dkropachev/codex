@@ -15,6 +15,7 @@ fn paste_hidden_plan_shell_payload(chat: &mut ChatWidget) -> String {
 
 fn plan_test_session(thread_id: ThreadId) -> crate::session_state::ThreadSessionState {
     crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
         forked_from_id: None,
@@ -32,7 +33,6 @@ fn plan_test_session(thread_id: ThreadId) -> crate::session_state::ThreadSession
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: None,
@@ -270,7 +270,6 @@ async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: None,
             ..
         } => {}
         other => {
@@ -807,7 +806,6 @@ async fn submit_user_message_with_mode_allows_same_mode_during_running_turn() {
                     mode: ModeKind::Plan,
                     ..
                 }),
-            personality: None,
             ..
         } => {}
         other => {
@@ -837,7 +835,6 @@ async fn submit_user_message_with_mode_submits_when_plan_stream_is_not_active() 
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
             collaboration_mode: Some(CollaborationMode { mode, .. }),
-            personality: None,
             ..
         } => assert_eq!(mode, expected_mode),
         other => {
@@ -1284,6 +1281,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
         forked_from_id: None,
@@ -1301,7 +1299,6 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
@@ -1516,7 +1513,7 @@ async fn config_slash_command_with_args_submits_prompt_with_proposed_diff_policy
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
-        personality: None,
+        daybreak_enabled: false,
         message_history: None,
         network_proxy: None,
         rollout_path: None,

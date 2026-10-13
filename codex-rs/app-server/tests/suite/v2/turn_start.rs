@@ -1181,7 +1181,15 @@ async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills(
         .build_initialized()
         .await?;
 
-    let ThreadStartResponse { thread, .. } = mcp.start_thread(ThreadStartParams::default()).await?;
+    let ThreadStartResponse { thread, .. } = mcp
+        .start_thread(ThreadStartParams {
+            config: Some(HashMap::from([(
+                "skills.max_context_tokens".to_string(),
+                json!(1),
+            )])),
+            ..Default::default()
+        })
+        .await?;
 
     let _: TurnStartResponse = mcp
         .request(|request_id| ClientRequest::TurnStart {

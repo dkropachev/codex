@@ -1,3 +1,4 @@
+use crate::WithTurnExtensionData;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::turn_input::CompactionRequest;
 use codex_protocol::turn_input::StartIfIdleSubmission;
@@ -14,7 +15,7 @@ impl CodexThread {
     /// work cannot start.
     pub async fn start_turn_if_idle(
         &self,
-        request: TurnInputRequest,
+        request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
     ) -> CodexResult<StartIfIdleSubmission> {
         self.start_turn_if_idle_with_mode(request, TurnInputMode::StartIfIdle)
             .await
@@ -26,7 +27,7 @@ impl CodexThread {
     /// semantics, including permission to start while the thread is in Plan mode.
     pub async fn start_user_turn_if_idle(
         &self,
-        request: TurnInputRequest,
+        request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
     ) -> CodexResult<StartIfIdleSubmission> {
         self.start_turn_if_idle_with_mode(request, TurnInputMode::StartUserIfIdle)
             .await
@@ -34,7 +35,7 @@ impl CodexThread {
 
     async fn start_turn_if_idle_with_mode(
         &self,
-        request: TurnInputRequest,
+        request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
         mode: TurnInputMode,
     ) -> CodexResult<StartIfIdleSubmission> {
         match self.submit_turn_input_with_mode(request, mode).await? {

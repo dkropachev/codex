@@ -182,6 +182,7 @@ impl Session {
         let mut rebuilt = Self::make_turn_context(
             self.thread_id(),
             self.session_id(),
+            Arc::clone(&previous.session_grants),
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.session_telemetry,
             provider,

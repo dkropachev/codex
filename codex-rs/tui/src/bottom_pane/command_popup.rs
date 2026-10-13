@@ -41,6 +41,7 @@ pub(crate) struct CommandPopup {
     workflow_argument_filter: String,
     commands: Vec<CommandItem>,
     state: ScrollState,
+    daybreak_command_description: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -51,6 +52,7 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) token_activity_command_enabled: bool,
     pub(crate) service_tier_commands_enabled: bool,
     pub(crate) workflow_commands_enabled: bool,
+    pub(crate) daybreak_command_description: Option<&'static str>,
     pub(crate) goal_command_enabled: bool,
     pub(crate) voice_command_enabled: bool,
     pub(crate) worktrees_enabled: bool,
@@ -67,6 +69,7 @@ impl From<CommandPopupFlags> for BuiltinCommandFlags {
             token_activity_command_enabled: value.token_activity_command_enabled,
             service_tier_commands_enabled: value.service_tier_commands_enabled,
             workflow_commands_enabled: value.workflow_commands_enabled,
+            daybreak_command_description: value.daybreak_command_description,
             goal_command_enabled: value.goal_command_enabled,
             voice_command_enabled: value.voice_command_enabled,
             worktrees_enabled: value.worktrees_enabled,
@@ -106,6 +109,7 @@ impl CommandPopup {
             workflow_argument_filter: String::new(),
             commands,
             state: ScrollState::new(),
+            daybreak_command_description: flags.daybreak_command_description,
         }
     }
 
@@ -272,7 +276,13 @@ impl CommandPopup {
             .enumerate()
             .map(|(index, (item, indices))| {
                 let name = format!("/{}", item.command());
-                let description = item.description().map(ToString::to_string);
+                let description = if matches!(item, CommandItem::Builtin(SlashCommand::Daybreak)) {
+                    self.daybreak_command_description
+                        .map(ToString::to_string)
+                        .or_else(|| item.description().map(ToString::to_string))
+                } else {
+                    item.description().map(ToString::to_string)
+                };
                 let (name, name_prefix_spans, is_disabled) = match &item {
                     CommandItem::WorkflowOption(option) => {
                         (option.display.clone(), vec!["  ".into()], true)
@@ -1153,6 +1163,7 @@ mod tests {
                 token_activity_command_enabled: false,
                 service_tier_commands_enabled: false,
                 workflow_commands_enabled: false,
+                daybreak_command_description: None,
                 goal_command_enabled: false,
                 voice_command_enabled: false,
                 worktrees_enabled: true,

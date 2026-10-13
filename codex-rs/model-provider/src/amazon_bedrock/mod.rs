@@ -4,6 +4,7 @@ mod catalog;
 mod credential_export;
 mod error;
 mod mantle;
+mod region;
 mod runtime;
 mod runtime_catalog;
 
@@ -50,7 +51,9 @@ use catalog::static_gov_model_catalog;
 pub(crate) use catalog::static_model_catalog;
 pub(crate) use credential_export::AwsCredentialExport;
 use mantle::bedrock_mantle_runtime_base_url;
+pub use mantle::is_amazon_bedrock_gov_cloud_region;
 pub use mantle::is_supported_amazon_bedrock_region;
+pub use region::resolve_amazon_bedrock_region;
 use runtime::bedrock_runtime_base_url;
 use runtime_catalog::static_runtime_model_catalog;
 
