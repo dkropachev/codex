@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -46,6 +47,27 @@ fn read_auth_json(codex_home: &Path) -> Result<Value> {
     Ok(serde_json::from_str(&auth_json)?)
 }
 
+fn assert_keyring_logout_attempted_enterprise_cleanup(
+    codex_home: &Path,
+    output: &std::process::Output,
+) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("failed to remove enterprise authorization"),
+        "{stderr}"
+    );
+    if output.status.success() {
+        assert!(stderr.contains("Successfully logged out"), "{stderr}");
+        assert!(!codex_home.join("auth.json").exists());
+    } else {
+        assert!(
+            stderr.contains("Error logging out: failed to delete auth from keyring:"),
+            "{stderr}"
+        );
+        assert!(codex_home.join("auth.json").exists());
+    }
+}
+
 #[test]
 fn login_with_api_key_reads_stdin_and_writes_auth_json() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -82,6 +104,23 @@ fn login_status_reports_auth_storage_errors() -> Result<()> {
         .assert()
         .failure()
         .stderr(contains("Error checking login status:"));
+
+    Ok(())
+}
+
+#[test]
+fn file_logout_does_not_inspect_retained_keyring_store() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_file_auth_config(codex_home.path())?;
+    // Secrets storage cannot load through this path. File logout leaves it intact.
+    std::fs::write(codex_home.path().join("secrets"), "not a directory")?;
+
+    let output = codex_command(codex_home.path())?
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .args(["logout"])
+        .output()?;
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "Not logged in\n");
 
     Ok(())
 }
@@ -183,6 +222,79 @@ fn logout_clears_only_the_selected_bedrock_provider() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn logout_survives_enterprise_cleanup_failure_with_xaa_disabled() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(path("/backend-api/wham/config/bundle"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "config_toml": {"enterprise_managed": []},
+            "requirements_toml": {"enterprise_managed": []},
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/revoke"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let home = TempDir::new()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "cli_auth_credentials_store = \"file\"\nchatgpt_base_url = \"{}/backend-api\"\n[features]\nuse_xaa = false\n[mcp_enterprise_managed_auth.idp]\nissuer = \"https://idp.example\"\nclient_id = \"enterprise-client\"\n[mcp_servers.enterprise]\nurl = \"https://resource.example/mcp\"\nauth = \"ema_auth\"\nbearer_token_env_var = \"UNUSED_TOKEN\"\n",
+            server.uri()
+        ),
+    )?;
+    write_chatgpt_auth(
+        home.path(),
+        ChatGptAuthFixture::new("account-access")
+            .account_id("workspace")
+            .chatgpt_user_id("user"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    // Fail before touching the real keyring; the subprocess owns this isolated home.
+    std::fs::write(home.path().join("mcp-oauth-locks"), "not a directory")?;
+    for enabled in [false, true] {
+        codex_command(home.path())?
+            .current_dir(home.path())
+            .env("NO_PROXY", "127.0.0.1,localhost")
+            .env("no_proxy", "127.0.0.1,localhost")
+            .env_remove("CODEX_API_KEY")
+            .env_remove("OPENAI_API_KEY")
+            .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+            .args([
+                "-c",
+                &format!("features.use_xaa={enabled}"),
+                "mcp",
+                "logout",
+                "enterprise",
+            ])
+            .assert()
+            .failure()
+            .stderr(contains("failed to delete enterprise authorization"));
+        assert!(home.path().join("auth.json").exists());
+    }
+    codex_command(home.path())?
+        .current_dir(home.path())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .env(
+            REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR,
+            format!("{}/oauth/revoke", server.uri()),
+        )
+        .env_remove("CODEX_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .args(["logout"])
+        .assert()
+        .success()
+        .stderr(contains("continuing account logout"))
+        .stderr(contains("Successfully logged out"));
+    assert!(!home.path().join("auth.json").exists());
+    Ok(())
+}
+
 #[test]
 fn logout_named_account_preserves_default_bedrock_auth_and_config() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -230,6 +342,382 @@ fn logout_named_account_preserves_default_bedrock_auth_and_config() -> Result<()
     let actual_config: toml::Value = toml::from_str(&std::fs::read_to_string(config_path)?)?;
     assert_eq!(actual_config, expected_config);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn logout_cleans_up_enterprise_authorization_for_selected_accounts() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(path("/backend-api/wham/config/bundle"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "config_toml": {"enterprise_managed": []},
+            "requirements_toml": {"enterprise_managed": []},
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/revoke"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let home = TempDir::new()?;
+    let named_home = home.path().join("accounts/work");
+    std::fs::create_dir_all(&named_home)?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "cli_auth_credentials_store = \"file\"\nchatgpt_base_url = \"{}/backend-api\"\n[mcp_enterprise_managed_auth.idp]\nissuer = \"https://idp.example\"\nclient_id = \"enterprise-client\"\n",
+            server.uri()
+        ),
+    )?;
+    // A failed lock acquisition makes each attempted grant cleanup observable
+    // without reading or changing the host's keyring.
+    std::fs::write(home.path().join("mcp-oauth-locks"), "not a directory")?;
+    codex_login::login_with_api_key(
+        home.path(),
+        "sk-default",
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+    write_chatgpt_auth(
+        &named_home,
+        ChatGptAuthFixture::new("named-access")
+            .account_id("named-workspace")
+            .chatgpt_user_id("named-user"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let output = codex_command(home.path())?
+        .current_dir(home.path())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .env(
+            REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR,
+            format!("{}/oauth/revoke", server.uri()),
+        )
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .env_remove("OPENAI_API_KEY")
+        .args(["logout", "--account", "work"])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("failed to remove enterprise authorization")
+    );
+    assert_eq!(read_auth_json(home.path())?["OPENAI_API_KEY"], "sk-default");
+    assert!(!named_home.join("auth.json").exists());
+
+    write_chatgpt_auth(
+        home.path(),
+        ChatGptAuthFixture::new("default-access")
+            .account_id("default-workspace")
+            .chatgpt_user_id("default-user"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let default_auth = read_auth_json(home.path())?;
+    let output = codex_command(home.path())?
+        .current_dir(home.path())
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .env_remove("OPENAI_API_KEY")
+        .args(["logout", "--account", "work"])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stderr)
+            .contains("failed to remove enterprise authorization")
+    );
+    assert_eq!(read_auth_json(home.path())?, default_auth);
+
+    write_chatgpt_auth(
+        &named_home,
+        ChatGptAuthFixture::new("named-access")
+            .account_id("named-workspace")
+            .chatgpt_user_id("named-user"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let output = codex_command(home.path())?
+        .current_dir(home.path())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .env(
+            REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR,
+            format!("{}/oauth/revoke", server.uri()),
+        )
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .env_remove("OPENAI_API_KEY")
+        .args(["logout", "--all"])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr)
+            .matches("failed to remove enterprise authorization")
+            .count(),
+        2
+    );
+    assert!(!home.path().join("auth.json").exists());
+    assert!(!named_home.join("auth.json").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn logout_uses_verified_pat_scope_without_whoami() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(path("/backend-api/wham/config/bundle"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "config_toml": {"enterprise_managed": []},
+            "requirements_toml": {"enterprise_managed": []},
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "email": "user@example.com",
+            "chatgpt_user_id": "verified-user",
+            "chatgpt_account_id": "verified-workspace",
+            "chatgpt_plan_type": "enterprise",
+            "chatgpt_account_is_fedramp": false,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let home = TempDir::new()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "cli_auth_credentials_store = \"file\"\nchatgpt_base_url = \"{}/backend-api\"\n[mcp_enterprise_managed_auth.idp]\nissuer = \"https://idp.example\"\nclient_id = \"enterprise-client\"\n",
+            server.uri()
+        ),
+    )?;
+    codex_command(home.path())?
+        .current_dir(home.path())
+        .env("CODEX_AUTHAPI_BASE_URL", server.uri())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .args(["login", "--with-access-token"])
+        .write_stdin("at-pat-test\n")
+        .assert()
+        .success();
+    let stored = read_auth_json(home.path())?;
+    assert_eq!(stored["ema_scope"]["user_id"], "verified-user");
+    assert_eq!(stored["ema_scope"]["workspace_id"], "verified-workspace");
+    assert_eq!(stored["ema_scope"]["idp"]["issuer"], "https://idp.example");
+    assert_eq!(stored["ema_scope"]["idp"]["client_id"], "enterprise-client");
+
+    // The original IdP profile is needed even after it is removed from configuration.
+    write_file_auth_config(home.path())?;
+    // A failed lock makes the attempted cleanup visible without touching the host keyring.
+    std::fs::write(home.path().join("mcp-oauth-locks"), "not a directory")?;
+    codex_command(home.path())?
+        .current_dir(home.path())
+        .env("CODEX_AUTHAPI_BASE_URL", "http://127.0.0.1:1")
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .args(["logout"])
+        .assert()
+        .success()
+        .stderr(contains("failed to remove enterprise authorization"));
+    assert!(!home.path().join("auth.json").exists());
+
+    std::fs::remove_file(home.path().join("mcp-oauth-locks"))?;
+    let mut replaced_auth = stored;
+    replaced_auth["personal_access_token"] = json!("at-another-account");
+    std::fs::write(
+        home.path().join("auth.json"),
+        serde_json::to_string(&replaced_auth)?,
+    )?;
+    let output = codex_command(home.path())?
+        .current_dir(home.path())
+        .env("CODEX_AUTHAPI_BASE_URL", "http://127.0.0.1:1")
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .args(["logout"])
+        .output()?;
+    assert!(output.status.success());
+    assert!(
+        !String::from_utf8_lossy(&output.stderr)
+            .contains("failed to remove enterprise authorization")
+    );
+    assert!(!home.path().join("mcp-oauth-locks").exists());
+    assert!(!home.path().join("auth.json").exists());
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn logout_finds_saved_pat_scope_after_file_to_keyring_switch() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(path("/backend-api/wham/config/bundle"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "config_toml": {"enterprise_managed": []},
+            "requirements_toml": {"enterprise_managed": []},
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "email": "user@example.com",
+            "chatgpt_user_id": "verified-user",
+            "chatgpt_account_id": "verified-workspace",
+            "chatgpt_plan_type": "enterprise",
+            "chatgpt_account_is_fedramp": false,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let home = TempDir::new()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "cli_auth_credentials_store = \"file\"\nchatgpt_base_url = \"{}/backend-api\"\n[mcp_enterprise_managed_auth.idp]\nissuer = \"https://idp.example\"\nclient_id = \"enterprise-client\"\n",
+            server.uri()
+        ),
+    )?;
+    codex_command(home.path())?
+        .current_dir(home.path())
+        .env("CODEX_AUTHAPI_BASE_URL", server.uri())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .args(["login", "--with-access-token"])
+        .write_stdin("at-pat-test\n")
+        .assert()
+        .success();
+    assert_eq!(
+        read_auth_json(home.path())?["ema_scope"]["user_id"],
+        "verified-user"
+    );
+
+    std::fs::write(
+        home.path().join("config.toml"),
+        "cli_auth_credentials_store = \"keyring\"\n",
+    )?;
+    // A failed lock exposes attempted grant cleanup without requiring an IdP keyring entry.
+    std::fs::write(home.path().join("mcp-oauth-locks"), "not a directory")?;
+    let output = codex_command(home.path())?
+        .current_dir(home.path())
+        .env("CODEX_AUTHAPI_BASE_URL", "http://127.0.0.1:1")
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .args(["logout"])
+        .output()?;
+    assert_keyring_logout_attempted_enterprise_cleanup(home.path(), &output);
+    server.verify().await;
+    Ok(())
+}
+
+#[test]
+fn keyring_logout_infers_legacy_file_scope() -> Result<()> {
+    let home = TempDir::new()?;
+    write_chatgpt_auth(
+        home.path(),
+        ChatGptAuthFixture::new("legacy-access")
+            .account_id("legacy-workspace")
+            .chatgpt_user_id("legacy-user"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        "cli_auth_credentials_store = \"keyring\"\n[mcp_enterprise_managed_auth.idp]\nissuer = \"https://idp.example\"\nclient_id = \"enterprise-client\"\n",
+    )?;
+    std::fs::write(home.path().join("mcp-oauth-locks"), "not a directory")?;
+
+    let output = codex_command(home.path())?
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .args(["logout"])
+        .output()?;
+    assert_keyring_logout_attempted_enterprise_cleanup(home.path(), &output);
+    Ok(())
+}
+
+#[tokio::test]
+async fn logout_uses_stored_account_identity_with_ambient_access_token() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(path("/backend-api/wham/config/bundle"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "config_toml": {"enterprise_managed": []},
+            "requirements_toml": {"enterprise_managed": []},
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "email": "ambient@example.com",
+            "chatgpt_user_id": "ambient-user",
+            "chatgpt_account_id": "ambient-workspace",
+            "chatgpt_plan_type": "enterprise",
+            "chatgpt_account_is_fedramp": false,
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/revoke"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let home = TempDir::new()?;
+    let named_home = home.path().join("accounts/work");
+    std::fs::create_dir_all(&named_home)?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "cli_auth_credentials_store = \"file\"\nchatgpt_base_url = \"{}/backend-api\"\n[mcp_enterprise_managed_auth.idp]\nissuer = \"https://idp.example\"\nclient_id = \"enterprise-client\"\n",
+            server.uri()
+        ),
+    )?;
+    let mut expected_lock_files = None;
+    for ambient_token in [None, Some("at-ambient")] {
+        write_chatgpt_auth(
+            &named_home,
+            ChatGptAuthFixture::new("named-access")
+                .account_id("named-workspace")
+                .chatgpt_user_id("named-user"),
+            AuthCredentialsStoreMode::File,
+        )?;
+        let mut command = codex_command(home.path())?;
+        command
+            .current_dir(home.path())
+            .env("NO_PROXY", "127.0.0.1,localhost")
+            .env("no_proxy", "127.0.0.1,localhost")
+            .env("CODEX_AUTHAPI_BASE_URL", server.uri())
+            .env(
+                REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR,
+                format!("{}/oauth/revoke", server.uri()),
+            )
+            .env_remove("OPENAI_API_KEY")
+            .args(["logout", "--account", "work"]);
+        if let Some(token) = ambient_token {
+            command.env(CODEX_ACCESS_TOKEN_ENV_VAR, token);
+        } else {
+            command.env_remove(CODEX_ACCESS_TOKEN_ENV_VAR);
+        }
+        command
+            .assert()
+            .success()
+            .stderr(contains("Successfully logged out"));
+
+        let lock_files: BTreeSet<_> = std::fs::read_dir(home.path().join("mcp-oauth-locks"))?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<std::io::Result<_>>()?;
+        assert!(!lock_files.is_empty());
+        if ambient_token.is_none() {
+            expected_lock_files = Some(lock_files);
+        } else {
+            assert_eq!(Some(lock_files), expected_lock_files);
+        }
+    }
     Ok(())
 }
 

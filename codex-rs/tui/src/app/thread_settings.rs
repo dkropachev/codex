@@ -170,7 +170,6 @@ impl App {
             summary,
             service_tier,
             collaboration_mode,
-            personality,
         } = op
         else {
             return;
@@ -189,7 +188,6 @@ impl App {
             summary: *summary,
             service_tier: service_tier.clone(),
             collaboration_mode: collaboration_mode.clone(),
-            personality: *personality,
             ..ThreadSettingsUpdateParams::default()
         };
         let requested_mode = params.collaboration_mode.clone();
@@ -256,19 +254,26 @@ impl App {
         if !thread_settings_update_has_changes(&params) {
             return ThreadSettingsUpdateOutcome::Skipped;
         }
-        if ThreadId::from_string(&params.thread_id)
-            .ok()
-            .is_some_and(|thread_id| self.pending_server_profiles.contains_key(&thread_id))
-            && (params.cwd.is_some()
-                || params.approval_policy.is_some()
-                || params.approvals_reviewer.is_some()
-                || params.sandbox_policy.is_some()
-                || params.permissions.is_some())
+        let thread_id = ThreadId::from_string(&params.thread_id).ok();
+        let changes_permissions = params.cwd.is_some()
+            || params.approval_policy.is_some()
+            || params.approvals_reviewer.is_some()
+            || params.sandbox_policy.is_some()
+            || params.permissions.is_some();
+        if changes_permissions
+            && thread_id.is_some_and(|id| self.pending_server_profiles.contains_key(&id))
         {
             return ThreadSettingsUpdateOutcome::Skipped;
         }
         match app_server.thread_settings_update(params).await {
-            Ok(true) => ThreadSettingsUpdateOutcome::Updated,
+            Ok(true) => {
+                if changes_permissions && let Some(thread_id) = thread_id {
+                    self.agents_overview
+                        .requested_permission_profiles
+                        .remove(&thread_id);
+                }
+                ThreadSettingsUpdateOutcome::Updated
+            }
             Ok(false) => ThreadSettingsUpdateOutcome::Unsupported,
             Err(err) => {
                 tracing::warn!("failed to update app-server thread settings from TUI: {err}");
@@ -295,7 +300,6 @@ fn apply_thread_settings_to_session(session: &mut ThreadSessionState, settings: 
     );
     session.active_permission_profile = settings.active_permission_profile.clone().map(Into::into);
     session.set_cwd_retargeting_implicit_runtime_workspace_root(settings.cwd.clone());
-    session.personality = settings.personality;
     let mut collaboration_mode = settings.collaboration_mode.clone();
     collaboration_mode
         .settings
@@ -316,5 +320,4 @@ fn thread_settings_update_has_changes(params: &ThreadSettingsUpdateParams) -> bo
         || params.effort.is_some()
         || params.summary.is_some()
         || params.collaboration_mode.is_some()
-        || params.personality.is_some()
 }

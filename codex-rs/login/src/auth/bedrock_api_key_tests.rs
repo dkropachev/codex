@@ -19,6 +19,7 @@ fn api_key_auth() -> AuthDotJson {
         last_refresh: None,
         agent_identity: None,
         personal_access_token: None,
+        ema_scope: None,
         bedrock_api_key: None,
         bedrock_access_keys: None,
     }
@@ -32,6 +33,7 @@ fn bedrock_only_auth() -> AuthDotJson {
         last_refresh: None,
         agent_identity: None,
         personal_access_token: None,
+        ema_scope: None,
         bedrock_api_key: Some(bedrock_auth()),
         bedrock_access_keys: None,
     }
@@ -91,6 +93,7 @@ async fn login_with_bedrock_api_key_replaces_openai_auth() -> anyhow::Result<()>
         last_refresh: None,
         agent_identity: None,
         personal_access_token: None,
+        ema_scope: None,
         bedrock_api_key: Some(bedrock_auth()),
         bedrock_access_keys: None,
     };

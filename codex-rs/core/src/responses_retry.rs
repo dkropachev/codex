@@ -1,5 +1,6 @@
 //! Shared retry and transport fallback decisions for Responses requests.
 //! Content-filter guidance is recorded for sampling requests before retry decisions.
+//! Server advice controls timing without extending configured retry limits.
 
 use std::time::Duration;
 
@@ -116,7 +117,6 @@ pub(crate) async fn handle_response_stream_error(
         return Ok(());
     }
 
-    // TODO(anp): Respect server retry advice before issuing the fallback HTTP request.
     if retry_state.retries >= max_retries
         && !matches!(err.details(), CodexErrorDetails::ServerOverloaded)
         && client_session.try_switch_fallback_transport(
@@ -124,6 +124,10 @@ pub(crate) async fn handle_response_stream_error(
             turn_context.model_info(),
         )
     {
+        // Changing transport must not bypass the server's retry deadline.
+        if let Some(retry_after) = retry_after {
+            tokio::time::sleep_until(retry_after.deadline()).await;
+        }
         sess.send_event(
             turn_context,
             EventMsg::Warning(WarningEvent {

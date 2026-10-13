@@ -57,6 +57,12 @@ impl SessionTask for CompactTask {
                 false,
             ),
         };
+        let _compaction_span = tracing::trace_span!(
+            "codex.compaction",
+            codex.turn.phase = "compaction",
+            conversation.id = %session.thread_id,
+            turn.id = %ctx.sub_id,
+        );
         if ctx.config.features.enabled(Feature::TokenBudget) {
             emit_compact_metric(&session.services.session_telemetry, "token_budget", manual);
             crate::compact_token_budget::run_standalone_compact_task(session, ctx, trigger).await?;

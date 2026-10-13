@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 1452
 expression: "context_snapshot::format_request_history_snapshot(\"Astra checks for Notes, refreshes its installed plugin without restarting, and uses the new skill and Code Mode MCP tool across turns.\",\n&mock.requests(),\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Astra checks for Notes, refreshes its installed plugin without restarting, and uses the new skill and Code Mode MCP tool across turns.
@@ -17,7 +16,7 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=e01f1a7e2ba1f992):
+00:additional_tools/developer (3; hash=411d7f9eeb80f987):
         - namespace/functions; hash=5336f7d4c254a706
           - custom/exec
           - function/wait
@@ -25,7 +24,7 @@ Settings:
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=598f90fe93de714d
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=e53af515c55776ce
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
@@ -114,7 +113,7 @@ Settings:
 ## Window 2 (after request 2: input diverged at item 00)
 Settings: same as window 1
 -- request 3 (turn) --
-00:additional_tools/developer (3; hash=4b4540020390dd18):
+00:additional_tools/developer (3; hash=b40985409423fa41):
         - namespace/functions; hash=04dc53c9772e14d4
           - custom/exec
           - function/wait
@@ -122,7 +121,7 @@ Settings: same as window 1
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=598f90fe93de714d
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=e53af515c55776ce
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents

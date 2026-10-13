@@ -7,7 +7,15 @@ empty (48 columns):
   >_ OpenAI Codex (v<VERSION>)
      loading
 
-  Pull up a prompt.
+
+› Ask Codex to do anything
+
+  ? for shortcuts
+---
+configured (48 columns):
+
+  >_ OpenAI Codex (v<VERSION>)
+     workspace
 
 
 › Ask Codex to do anything
@@ -39,8 +47,6 @@ multiline (48 columns):
   >_ OpenAI Codex (v<VERSION>)
      loading
 
-  Pull up a prompt.
-
 
 › first startup line
   second startup line
@@ -51,8 +57,6 @@ narrow (18 columns):
 
   >_ OpenAI Codex…
      loading
-
-  Pull up a promp…
 
 
 › first startup

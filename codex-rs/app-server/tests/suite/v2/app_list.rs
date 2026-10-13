@@ -119,6 +119,7 @@ async fn list_apps_returns_empty_with_api_key_auth() -> Result<()> {
             last_refresh: None,
             agent_identity: None,
             personal_access_token: None,
+            ema_scope: None,
             bedrock_api_key: None,
             bedrock_access_keys: None,
         },

@@ -6,6 +6,7 @@ use super::super::session::SessionSettingsUpdate;
 use super::super::thread_settings;
 use super::super::turn_context::NewTurnContextOptions;
 use super::super::turn_context::TurnContext;
+use crate::WithTurnExtensionData;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -62,10 +63,14 @@ impl PreparedTurnInputSettings {
     /// leaves the thread unchanged.
     pub(super) async fn prepare(
         session: &Session,
-        thread_settings: ThreadSettingsOverrides,
+        thread_settings: impl Into<WithTurnExtensionData<ThreadSettingsOverrides>>,
         start_options: TurnStartOptions,
     ) -> CodexResult<Self> {
-        let thread_settings_update = if thread_settings == ThreadSettingsOverrides::default() {
+        let thread_settings = thread_settings.into();
+        let thread_settings_update = if thread_settings.request
+            == ThreadSettingsOverrides::default()
+            && thread_settings.turn_extension_init.is_none()
+        {
             None
         } else {
             let updates = thread_settings::prepare_update(thread_settings);

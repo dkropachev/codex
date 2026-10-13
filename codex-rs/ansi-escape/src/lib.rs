@@ -90,7 +90,11 @@ pub fn ansi_escape_line(s: &str) -> Line<'static> {
         [] => "".into(),
         [only] => only.clone(),
         [first, rest @ ..] => {
-            tracing::warn!("ansi_escape_line: expected a single line, got {first:?} and {rest:?}");
+            tracing::warn!(
+                input_bytes = s.len(),
+                line_count = rest.len() + 1,
+                "ansi_escape_line: expected a single line"
+            );
             first.clone()
         }
     }
@@ -116,3 +120,7 @@ pub fn ansi_escape(s: &str) -> Text<'static> {
         },
     }
 }
+
+#[cfg(test)]
+#[path = "ansi_escape_tests.rs"]
+mod tests;

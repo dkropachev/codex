@@ -43,6 +43,8 @@ use codex_protocol::openai_models::ToolMessage;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
+#[cfg(not(target_os = "windows"))]
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
@@ -50,10 +52,18 @@ use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
 use codex_skills_extension::ExecutorSkillProvider;
+use codex_skills_extension::HostSkillProvider;
+use codex_skills_extension::SkillProvider;
 use codex_skills_extension::SkillProviders;
 use codex_skills_extension::SkillsExtensionConfig;
-use codex_skills_extension::install;
+use codex_skills_extension::catalog::SkillCatalog;
+use codex_skills_extension::catalog::SkillReadResult;
+use codex_skills_extension::catalog::SkillSearchResult;
 use codex_skills_extension::install_with_providers;
+use codex_skills_extension::provider::SkillListQuery;
+use codex_skills_extension::provider::SkillProviderFuture;
+use codex_skills_extension::provider::SkillReadRequest;
+use codex_skills_extension::provider::SkillSearchRequest;
 use codex_utils_path_uri::PathUri;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -132,15 +142,56 @@ mod tools_namespace_budget;
 #[path = "scenarios_skill_catalog_dedup.rs"]
 mod skill_catalog_dedup;
 
+struct ScenarioHostSkillProvider {
+    inner: HostSkillProvider,
+    personal_skills_roots: Vec<PathBuf>,
+}
+
+impl SkillProvider for ScenarioHostSkillProvider {
+    fn list(&self, query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
+        Box::pin(async move {
+            let mut catalog = self.inner.list(query).await?;
+            catalog.entries.retain(|entry| {
+                !self
+                    .personal_skills_roots
+                    .iter()
+                    .any(|root| Path::new(&entry.id.0).starts_with(root))
+            });
+            Ok(catalog)
+        })
+    }
+
+    fn read<'a>(
+        &'a self,
+        request: SkillReadRequest<'a>,
+    ) -> SkillProviderFuture<'a, SkillReadResult> {
+        self.inner.read(request)
+    }
+
+    fn search(&self, request: SkillSearchRequest) -> SkillProviderFuture<'_, SkillSearchResult> {
+        self.inner.search(request)
+    }
+}
+
 fn skills_extensions() -> Arc<ExtensionRegistry<Config>> {
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
-    install(&mut extensions, |config: &Config| SkillsExtensionConfig {
-        include_instructions: config.include_skill_instructions,
-        max_context_tokens: config.skill_max_context_tokens,
-        bundled_skills_enabled: config.bundled_skills_enabled(),
-        cloud_skill_enabled: config.cloud_skill_enabled,
-        shadow_selection_enabled: config.features.enabled(Feature::SkillSearch),
-    });
+    let provider = ScenarioHostSkillProvider {
+        inner: HostSkillProvider::new(),
+        personal_skills_roots: dirs::home_dir()
+            .map(|home| vec![home.join(".agents/skills"), home.join(".codex/skills")])
+            .unwrap_or_default(),
+    };
+    install_with_providers(
+        &mut extensions,
+        SkillProviders::new().with_host_provider(Arc::new(provider)),
+        |config: &Config| SkillsExtensionConfig {
+            include_instructions: config.include_skill_instructions,
+            max_context_tokens: config.skill_max_context_tokens,
+            bundled_skills_enabled: config.bundled_skills_enabled(),
+            cloud_skill_enabled: config.cloud_skill_enabled,
+            shadow_selection_enabled: config.features.enabled(Feature::SkillSearch),
+        },
+    );
     Arc::new(extensions.build())
 }
 
@@ -1668,5 +1719,21 @@ async fn app_tool_exposure_request_history() -> Result<()> {
                 .include_request_settings(),
         )
     );
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_catalog_refresh_preserves_tools_and_history() -> Result<()> {
+    let requests = super::spawn_agent_description::model_catalog_refresh_requests(
+        MultiAgentVersion::V1,
+        /*model_catalog_in_context*/ true,
+    )
+    .await?;
+    insta::assert_snapshot!(context_snapshot::format_request_history_snapshot(
+        "Catalog refreshes append the updated listing once while preserving tools and prior input.",
+        &requests,
+        &ContextSnapshotOptions::default().include_request_settings(),
+    ));
     Ok(())
 }

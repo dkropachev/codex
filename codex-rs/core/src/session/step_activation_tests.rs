@@ -490,6 +490,7 @@ fn settings_submission(
     (
         Submission {
             id: id.to_string(),
+            turn_extension_init: None,
             op: Op::TurnSettings {
                 turn_id: turn_id.to_string(),
                 update,

@@ -9,15 +9,21 @@ use crate::context::world_state::WorldState;
 fn renders_initial_context_and_only_changed_diffs() {
     let initial_context = context("Initial intent");
     let initial = world_state(Arc::clone(&initial_context));
-    let initial_rendered = initial.render_full();
+    let (initial_snapshot, initial_rendered) = initial.render_full();
 
     assert_eq!(initial_rendered.len(), 1);
     assert_eq!(initial_rendered[0].render(), initial_context.render());
-    assert!(initial.render_diff(&initial.snapshot()).is_empty());
+    let retained: ResponseItem = ContextualUserFragment::into(initial_context.as_ref().clone());
+    assert!(
+        initial
+            .render_history_diff(Some(&initial_snapshot), [&retained])
+            .1
+            .is_empty()
+    );
 
     let changed_context = context("Changed intent");
     let changed = world_state(Arc::clone(&changed_context));
-    let changed_rendered = changed.render_diff(&initial.snapshot());
+    let (_, changed_rendered) = changed.render_history_diff(Some(&initial_snapshot), [&retained]);
     assert_eq!(changed_rendered.len(), 1);
     assert_eq!(changed_rendered[0].render(), changed_context.render());
 }
@@ -26,15 +32,16 @@ fn renders_initial_context_and_only_changed_diffs() {
 fn restores_context_only_when_the_fragment_was_not_retained() {
     let context = context("Review intent");
     let state = world_state(Arc::clone(&context));
-    let snapshot = state.snapshot();
+    let (snapshot, _) = state.render_full();
     let retained: ResponseItem = ContextualUserFragment::into(context.as_ref().clone());
 
-    let restored = state.render_history_diff(Some(&snapshot), &[]);
+    let (_, restored) = state.render_history_diff(Some(&snapshot), &[]);
     assert_eq!(restored.len(), 1);
     assert_eq!(restored[0].render(), context.render());
     assert!(
         state
             .render_history_diff(Some(&snapshot), &[retained])
+            .1
             .is_empty()
     );
 }

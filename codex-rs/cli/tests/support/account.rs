@@ -92,6 +92,7 @@ fn write_chatgpt_auth_with_expiration(
         last_refresh: Some(last_refresh),
         agent_identity: None,
         personal_access_token: None,
+        ema_scope: None,
         bedrock_api_key: None,
         bedrock_access_keys: None,
     };

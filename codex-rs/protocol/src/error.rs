@@ -403,7 +403,6 @@ impl CodexErr {
             | CodexErrorDetails::UnsupportedOperation(_)
             | CodexErrorDetails::Sandbox(_)
             | CodexErrorDetails::LandlockSandboxExecutableNotProvided
-            | CodexErrorDetails::RetryLimit(_)
             | CodexErrorDetails::ContextWindowExceeded
             | CodexErrorDetails::ThreadNotFound(_)
             | CodexErrorDetails::AgentLimitReached { .. }
@@ -414,6 +413,9 @@ impl CodexErr {
             | CodexErrorDetails::CyberPolicy { .. }
             | CodexErrorDetails::BioPolicy { .. }
             | CodexErrorDetails::MisalignmentPolicyViolation { .. } => None,
+            CodexErrorDetails::ServerOverloaded | CodexErrorDetails::RetryLimit(_) => {
+                self.server_retry_delay()
+            }
             CodexErrorDetails::Stream(..)
             | CodexErrorDetails::ContentFilter
             | CodexErrorDetails::RateLimitExceeded(_)
@@ -424,7 +426,6 @@ impl CodexErr {
             | CodexErrorDetails::ConnectionFailed(_)
             | CodexErrorDetails::InternalServerError
             | CodexErrorDetails::InternalAgentDied
-            | CodexErrorDetails::ServerOverloaded
             | CodexErrorDetails::Io(_)
             | CodexErrorDetails::Json(_)
             | CodexErrorDetails::TokioJoin(_) => Some(
@@ -751,7 +752,7 @@ impl std::fmt::Display for UsageLimitReachedError {
 
         let message = match self.plan_type.as_ref() {
             Some(PlanType::Known(KnownPlan::Plus)) => format!(
-                "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
+                "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits{}",
                 retry_suffix_after_or(self.resets_at.as_ref())
             ),
             Some(PlanType::Known(
@@ -776,7 +777,7 @@ impl std::fmt::Display for UsageLimitReachedError {
             }
             Some(PlanType::Known(KnownPlan::Pro | KnownPlan::ProLite | KnownPlan::ProMax)) => {
                 format!(
-                    "You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits{}",
+                    "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits{}",
                     retry_suffix_after_or(self.resets_at.as_ref())
                 )
             }

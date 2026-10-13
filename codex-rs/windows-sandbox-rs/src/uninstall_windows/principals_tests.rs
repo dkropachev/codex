@@ -18,6 +18,7 @@ use pretty_assertions::assert_eq;
 use rand::RngCore;
 use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
 use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+use windows_sys::Win32::Foundation::ERROR_KEY_DELETED;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
 use windows_sys::Win32::NetworkManagement::NetManagement as network;
@@ -67,8 +68,15 @@ impl ProfileFixture {
                 if status == ERROR_FILE_NOT_FOUND {
                     break;
                 }
-                ensure!(status == ERROR_SUCCESS, "read owned profile hive: {status}");
-                unsafe { registry::RegCloseKey(key) };
+                if status == ERROR_SUCCESS {
+                    unsafe { registry::RegCloseKey(key) };
+                } else {
+                    // The profile service can mark the hive for deletion before unloading it.
+                    ensure!(
+                        status == ERROR_KEY_DELETED,
+                        "read owned profile hive: {status}"
+                    );
+                }
                 ensure!(Instant::now() < deadline, "owned profile did not unload");
                 std::thread::sleep(Duration::from_millis(50));
             }

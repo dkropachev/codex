@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use super::PreviousSectionState;
+use super::SectionTransition;
 use super::WorldStateSection;
 use crate::context::ContextualUserFragment;
 use crate::context::PullRequestContext;
@@ -20,10 +21,6 @@ impl WorldStateSection for PullRequestContextState {
     const ID: &'static str = "pull_request_context";
     type Snapshot = PullRequestContext;
 
-    fn snapshot(&self) -> Self::Snapshot {
-        self.context.as_ref().clone()
-    }
-
     fn matches_legacy_fragment(role: &str, text: &str) -> bool {
         role == "user" && PullRequestContext::matches_text(text)
     }
@@ -39,14 +36,18 @@ impl WorldStateSection for PullRequestContextState {
     fn render_diff(
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn ContextualUserFragment>> {
+    ) -> SectionTransition<Self::Snapshot> {
+        let snapshot = self.context.as_ref().clone();
         if matches!(previous, PreviousSectionState::Known(previous) if previous == self.context.as_ref())
             || matches!(previous, PreviousSectionState::Unknown)
         {
-            return None;
+            return (Some(snapshot), None);
         }
 
-        Some(Box::new(self.context.as_ref().clone()))
+        (
+            Some(snapshot.clone()),
+            Some(Box::new(snapshot) as Box<dyn ContextualUserFragment>),
+        )
     }
 }
 

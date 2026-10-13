@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios_skill_catalog_dedup.rs
-assertion_line: 142
 expression: "context_snapshot::format_request_history_snapshot(\"Cloud skills replace duplicate executor listings before budgeting; unique executor skills retain their descriptions and e1 aliases across turns.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Cloud skills replace duplicate executor listings before budgeting; unique executor skills retain their descriptions and e1 aliases across turns.
@@ -17,7 +16,7 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=982b1a18d7c34770):
+00:additional_tools/developer (3; hash=70e30b5baee56609):
         - namespace/functions; hash=59f67087ceea066a
           - custom/exec
           - function/wait
@@ -25,7 +24,7 @@ Settings:
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=598f90fe93de714d
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=e53af515c55776ce
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents

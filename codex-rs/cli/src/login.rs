@@ -7,24 +7,33 @@
 //! into a one-shot CLI command while still producing a durable `codex-login.log` artifact that
 //! support can request from users.
 
+use codex_config::McpEmaAuthScope;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::AuthRouteConfig;
 use codex_login::CLIENT_ID;
+use codex_login::CodexAuth;
+use codex_login::EnterpriseAccessToken;
 use codex_login::ServerOptions;
+use codex_login::auth::AgentIdentityStorage;
 use codex_login::is_workload_identity_selected;
+use codex_login::load_auth_dot_json;
 use codex_login::login_with_access_token;
+use codex_login::login_with_access_token_for_enterprise;
 use codex_login::login_with_agent_identity;
 use codex_login::login_with_api_key;
 use codex_login::logout_with_revoke;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
+use codex_mcp::ema_auth_scope;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_rmcp_client::EnterpriseOAuthCredentialGuard;
 use codex_utils_cli::CliConfigOverrides;
 use std::fs::OpenOptions;
 use std::io::IsTerminal;
@@ -47,6 +56,8 @@ const ACCESS_TOKEN_LOGIN_DISABLED_MESSAGE: &str =
 const AGENT_IDENTITY_LOGIN_DISABLED_MESSAGE: &str =
     "Agent Identity login is disabled. Use API key login instead.";
 const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
+const DEFAULT_LOGIN_LOG_FILTER: &str =
+    "codex_cli=info,codex_core=info,codex_login=info,codex_otel::auth_storage=warn";
 
 /// Installs a small file-backed tracing layer for direct `codex login` flows.
 ///
@@ -95,7 +106,7 @@ fn init_login_file_logging(config: &Config) -> Option<WorkerGuard> {
 
     let (non_blocking, guard) = non_blocking(log_file);
     let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("codex_cli=info,codex_core=info,codex_login=info"));
+        .unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOGIN_LOG_FILTER));
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
         .with_target(true)
@@ -280,17 +291,33 @@ pub async fn run_login_with_agent_identity(
     let auth_route_config = config.auth_route_config();
     let effective_chatgpt_workspaces = auth_config.effective_chatgpt_workspaces();
 
-    match login_with_agent_identity(
-        &config.codex_home,
-        &agent_identity,
-        config.cli_auth_credentials_store_mode,
-        effective_chatgpt_workspaces.as_deref(),
-        Some(&config.chatgpt_base_url),
-        config.auth_keyring_backend_kind(),
-        &auth_route_config,
-    )
-    .await
-    {
+    let login_result = if let Some(profile) = &config.mcp_enterprise_managed_auth {
+        login_with_access_token_for_enterprise(
+            &config.codex_home,
+            EnterpriseAccessToken {
+                token: &agent_identity,
+                idp: &profile.idp,
+            },
+            config.cli_auth_credentials_store_mode,
+            effective_chatgpt_workspaces.as_deref(),
+            Some(&config.chatgpt_base_url),
+            config.auth_keyring_backend_kind(),
+            &auth_route_config,
+        )
+        .await
+    } else {
+        login_with_agent_identity(
+            &config.codex_home,
+            &agent_identity,
+            config.cli_auth_credentials_store_mode,
+            effective_chatgpt_workspaces.as_deref(),
+            Some(&config.chatgpt_base_url),
+            config.auth_keyring_backend_kind(),
+            &auth_route_config,
+        )
+        .await
+    };
+    match login_result {
         Ok(_) => {
             eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);
@@ -320,17 +347,33 @@ pub async fn run_login_with_access_token(
 
     let auth_route_config = config.auth_route_config();
     let effective_chatgpt_workspaces = config.auth_config().effective_chatgpt_workspaces();
-    match login_with_access_token(
-        &config.codex_home,
-        &access_token,
-        config.cli_auth_credentials_store_mode,
-        effective_chatgpt_workspaces.as_deref(),
-        Some(&config.chatgpt_base_url),
-        config.auth_keyring_backend_kind(),
-        &auth_route_config,
-    )
-    .await
-    {
+    let login_result = if let Some(profile) = &config.mcp_enterprise_managed_auth {
+        login_with_access_token_for_enterprise(
+            &config.codex_home,
+            EnterpriseAccessToken {
+                token: &access_token,
+                idp: &profile.idp,
+            },
+            config.cli_auth_credentials_store_mode,
+            effective_chatgpt_workspaces.as_deref(),
+            Some(&config.chatgpt_base_url),
+            config.auth_keyring_backend_kind(),
+            &auth_route_config,
+        )
+        .await
+    } else {
+        login_with_access_token(
+            &config.codex_home,
+            &access_token,
+            config.cli_auth_credentials_store_mode,
+            effective_chatgpt_workspaces.as_deref(),
+            Some(&config.chatgpt_base_url),
+            config.auth_keyring_backend_kind(),
+            &auth_route_config,
+        )
+        .await
+    };
+    match login_result {
         Ok(_) => {
             eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);
@@ -604,19 +647,12 @@ pub async fn run_logout(
     all: bool,
 ) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
-    let auth_route_config = config.auth_route_config();
 
     let result = if all {
         logout_all_accounts(&config).await
     } else {
         let account_home = account_codex_home(&config.codex_home, account_id.as_deref());
-        logout_with_revoke(
-            &account_home,
-            config.cli_auth_credentials_store_mode,
-            config.auth_keyring_backend_kind(),
-            &auth_route_config,
-        )
-        .await
+        logout_account(&config, &account_home).await
     };
 
     let logged_out = match result {
@@ -626,7 +662,6 @@ pub async fn run_logout(
             std::process::exit(1);
         }
     };
-
     let cleared_bedrock_config = if (all || account_id.is_none())
         && let Some(paths) = ConfigEditsBuilder::bedrock_provider_config_paths_to_clear(&config)
     {
@@ -654,15 +689,186 @@ pub async fn run_logout(
     std::process::exit(0);
 }
 
-async fn logout_all_accounts(config: &Config) -> std::io::Result<bool> {
-    let auth_route_config = config.auth_route_config();
-    let mut removed = logout_with_revoke(
-        &config.codex_home,
+async fn logout_account(config: &Config, account_home: &Path) -> std::io::Result<bool> {
+    let saved_scope = |auth: &AuthDotJson| {
+        let credential = match auth.auth_mode {
+            Some(AuthMode::PersonalAccessToken) => auth.personal_access_token.as_deref(),
+            Some(AuthMode::AgentIdentity) => match auth.agent_identity.as_ref() {
+                Some(AgentIdentityStorage::Jwt(jwt)) => Some(jwt.as_str()),
+                Some(AgentIdentityStorage::Record(_)) | None => None,
+            },
+            None if auth.personal_access_token.is_some() => auth.personal_access_token.as_deref(),
+            None | Some(_) => None,
+        };
+        credential.and_then(|credential| {
+            auth.ema_scope.as_ref().and_then(|stored| {
+                stored.for_credential(credential).map(|scope| {
+                    (
+                        stored.idp.credential_name(&scope),
+                        stored.idp.issuer.clone(),
+                    )
+                })
+            })
+        })
+    };
+
+    // Cleanup is independent of the current feature gate. Retain the grant lock
+    // through account removal so another process cannot commit a late login.
+    let mut saved_guards = Vec::new();
+    let mut saved_cleanup_failed = false;
+    let mut seen_scopes = std::collections::HashSet::new();
+    let mut stored_auth = Vec::new();
+    let stores_to_delete: &[AuthCredentialsStoreMode] = match config.cli_auth_credentials_store_mode
+    {
+        AuthCredentialsStoreMode::File => &[AuthCredentialsStoreMode::File],
+        AuthCredentialsStoreMode::Keyring | AuthCredentialsStoreMode::Auto => &[
+            AuthCredentialsStoreMode::File,
+            AuthCredentialsStoreMode::Keyring,
+        ],
+        AuthCredentialsStoreMode::Ephemeral => &[],
+    };
+    let mut stores = stores_to_delete
+        .iter()
+        .copied()
+        .map(|mode| (mode, config.auth_keyring_backend_kind()))
+        .collect::<Vec<_>>();
+    // Secrets logout also removes the older direct-keyring entry.
+    if matches!(
+        config.cli_auth_credentials_store_mode,
+        AuthCredentialsStoreMode::Keyring | AuthCredentialsStoreMode::Auto
+    ) && config.auth_keyring_backend_kind() == AuthKeyringBackendKind::Secrets
+    {
+        stores.push((
+            AuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        ));
+    }
+    for (mode, backend) in stores {
+        match load_auth_dot_json(account_home, mode, backend) {
+            Ok(Some(auth)) => {
+                if let Some((credential_name, issuer)) = saved_scope(&auth)
+                    && seen_scopes.insert((credential_name.clone(), issuer.clone()))
+                {
+                    match EnterpriseOAuthCredentialGuard::acquire(
+                        &credential_name,
+                        &issuer,
+                        config.auth_keyring_backend_kind(),
+                    )
+                    .await
+                    {
+                        Ok(guard) => {
+                            saved_cleanup_failed |= guard.delete_tokens().is_err();
+                            saved_guards.push(guard);
+                        }
+                        Err(_) => saved_cleanup_failed = true,
+                    }
+                }
+                stored_auth.push(auth);
+            }
+            Ok(None) => {}
+            // Report the unreadable store, but still clean scopes from other readable stores.
+            Err(_) => saved_cleanup_failed = true,
+        }
+    }
+    for auth in stored_auth {
+        let enterprise_guard = async {
+            let mode = auth.auth_mode.unwrap_or_else(|| {
+                if auth.personal_access_token.is_some() {
+                    AuthMode::PersonalAccessToken
+                } else if auth.bedrock_api_key.is_some() {
+                    AuthMode::BedrockApiKey
+                } else if auth.bedrock_access_keys.is_some() {
+                    AuthMode::BedrockAccessKeys
+                } else if auth.openai_api_key.is_some() {
+                    AuthMode::ApiKey
+                } else {
+                    AuthMode::Chatgpt
+                }
+            });
+            if saved_scope(&auth).is_some() {
+                return Ok(None);
+            }
+            let Some(profile) = &config.mcp_enterprise_managed_auth else {
+                return Ok(None);
+            };
+            let scope = match mode {
+                AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => auth.tokens.and_then(|tokens| {
+                    McpEmaAuthScope::new(tokens.id_token.chatgpt_user_id?, tokens.account_id?)
+                }),
+                AuthMode::AgentIdentity => match auth.agent_identity {
+                    Some(AgentIdentityStorage::Record(record)) => {
+                        McpEmaAuthScope::new(record.chatgpt_user_id, record.account_id)
+                    }
+                    Some(AgentIdentityStorage::Jwt(jwt)) => {
+                        let auth = CodexAuth::from_agent_identity_jwt(
+                            &jwt,
+                            Some(&config.chatgpt_base_url),
+                            &config.auth_route_config(),
+                        )
+                        .await?;
+                        ema_auth_scope(Some(&auth))
+                    }
+                    None => None,
+                },
+                AuthMode::PersonalAccessToken => {
+                    if let Some(token) = auth.personal_access_token {
+                        let auth = CodexAuth::from_personal_access_token(
+                            &token,
+                            &config.auth_route_config(),
+                        )
+                        .await?;
+                        ema_auth_scope(Some(&auth))
+                    } else {
+                        None
+                    }
+                }
+                AuthMode::ApiKey
+                | AuthMode::Headers
+                | AuthMode::BedrockApiKey
+                | AuthMode::BedrockAccessKeys => None,
+            };
+            let Some(scope) = scope else {
+                return Ok(None);
+            };
+            let credential_name = profile.idp.credential_name(&scope);
+            if !seen_scopes.insert((credential_name.clone(), profile.idp.issuer.clone())) {
+                return Ok(None);
+            }
+            EnterpriseOAuthCredentialGuard::acquire(
+                &credential_name,
+                &profile.idp.issuer,
+                config.auth_keyring_backend_kind(),
+            )
+            .await
+            .map(Some)
+        }
+        .await;
+        match enterprise_guard {
+            Ok(Some(guard)) => {
+                saved_cleanup_failed |= guard.delete_tokens().is_err();
+                saved_guards.push(guard);
+            }
+            Ok(None) => {}
+            Err(_) => saved_cleanup_failed = true,
+        }
+    }
+    if saved_cleanup_failed {
+        eprintln!("Warning: failed to remove enterprise authorization; continuing account logout");
+    }
+
+    let result = logout_with_revoke(
+        account_home,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
-        &auth_route_config,
+        &config.auth_route_config(),
     )
-    .await?;
+    .await;
+    drop(saved_guards);
+    result
+}
+
+async fn logout_all_accounts(config: &Config) -> std::io::Result<bool> {
+    let mut removed = logout_account(config, &config.codex_home).await?;
     let accounts_dir = config.codex_home.join("accounts");
     let Ok(entries) = std::fs::read_dir(accounts_dir) else {
         return Ok(removed);
@@ -672,13 +878,7 @@ async fn logout_all_accounts(config: &Config) -> std::io::Result<bool> {
         if !path.is_dir() {
             continue;
         }
-        removed |= logout_with_revoke(
-            &path,
-            config.cli_auth_credentials_store_mode,
-            config.auth_keyring_backend_kind(),
-            &auth_route_config,
-        )
-        .await?;
+        removed |= logout_account(config, &path).await?;
     }
     Ok(removed)
 }
@@ -715,6 +915,10 @@ fn safe_format_key(key: &str) -> String {
     let suffix = &key[key.len() - 5..];
     format!("{prefix}***{suffix}")
 }
+
+#[cfg(test)]
+#[path = "login_storage_tests.rs"]
+mod storage_tests;
 
 #[cfg(test)]
 mod tests {
