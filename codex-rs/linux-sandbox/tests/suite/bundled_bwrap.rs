@@ -4,8 +4,6 @@ use codex_linux_sandbox::BUNDLED_BWRAP_DIGEST_VERIFICATION_FAILURE_EXIT_CODE;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_cargo_bin::copy_executable;
 use pretty_assertions::assert_eq;
-use std::path::Path;
-use std::path::PathBuf;
 use std::process::Command;
 
 #[test]
