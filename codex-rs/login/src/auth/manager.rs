@@ -56,6 +56,7 @@ pub use crate::auth::storage::AgentIdentityStorage;
 pub use crate::auth::storage::AuthDotJson;
 pub use crate::auth::storage::AuthKeyringBackendKind;
 use crate::auth::storage::AuthStorageBackend;
+pub use crate::auth::storage::StoredEmaScope;
 use crate::auth::storage::create_auth_storage;
 use crate::default_client::create_client;
 use crate::default_client::create_default_auth_client;
@@ -839,6 +840,7 @@ impl CodexAuth {
             last_refresh: Some(Utc::now()),
             agent_identity: None,
             personal_access_token: None,
+            ema_scope: None,
             bedrock_api_key: None,
             bedrock_access_keys: None,
         };
@@ -1044,6 +1046,7 @@ pub fn login_with_api_key(
         last_refresh: None,
         agent_identity: None,
         personal_access_token: None,
+        ema_scope: None,
         bedrock_api_key: None,
         bedrock_access_keys: None,
     };
@@ -1066,6 +1069,53 @@ pub async fn login_with_access_token(
     keyring_backend_kind: AuthKeyringBackendKind,
     auth_route_config: &AuthRouteConfig,
 ) -> std::io::Result<()> {
+    save_access_token(
+        codex_home,
+        access_token,
+        auth_credentials_store_mode,
+        forced_chatgpt_workspace_id,
+        chatgpt_base_url,
+        keyring_backend_kind,
+        auth_route_config,
+        /*ema_idp*/ None,
+    )
+    .await
+}
+
+/// Save a verified access token with the trusted enterprise IdP profile used by this login.
+pub async fn login_with_access_token_for_enterprise(
+    codex_home: &Path,
+    access_token: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    forced_chatgpt_workspace_id: Option<&[String]>,
+    chatgpt_base_url: Option<&str>,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    auth_route_config: &AuthRouteConfig,
+    ema_idp: &codex_config::McpServerIdpOAuthConfig,
+) -> std::io::Result<()> {
+    save_access_token(
+        codex_home,
+        access_token,
+        auth_credentials_store_mode,
+        forced_chatgpt_workspace_id,
+        chatgpt_base_url,
+        keyring_backend_kind,
+        auth_route_config,
+        Some(ema_idp),
+    )
+    .await
+}
+
+async fn save_access_token(
+    codex_home: &Path,
+    access_token: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    forced_chatgpt_workspace_id: Option<&[String]>,
+    chatgpt_base_url: Option<&str>,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    auth_route_config: &AuthRouteConfig,
+    ema_idp: Option<&codex_config::McpServerIdpOAuthConfig>,
+) -> std::io::Result<()> {
     let auth_dot_json = match classify_codex_access_token(access_token) {
         CodexAccessToken::PersonalAccessToken(access_token) => {
             let auth = PersonalAccessTokenAuth::load(access_token, auth_route_config).await?;
@@ -1079,6 +1129,14 @@ pub async fn login_with_access_token(
                 last_refresh: None,
                 agent_identity: None,
                 personal_access_token: Some(access_token.to_string()),
+                ema_scope: ema_idp.and_then(|idp| {
+                    StoredEmaScope::new(
+                        auth.chatgpt_user_id(),
+                        auth.account_id(),
+                        idp.clone(),
+                        access_token,
+                    )
+                }),
                 bedrock_api_key: None,
                 bedrock_access_keys: None,
             }
@@ -1090,7 +1148,8 @@ pub async fn login_with_access_token(
                 .unwrap_or(ChatGptEnvironment::default().chatgpt_base_url())
                 .trim_end_matches('/')
                 .to_string();
-            verified_record_from_jwt(jwt, &base_url, auth_route_config).await?;
+            let verified_record =
+                verified_record_from_jwt(jwt, &base_url, auth_route_config).await?;
             AuthDotJson {
                 auth_mode: Some(AuthMode::AgentIdentity),
                 openai_api_key: None,
@@ -1098,6 +1157,14 @@ pub async fn login_with_access_token(
                 last_refresh: None,
                 agent_identity: Some(AgentIdentityStorage::Jwt(jwt.to_string())),
                 personal_access_token: None,
+                ema_scope: ema_idp.and_then(|idp| {
+                    StoredEmaScope::new(
+                        &verified_record.chatgpt_user_id,
+                        &verified_record.account_id,
+                        idp.clone(),
+                        jwt,
+                    )
+                }),
                 bedrock_api_key: None,
                 bedrock_access_keys: None,
             }
@@ -1790,6 +1857,7 @@ impl AuthDotJson {
             last_refresh: Some(Utc::now()),
             agent_identity: None,
             personal_access_token: None,
+            ema_scope: None,
             bedrock_api_key: None,
             bedrock_access_keys: None,
         })

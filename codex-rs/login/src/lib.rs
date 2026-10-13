@@ -73,6 +73,7 @@ pub use auth::enforce_login_restrictions;
 pub use auth::is_workload_identity_selected;
 pub use auth::load_auth_dot_json;
 pub use auth::login_with_access_token;
+pub use auth::login_with_access_token_for_enterprise;
 pub use auth::login_with_agent_identity;
 pub use auth::login_with_api_key;
 pub use auth::login_with_bedrock_access_keys;

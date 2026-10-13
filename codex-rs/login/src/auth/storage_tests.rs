@@ -25,6 +25,7 @@ async fn file_storage_load_returns_auth_dot_json() -> anyhow::Result<()> {
         last_refresh: Some(Utc::now()),
         agent_identity: None,
         personal_access_token: None,
+        ema_scope: None,
         bedrock_api_key: None,
         bedrock_access_keys: None,
     };
@@ -49,6 +50,7 @@ async fn file_storage_save_persists_auth_dot_json() -> anyhow::Result<()> {
         last_refresh: Some(Utc::now()),
         agent_identity: None,
         personal_access_token: None,
+        ema_scope: None,
         bedrock_api_key: None,
         bedrock_access_keys: None,
     };
@@ -85,6 +87,7 @@ async fn file_storage_round_trips_agent_identity_auth() -> anyhow::Result<()> {
         last_refresh: None,
         agent_identity: Some(AgentIdentityStorage::Jwt(agent_identity)),
         personal_access_token: None,
+        ema_scope: None,
         bedrock_api_key: None,
         bedrock_access_keys: None,
     };
@@ -117,6 +120,7 @@ async fn file_storage_round_trips_registered_agent_identity_auth() -> anyhow::Re
         last_refresh: None,
         agent_identity: Some(AgentIdentityStorage::Record(record)),
         personal_access_token: None,
+        ema_scope: None,
         bedrock_api_key: None,
         bedrock_access_keys: None,
     };
@@ -169,6 +173,7 @@ async fn file_storage_loads_empty_agent_identity_email_as_none() -> anyhow::Resu
                 task_id: None,
             })),
             personal_access_token: None,
+            ema_scope: None,
             bedrock_api_key: None,
             bedrock_access_keys: None,
         })
@@ -196,6 +201,7 @@ async fn file_storage_writes_missing_agent_identity_email_as_empty_string() -> a
             task_id: None,
         })),
         personal_access_token: None,
+        ema_scope: None,
         bedrock_api_key: None,
         bedrock_access_keys: None,
     };
@@ -220,6 +226,7 @@ async fn file_storage_round_trips_personal_access_token_auth() -> anyhow::Result
         last_refresh: None,
         agent_identity: None,
         personal_access_token: Some("at-example".to_string()),
+        ema_scope: None,
         bedrock_api_key: None,
         bedrock_access_keys: None,
     };
@@ -272,6 +279,7 @@ fn file_storage_delete_removes_auth_file() -> anyhow::Result<()> {
         last_refresh: None,
         agent_identity: None,
         personal_access_token: None,
+        ema_scope: None,
         bedrock_api_key: None,
         bedrock_access_keys: None,
     };
@@ -304,6 +312,7 @@ fn ephemeral_storage_save_load_delete_is_in_memory_only() -> anyhow::Result<()> 
         last_refresh: Some(Utc::now()),
         agent_identity: None,
         personal_access_token: None,
+        ema_scope: None,
         bedrock_api_key: None,
         bedrock_access_keys: None,
     };
@@ -438,6 +447,7 @@ fn auth_with_prefix(prefix: &str) -> AuthDotJson {
         last_refresh: None,
         agent_identity: None,
         personal_access_token: None,
+        ema_scope: None,
         bedrock_api_key: None,
         bedrock_access_keys: None,
     }
@@ -467,6 +477,7 @@ fn secrets_keyring_auth_storage_load_returns_deserialized_auth() -> anyhow::Resu
         last_refresh: None,
         agent_identity: None,
         personal_access_token: None,
+        ema_scope: None,
         bedrock_api_key: None,
         bedrock_access_keys: None,
     };

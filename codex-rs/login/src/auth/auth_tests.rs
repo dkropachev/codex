@@ -103,7 +103,13 @@ fn login_with_api_key_overwrites_existing_auth_json() {
             "access_token": "stale-access",
             "refresh_token": "stale-refresh",
             "account_id": "stale-acc"
-        }
+        },
+        "ema_scope": {
+            "user_id": "old-user",
+            "workspace_id": "old-workspace",
+            "idp": {"issuer": "https://idp.example", "client_id": "old-client"},
+            "credential_digest": "old-digest"
+        },
     });
     std::fs::write(
         &auth_path,
@@ -125,6 +131,10 @@ fn login_with_api_key_overwrites_existing_auth_json() {
         .expect("auth.json should parse");
     assert_eq!(auth.openai_api_key.as_deref(), Some("sk-new"));
     assert!(auth.tokens.is_none(), "tokens should be cleared");
+    assert!(
+        auth.ema_scope.is_none(),
+        "old account scope should be cleared"
+    );
 }
 
 #[tokio::test]
@@ -145,7 +155,11 @@ async fn login_with_access_token_writes_agent_identity_jwt() {
     let authapi_base_url = server.uri();
     let chatgpt_base_url = format!("{authapi_base_url}/backend-api");
 
-    super::login_with_access_token(
+    let idp = codex_config::McpServerIdpOAuthConfig {
+        issuer: "https://idp.example".to_string(),
+        client_id: "enterprise-client".to_string(),
+    };
+    super::login_with_access_token_for_enterprise(
         dir.path(),
         &agent_identity,
         AuthCredentialsStoreMode::File,
@@ -153,6 +167,7 @@ async fn login_with_access_token_writes_agent_identity_jwt() {
         Some(&chatgpt_base_url),
         AuthKeyringBackendKind::default(),
         &crate::test_support::transport_default_auth_route_config(),
+        &idp,
     )
     .await
     .expect("login_with_access_token should succeed");
@@ -164,10 +179,16 @@ async fn login_with_access_token_writes_agent_identity_jwt() {
     assert_eq!(auth.auth_mode, Some(AuthMode::AgentIdentity));
     assert_eq!(
         auth.agent_identity,
-        Some(AgentIdentityStorage::Jwt(agent_identity))
+        Some(AgentIdentityStorage::Jwt(agent_identity.clone()))
     );
     assert!(auth.tokens.is_none(), "tokens should be cleared");
     assert!(auth.openai_api_key.is_none(), "API key should be cleared");
+    let scope = auth.ema_scope.expect("verified scope");
+    assert_eq!(scope.user_id, record.chatgpt_user_id);
+    assert_eq!(scope.workspace_id, record.account_id);
+    assert_eq!(scope.idp, idp);
+    assert!(scope.for_credential(&agent_identity).is_some());
+    assert!(scope.for_credential("another JWT").is_none());
     server.verify().await;
 }
 
@@ -371,6 +392,7 @@ async fn stored_agent_identity_jwt_keeps_auth_json_unchanged() -> anyhow::Result
             last_refresh: None,
             agent_identity: Some(AgentIdentityStorage::Jwt(agent_identity.clone())),
             personal_access_token: None,
+            ema_scope: None,
             bedrock_api_key: None,
             bedrock_access_keys: None,
         },
@@ -451,6 +473,7 @@ async fn login_with_access_token_writes_only_personal_access_token() {
             last_refresh: None,
             agent_identity: None,
             personal_access_token: Some("at-login-test".to_string()),
+            ema_scope: None,
             bedrock_api_key: None,
             bedrock_access_keys: None,
         }
@@ -1071,6 +1094,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
             last_refresh: Some(last_refresh),
             agent_identity: None,
             personal_access_token: None,
+            ema_scope: None,
             bedrock_api_key: None,
             bedrock_access_keys: None,
         },
@@ -1120,6 +1144,7 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
         last_refresh: None,
         agent_identity: None,
         personal_access_token: None,
+        ema_scope: None,
         bedrock_api_key: None,
         bedrock_access_keys: None,
     };
@@ -2484,6 +2509,7 @@ async fn workspace_policy_rejects_agent_identity_before_hydration() {
                 last_refresh: None,
                 agent_identity: Some(stored_agent_identity),
                 personal_access_token: None,
+                ema_scope: None,
                 bedrock_api_key: None,
                 bedrock_access_keys: None,
             },
@@ -2726,6 +2752,7 @@ async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismat
             last_refresh: None,
             agent_identity: Some(AgentIdentityStorage::Jwt(agent_identity)),
             personal_access_token: None,
+            ema_scope: None,
             bedrock_api_key: None,
             bedrock_access_keys: None,
         },

@@ -866,6 +866,7 @@ pub(crate) async fn persist_tokens_async(
                 last_refresh: Some(Utc::now()),
                 agent_identity: None,
                 personal_access_token: None,
+                ema_scope: None,
                 bedrock_api_key: None,
                 bedrock_access_keys: None,
             };

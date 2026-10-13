@@ -31,6 +31,8 @@ use super::BedrockApiKeyAuth;
 use crate::token_data::TokenData;
 use codex_agent_identity::AgentIdentityJwtClaims;
 use codex_agent_identity::decode_agent_identity_jwt;
+use codex_config::McpEmaAuthScope;
+use codex_config::McpServerIdpOAuthConfig;
 use codex_config::types::AuthCredentialsStoreMode;
 pub use codex_config::types::AuthKeyringBackendKind;
 use codex_keyring_store::DefaultKeyringStore;
@@ -66,10 +68,46 @@ pub struct AuthDotJson {
     pub personal_access_token: Option<String>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ema_scope: Option<StoredEmaScope>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bedrock_api_key: Option<BedrockApiKeyAuth>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bedrock_access_keys: Option<BedrockAccessKeysAuth>,
+}
+
+/// Verified account and IdP scope bound to the credential saved in this auth record.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct StoredEmaScope {
+    pub user_id: String,
+    pub workspace_id: String,
+    pub idp: McpServerIdpOAuthConfig,
+    credential_digest: String,
+}
+
+impl StoredEmaScope {
+    pub fn new(
+        user_id: &str,
+        workspace_id: &str,
+        idp: McpServerIdpOAuthConfig,
+        credential: &str,
+    ) -> Option<Self> {
+        McpEmaAuthScope::new(user_id.to_string(), workspace_id.to_string())?;
+        Some(Self {
+            user_id: user_id.to_string(),
+            workspace_id: workspace_id.to_string(),
+            idp,
+            credential_digest: format!("{:x}", Sha256::digest(credential.as_bytes())),
+        })
+    }
+
+    pub fn for_credential(&self, credential: &str) -> Option<McpEmaAuthScope> {
+        if self.credential_digest != format!("{:x}", Sha256::digest(credential.as_bytes())) {
+            return None;
+        }
+        McpEmaAuthScope::new(self.user_id.clone(), self.workspace_id.clone())
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]

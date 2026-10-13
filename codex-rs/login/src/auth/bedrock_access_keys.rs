@@ -47,6 +47,7 @@ pub fn login_with_bedrock_access_keys(
         last_refresh: None,
         agent_identity: None,
         personal_access_token: None,
+        ema_scope: None,
         bedrock_api_key: None,
         bedrock_access_keys: Some(BedrockAccessKeysAuth {
             access_key_id: access_key_id.to_string(),

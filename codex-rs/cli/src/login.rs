@@ -22,6 +22,7 @@ use codex_login::auth::AgentIdentityStorage;
 use codex_login::is_workload_identity_selected;
 use codex_login::load_auth_dot_json;
 use codex_login::login_with_access_token;
+use codex_login::login_with_access_token_for_enterprise;
 use codex_login::login_with_agent_identity;
 use codex_login::login_with_api_key;
 use codex_login::logout_with_revoke;
@@ -288,17 +289,31 @@ pub async fn run_login_with_agent_identity(
     let auth_route_config = config.auth_route_config();
     let effective_chatgpt_workspaces = auth_config.effective_chatgpt_workspaces();
 
-    match login_with_agent_identity(
-        &config.codex_home,
-        &agent_identity,
-        config.cli_auth_credentials_store_mode,
-        effective_chatgpt_workspaces.as_deref(),
-        Some(&config.chatgpt_base_url),
-        config.auth_keyring_backend_kind(),
-        &auth_route_config,
-    )
-    .await
-    {
+    let login_result = if let Some(profile) = &config.mcp_enterprise_managed_auth {
+        login_with_access_token_for_enterprise(
+            &config.codex_home,
+            &agent_identity,
+            config.cli_auth_credentials_store_mode,
+            effective_chatgpt_workspaces.as_deref(),
+            Some(&config.chatgpt_base_url),
+            config.auth_keyring_backend_kind(),
+            &auth_route_config,
+            &profile.idp,
+        )
+        .await
+    } else {
+        login_with_agent_identity(
+            &config.codex_home,
+            &agent_identity,
+            config.cli_auth_credentials_store_mode,
+            effective_chatgpt_workspaces.as_deref(),
+            Some(&config.chatgpt_base_url),
+            config.auth_keyring_backend_kind(),
+            &auth_route_config,
+        )
+        .await
+    };
+    match login_result {
         Ok(_) => {
             eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);
@@ -328,17 +343,31 @@ pub async fn run_login_with_access_token(
 
     let auth_route_config = config.auth_route_config();
     let effective_chatgpt_workspaces = config.auth_config().effective_chatgpt_workspaces();
-    match login_with_access_token(
-        &config.codex_home,
-        &access_token,
-        config.cli_auth_credentials_store_mode,
-        effective_chatgpt_workspaces.as_deref(),
-        Some(&config.chatgpt_base_url),
-        config.auth_keyring_backend_kind(),
-        &auth_route_config,
-    )
-    .await
-    {
+    let login_result = if let Some(profile) = &config.mcp_enterprise_managed_auth {
+        login_with_access_token_for_enterprise(
+            &config.codex_home,
+            &access_token,
+            config.cli_auth_credentials_store_mode,
+            effective_chatgpt_workspaces.as_deref(),
+            Some(&config.chatgpt_base_url),
+            config.auth_keyring_backend_kind(),
+            &auth_route_config,
+            &profile.idp,
+        )
+        .await
+    } else {
+        login_with_access_token(
+            &config.codex_home,
+            &access_token,
+            config.cli_auth_credentials_store_mode,
+            effective_chatgpt_workspaces.as_deref(),
+            Some(&config.chatgpt_base_url),
+            config.auth_keyring_backend_kind(),
+            &auth_route_config,
+        )
+        .await
+    };
+    match login_result {
         Ok(_) => {
             eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);
@@ -658,16 +687,13 @@ async fn logout_account(config: &Config, account_home: &Path) -> std::io::Result
     // Cleanup is independent of the current feature gate. Retain the grant lock
     // through account removal so another process cannot commit a late login.
     let enterprise_guard = async {
-        let Some(profile) = &config.mcp_enterprise_managed_auth else {
-            return Ok::<_, anyhow::Error>(None);
-        };
         let Some(auth) = load_auth_dot_json(
             account_home,
             config.cli_auth_credentials_store_mode,
             config.auth_keyring_backend_kind(),
         )?
         else {
-            return Ok(None);
+            return Ok::<_, anyhow::Error>(None);
         };
         let mode = auth.auth_mode.unwrap_or_else(|| {
             if auth.personal_access_token.is_some() {
@@ -682,6 +708,41 @@ async fn logout_account(config: &Config, account_home: &Path) -> std::io::Result
                 AuthMode::Chatgpt
             }
         });
+        let saved_scope = match mode {
+            AuthMode::PersonalAccessToken => auth.personal_access_token.as_deref(),
+            AuthMode::AgentIdentity => match auth.agent_identity.as_ref() {
+                Some(AgentIdentityStorage::Jwt(jwt)) => Some(jwt.as_str()),
+                Some(AgentIdentityStorage::Record(_)) | None => None,
+            },
+            AuthMode::Chatgpt
+            | AuthMode::ChatgptAuthTokens
+            | AuthMode::ApiKey
+            | AuthMode::Headers
+            | AuthMode::BedrockApiKey
+            | AuthMode::BedrockAccessKeys => None,
+        }
+        .and_then(|credential| {
+            auth.ema_scope.as_ref().and_then(|stored| {
+                stored.for_credential(credential).map(|scope| {
+                    (
+                        stored.idp.credential_name(&scope),
+                        stored.idp.issuer.clone(),
+                    )
+                })
+            })
+        });
+        if let Some((credential_name, issuer)) = saved_scope {
+            return EnterpriseOAuthCredentialGuard::acquire(
+                &credential_name,
+                &issuer,
+                config.auth_keyring_backend_kind(),
+            )
+            .await
+            .map(Some);
+        }
+        let Some(profile) = &config.mcp_enterprise_managed_auth else {
+            return Ok(None);
+        };
         let scope = match mode {
             AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => auth.tokens.and_then(|tokens| {
                 McpEmaAuthScope::new(tokens.id_token.chatgpt_user_id?, tokens.account_id?)
