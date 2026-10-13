@@ -23,7 +23,7 @@ LL |     let _ = Options.enabled(false, /*retry_count*/ 3);
    |                             ^^^^^ help: prepend the parameter name comment: `/*enabled*/ false`
 
 warning: anonymous literal-like argument for parameter `base_url`
-  --> $DIR/uncommented_literal.rs:20:31
+  --> $DIR/uncommented_literal.rs:22:31
    |
 LL |     let _ = create_openai_url(OptionalString::None, /*retry_count*/ 3);
    |                               ^^^^^^^^^^^^^^^^^^^^ help: prepend the parameter name comment: `/*base_url*/ OptionalString::None`

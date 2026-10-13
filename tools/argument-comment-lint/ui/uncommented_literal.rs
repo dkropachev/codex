@@ -17,7 +17,6 @@ fn create_openai_url(base_url: Option<String>, retry_count: usize) -> String {
 fn main() {
     let _ = create_openai_url(None, 3);
     let _ = Options.enabled(false, /*retry_count*/ 3);
-    client.set_flag(true);
 
     type OptionalString = Option<String>;
     let _ = create_openai_url(OptionalString::None, /*retry_count*/ 3);
