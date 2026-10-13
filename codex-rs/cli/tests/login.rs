@@ -88,6 +88,23 @@ fn login_status_reports_auth_storage_errors() -> Result<()> {
 }
 
 #[test]
+fn file_logout_does_not_inspect_retained_keyring_store() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_file_auth_config(codex_home.path())?;
+    // Secrets storage cannot load through this path. File logout leaves it intact.
+    std::fs::write(codex_home.path().join("secrets"), "not a directory")?;
+
+    let output = codex_command(codex_home.path())?
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .args(["logout"])
+        .output()?;
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "Not logged in\n");
+
+    Ok(())
+}
+
+#[test]
 fn login_status_validates_configured_workload_identity() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_file_auth_config(codex_home.path())?;

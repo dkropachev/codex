@@ -717,10 +717,16 @@ async fn logout_account(config: &Config, account_home: &Path) -> std::io::Result
     let mut saved_guards = Vec::new();
     let mut saved_cleanup_failed = false;
     let mut seen_scopes = std::collections::HashSet::new();
-    for mode in [
-        AuthCredentialsStoreMode::File,
-        AuthCredentialsStoreMode::Keyring,
-    ] {
+    let stores_to_delete: &[AuthCredentialsStoreMode] = match config.cli_auth_credentials_store_mode
+    {
+        AuthCredentialsStoreMode::File => &[AuthCredentialsStoreMode::File],
+        AuthCredentialsStoreMode::Keyring | AuthCredentialsStoreMode::Auto => &[
+            AuthCredentialsStoreMode::File,
+            AuthCredentialsStoreMode::Keyring,
+        ],
+        AuthCredentialsStoreMode::Ephemeral => &[],
+    };
+    for &mode in stores_to_delete {
         match load_auth_dot_json(account_home, mode, config.auth_keyring_backend_kind()) {
             Ok(Some(auth)) => {
                 if let Some((credential_name, issuer)) = saved_scope(&auth)
