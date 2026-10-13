@@ -221,7 +221,7 @@ impl App {
             service_tier: self.chat_widget.current_service_tier().map(str::to_string),
         };
         let mut config = match self.load_new_session_config(app_server).await {
-            Ok(config) => config,
+            Ok((config, _local_settings)) => config,
             Err(error) => {
                 self.chat_widget.add_error_message(format!(
                     "Failed to prepare the fresh handoff thread: {error}. The source thread remains resumable."

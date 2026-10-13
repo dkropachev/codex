@@ -75,7 +75,7 @@ impl SessionTask for RegularTask {
         // Regular turns emit `TurnStarted` inline so first-turn lifecycle does
         // not wait on startup prewarm resolution.
         let prewarmed_client_session = async {
-            sess.emit_turn_started(&ctx).await;
+            sess.emit_turn_started(&ctx, TaskKind::Regular).await;
             if model_router_route_changed {
                 let current_model = ctx.model_info().slug.clone();
                 if current_model != previous_model {

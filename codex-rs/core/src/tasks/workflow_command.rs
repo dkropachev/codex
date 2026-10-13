@@ -62,7 +62,9 @@ impl SessionTask for WorkflowCommandTask {
             &[],
         );
 
-        session.emit_turn_started(turn_context.as_ref()).await;
+        session
+            .emit_turn_started(turn_context.as_ref(), TaskKind::Regular)
+            .await;
 
         let run_config = match WorkflowRunConfig::new(turn_context.config.workflow_output_max_bytes)
         {

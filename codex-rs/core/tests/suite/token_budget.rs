@@ -1426,7 +1426,7 @@ async fn token_budget_automatic_standalone_compaction_supports_remote_executor()
             trace: None,
         })
         .await?;
-    let StartIfIdleSubmission::Started { turn_id } = submission else {
+    let StartIfIdleSubmission::Started { turn_id, .. } = submission else {
         panic!("idle automatic compaction should start: {submission:?}");
     };
 

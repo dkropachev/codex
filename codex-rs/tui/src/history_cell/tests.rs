@@ -1410,7 +1410,6 @@ fn managed_fork_update_available_history_cell_snapshot() {
         Some(UpdateAction::StandaloneUnix),
     );
     let rendered = render_lines(&cell.display_lines(/*width*/ 110)).join("\n");
-
     insta::assert_snapshot!(rendered);
 }
 

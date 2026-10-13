@@ -95,6 +95,7 @@ impl TurnRequestProcessor {
             .map_err(|err| internal_error(format!("failed to start review: {err}")))?;
         let turn = Turn {
             id: turn_id.clone(),
+            root_turn_id: None,
             items: vec![ThreadItem::UserMessage {
                 id: turn_id,
                 client_id: None,
@@ -195,6 +196,7 @@ impl TurnRequestProcessor {
         );
         let turn = Turn {
             id: turn_id.clone(),
+            root_turn_id: None,
             items: vec![ThreadItem::UserMessage {
                 id: turn_id,
                 client_id: None,

@@ -2,6 +2,7 @@ use super::ContextualUserFragment;
 use super::world_state::PreviousSectionState;
 use super::world_state::WorldStateSection;
 use crate::context::world_state::SectionTransition;
+use crate::context::world_state::WorldStateUpdate;
 use codex_features::TokenBudgetMode;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -54,10 +55,6 @@ impl ContextualUserFragment for TokenBudgetContext {
         "developer"
     }
 
-    fn requires_separate_message(&self) -> bool {
-        true
-    }
-
     fn markers(&self) -> (&'static str, &'static str) {
         Self::type_markers()
     }
@@ -103,7 +100,14 @@ impl WorldStateSection for TokenBudgetContext {
         let fragment =
             matches!(previous, PreviousSectionState::Known(identity) if identity != &current)
                 .then(|| Box::new(self.clone()) as Box<dyn ContextualUserFragment>);
-        (Some(current), fragment)
+        (
+            Some(current),
+            fragment
+                .into_iter()
+                .map(WorldStateUpdate::boxed_fragment)
+                .map(WorldStateUpdate::standalone)
+                .collect(),
+        )
     }
 }
 

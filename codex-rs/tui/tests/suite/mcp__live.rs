@@ -317,7 +317,6 @@ async fn mcp_elicitation_form_submission_works_in_live_tui() -> Result<()> {
             "assistant response arrived before MCP elicitation form; output: {output}; tools: {tools}"
         );
     }
-    writer.send(b"1".to_vec()).await?;
     writer.send(b"\r".to_vec()).await?;
     wait_for_screen(
         &mut output_rx,

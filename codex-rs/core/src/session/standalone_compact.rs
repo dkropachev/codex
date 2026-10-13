@@ -53,9 +53,14 @@ pub(super) async fn run_if_idle(
         .new_turn_with_default_settings(submission_id.clone(), Default::default())
         .await;
     session
-        .start_task(turn_context, Vec::new(), CompactTask::new(source))
+        .start_task(
+            Arc::clone(&turn_context),
+            Vec::new(),
+            CompactTask::new(source),
+        )
         .await;
     StartIfIdleSubmission::Started {
         turn_id: submission_id,
+        root_turn_id: turn_context.root_turn_id(),
     }
 }

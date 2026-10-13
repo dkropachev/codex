@@ -47,10 +47,9 @@ fn disabled_turn(test: &TestCodex, prompt: &str) -> TurnInputRequest {
         text_elements: Vec::new(),
     }])
     .with_thread_settings(ThreadSettingsOverrides {
-        environments: Some(TurnEnvironmentSelections::new(
-            test.config.cwd.clone(),
-            Vec::new(),
-        )),
+        environments: Some(
+            TurnEnvironmentSelections::new(test.config.cwd.clone(), Vec::new()).into_requests(),
+        ),
         approval_policy: Some(AskForApproval::Never),
         sandbox_policy: Some(sandbox_policy),
         permission_profile,

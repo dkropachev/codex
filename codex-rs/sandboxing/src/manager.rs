@@ -636,12 +636,18 @@ impl SandboxManager {
     ) -> Result<SandboxExecRequest, SandboxTransformError> {
         let workspace_roots = request.workspace_roots;
         let proxy_settings_mode = request.windows_sandbox_proxy_settings_mode;
+        let sandbox_exe = request.transform.sandbox_exe.ok_or_else(|| {
+            SandboxTransformError::WindowsSandboxPreparation(
+                "missing Codex executable path".to_string(),
+            )
+        })?;
         let mut request = self.transform(request.transform)?;
         if request.sandbox == SandboxType::WindowsRestrictedToken {
             wrap_windows_sandbox_exec_request_for_direct_spawn(
                 &mut request,
                 workspace_roots,
                 codex_home,
+                sandbox_exe,
                 proxy_settings_mode,
                 wrapper_executable,
             )?;
@@ -655,6 +661,7 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
     request: &mut SandboxExecRequest,
     workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
+    sandbox_exe: &Path,
     proxy_settings_mode: codex_windows_sandbox::WindowsSandboxProxySettingsMode,
     wrapper_executable: Option<&AbsolutePathBuf>,
 ) -> Result<(), SandboxTransformError> {
@@ -689,11 +696,14 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
             })?
             .to_string()
     } else {
-        let source = std::path::PathBuf::from(&program);
-        let helper = codex_windows_sandbox::resolve_exe_for_launch(source.as_path(), codex_home);
-        *program = helper.to_string_lossy().into_owned();
-        source.to_string_lossy().into_owned()
+        sandbox_exe.to_string_lossy().into_owned()
     };
+    // The transformed inner command may be an arbitrary workload. Materialize
+    // only a Codex helper that will itself launch inside the sandbox.
+    if Path::new(program.as_str()) == sandbox_exe {
+        let helper = codex_windows_sandbox::resolve_exe_for_launch(sandbox_exe, codex_home);
+        *program = helper.to_string_lossy().into_owned();
+    }
 
     let inner_command = std::mem::take(&mut request.command);
     let proxy_enforced = request.network.is_some();
@@ -717,6 +727,7 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
             &request.permission_profile,
             &native_sandbox_policy_cwd,
             use_elevated,
+            &request.env,
         )
     } else {
         resolve_windows_restricted_token_filesystem_overrides(

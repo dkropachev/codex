@@ -1926,7 +1926,7 @@ async fn standalone_automatic_compaction_preserves_remote_provenance() -> Result
             trace: None,
         })
         .await?;
-    let StartIfIdleSubmission::Started { turn_id } = submission else {
+    let StartIfIdleSubmission::Started { turn_id, .. } = submission else {
         panic!("idle automatic compaction should start: {submission:?}");
     };
     let completed = wait_for_event_with_timeout(

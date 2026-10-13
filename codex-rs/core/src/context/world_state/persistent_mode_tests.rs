@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::context::world_state::WorldState;
+use crate::context::world_state::WorldStateUpdateContent;
 use codex_utils_output_truncation::approx_token_count;
 use pretty_assertions::assert_eq;
 
@@ -28,7 +29,8 @@ fn persistent_instructions_follow_mode_and_catalog_updates_without_duplicates() 
             instructions,
             /*send_user_message_async_available*/ false,
         ));
-        let (snapshot, fragments) = world_state.render_history_diff(previous.as_ref(), &history);
+        let (snapshot, fragments) =
+            world_state.render_history_fragment_diff(previous.as_ref(), &history);
         let updates = fragments
             .into_iter()
             .map(ContextualUserFragment::into_boxed_response_item)
@@ -69,7 +71,10 @@ fn retained_persistent_instructions_are_replaced_or_retired_without_a_snapshot()
         ));
         assert_eq!(
             world_state
-                .render_history_diff(/*previous*/ None, std::slice::from_ref(&retained))
+                .render_history_fragment_diff(
+                    /*previous*/ None,
+                    std::slice::from_ref(&retained)
+                )
                 .1
                 .into_iter()
                 .map(ContextualUserFragment::into_boxed_response_item)
@@ -89,10 +94,15 @@ fn oversized_persistent_instructions_are_truncated_below_context_limit() {
     );
 
     assert!(state.instructions.contains("tokens truncated"));
-    for fragment in [
-        state.render_diff(PreviousSectionState::Absent).1.unwrap(),
-        state.render_diff(PreviousSectionState::Unknown).1.unwrap(),
-    ] {
+    for update in state
+        .render_diff(PreviousSectionState::Absent)
+        .1
+        .into_iter()
+        .chain(state.render_diff(PreviousSectionState::Unknown).1)
+    {
+        let WorldStateUpdateContent::Fragment(fragment) = update.content else {
+            panic!("persistent mode should render a fragment");
+        };
         assert!(approx_token_count(&fragment.render()) <= 10_000);
     }
 }

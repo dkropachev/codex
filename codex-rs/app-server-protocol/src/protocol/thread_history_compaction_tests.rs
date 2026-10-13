@@ -10,6 +10,7 @@ fn modern_compaction_ids_survive_history_reconstruction() {
     let turn_id = "turn-1".to_string();
     let mut builder = ThreadHistoryBuilder::new();
     builder.handle_event(&EventMsg::TurnStarted(TurnStartedEvent {
+        turn_attribution: None,
         turn_id: turn_id.clone(),
         root_turn_id: None,
         trace_id: None,
@@ -67,6 +68,7 @@ fn unfinished_compaction_start_does_not_materialize_a_history_item() {
     let thread_id = ThreadId::new();
     let turns = build_turns_from_rollout_items(&[
         RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_attribution: None,
             turn_id: "turn-1".to_string(),
             root_turn_id: None,
             trace_id: None,

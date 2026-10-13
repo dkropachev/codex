@@ -65,6 +65,16 @@ async fn reserve_with_precondition(
 ) -> Result<Arc<tokio::sync::Mutex<TurnState>>, NotSubmittedReason> {
     let turn_state = {
         let mut active_turn = session.active_turn.lock().await;
+        // Explicit user input may start while the previous turn is finishing
+        // its stop hooks. An empty task slot can also be a new reservation,
+        // which must remain owned by its caller.
+        if matches!(pending_mail_policy, PendingMailPolicy::MergeIntoUserTurn)
+            && active_turn
+                .as_ref()
+                .is_some_and(|turn| turn.finishing_turn_id.is_some())
+        {
+            *active_turn = None;
+        }
         if active_turn.is_some() {
             return Err(NotSubmittedReason::NotIdle);
         }

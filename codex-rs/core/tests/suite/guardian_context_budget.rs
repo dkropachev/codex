@@ -232,10 +232,10 @@ enum ReviewerResponse {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(1, ReviewerResponse::Decision; "required_context_fails_closed")]
-#[test_case(4_500, ReviewerResponse::ToolContinuation; "oversized_tool_continuation_compacts")]
-#[test_case(4_500, ReviewerResponse::FileImageContinuation; "uploaded_original_image_history_is_bounded")]
-#[test_case(4_500, ReviewerResponse::UncompactableContinuation; "ineffective_compaction_fails_closed")]
-#[test_case(4_500, ReviewerResponse::CompactionError; "compaction_service_error_does_not_request_user_approval")]
+#[test_case(6_000, ReviewerResponse::ToolContinuation; "oversized_tool_continuation_compacts")]
+#[test_case(6_000, ReviewerResponse::FileImageContinuation; "uploaded_original_image_history_is_bounded")]
+#[test_case(6_000, ReviewerResponse::UncompactableContinuation; "ineffective_compaction_fails_closed")]
+#[test_case(6_000, ReviewerResponse::CompactionError; "compaction_service_error_does_not_request_user_approval")]
 #[test_case(6_000, ReviewerResponse::NextReview; "incoming_review_compacts_existing_history")]
 async fn review_respects_complete_context_budget(
     window: i64,
@@ -674,7 +674,7 @@ async fn oversized_action_preserves_review_policy_and_next_review(
             model.context_window = Some(if matches!(review, OversizedActionReview::Fits) {
                 160_000
             } else {
-                10_000
+                12_000
             });
         })
         .with_config(|config| {

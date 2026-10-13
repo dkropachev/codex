@@ -164,6 +164,7 @@ async fn steering_does_not_wait_for_realtime_history() {
         assert_eq!(
             submission,
             TurnInputSubmission::Steered {
+                root_turn_id: turn_context.sub_id.clone(),
                 turn_id: turn_context.sub_id.clone()
             }
         );
@@ -183,7 +184,7 @@ async fn accepted_input_applies_thread_settings() {
             text_elements: Vec::new(),
         }])
         .with_thread_settings(ThreadSettingsOverrides {
-            environments: Some(local_selections(config.cwd.clone())),
+            environments: Some(local_selections(config.cwd.clone()).into_requests()),
             approval_policy: Some(config.permissions.approval_policy.value()),
             approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::AutoReview),
             sandbox_policy: Some(config.legacy_sandbox_policy()),
@@ -923,6 +924,7 @@ async fn steer_only_enforces_expected_turn_id() {
     assert_eq!(
         submission,
         TurnInputSubmission::Steered {
+            root_turn_id: turn_context.sub_id.clone(),
             turn_id: turn_context.sub_id.clone()
         }
     );

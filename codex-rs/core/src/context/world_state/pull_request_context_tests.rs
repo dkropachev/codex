@@ -4,6 +4,7 @@ use pretty_assertions::assert_eq;
 
 use super::*;
 use crate::context::world_state::WorldState;
+use crate::context::world_state::WorldStateUpdateContent;
 
 #[test]
 fn renders_initial_context_and_only_changed_diffs() {
@@ -12,7 +13,10 @@ fn renders_initial_context_and_only_changed_diffs() {
     let (initial_snapshot, initial_rendered) = initial.render_full();
 
     assert_eq!(initial_rendered.len(), 1);
-    assert_eq!(initial_rendered[0].render(), initial_context.render());
+    assert_eq!(
+        render_update(&initial_rendered[0]),
+        initial_context.render()
+    );
     let retained: ResponseItem = ContextualUserFragment::into(initial_context.as_ref().clone());
     assert!(
         initial
@@ -25,7 +29,10 @@ fn renders_initial_context_and_only_changed_diffs() {
     let changed = world_state(Arc::clone(&changed_context));
     let (_, changed_rendered) = changed.render_history_diff(Some(&initial_snapshot), [&retained]);
     assert_eq!(changed_rendered.len(), 1);
-    assert_eq!(changed_rendered[0].render(), changed_context.render());
+    assert_eq!(
+        render_update(&changed_rendered[0]),
+        changed_context.render()
+    );
 }
 
 #[test]
@@ -37,7 +44,7 @@ fn restores_context_only_when_the_fragment_was_not_retained() {
 
     let (_, restored) = state.render_history_diff(Some(&snapshot), &[]);
     assert_eq!(restored.len(), 1);
-    assert_eq!(restored[0].render(), context.render());
+    assert_eq!(render_update(&restored[0]), context.render());
     assert!(
         state
             .render_history_diff(Some(&snapshot), &[retained])
@@ -50,6 +57,13 @@ fn world_state(context: Arc<PullRequestContext>) -> WorldState {
     let mut state = WorldState::default();
     state.add_section(PullRequestContextState::new(context));
     state
+}
+
+fn render_update(update: &WorldStateUpdate) -> String {
+    let WorldStateUpdateContent::Fragment(fragment) = &update.content else {
+        panic!("pull request context should render a fragment");
+    };
+    fragment.render()
 }
 
 fn context(body: &str) -> Arc<PullRequestContext> {

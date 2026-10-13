@@ -40,6 +40,7 @@ pub(crate) struct CommandPopup {
     command_filter: String,
     workflow_argument_filter: String,
     commands: Vec<CommandItem>,
+    side_conversation_active: bool,
     state: ScrollState,
     daybreak_command_description: Option<&'static str>,
 }
@@ -94,20 +95,28 @@ impl CommandPopup {
         workflow_commands: Vec<WorkflowCommand>,
     ) -> Self {
         // Keep built-in availability in sync with the composer.
-        let commands = commands_for_input(flags.into(), &service_tier_commands, &workflow_commands)
-            .into_iter()
-            .filter_map(|command| match command {
-                SlashCommandItem::Builtin(cmd) => (!cmd.command().starts_with("debug")
-                    && cmd != SlashCommand::Apps)
-                    .then_some(CommandItem::Builtin(cmd)),
-                SlashCommandItem::ServiceTier(command) => Some(CommandItem::ServiceTier(command)),
-                SlashCommandItem::Workflow(command) => Some(CommandItem::Workflow(command)),
-            })
-            .collect();
+        let commands = commands_for_input(
+            BuiltinCommandFlags {
+                side_conversation_active: false,
+                ..flags.into()
+            },
+            &service_tier_commands,
+            &workflow_commands,
+        )
+        .into_iter()
+        .filter_map(|command| match command {
+            SlashCommandItem::Builtin(cmd) => (!cmd.command().starts_with("debug")
+                && cmd != SlashCommand::Apps)
+                .then_some(CommandItem::Builtin(cmd)),
+            SlashCommandItem::ServiceTier(command) => Some(CommandItem::ServiceTier(command)),
+            SlashCommandItem::Workflow(command) => Some(CommandItem::Workflow(command)),
+        })
+        .collect();
         Self {
             command_filter: String::new(),
             workflow_argument_filter: String::new(),
             commands,
+            side_conversation_active: flags.side_conversation_active,
             state: ScrollState::new(),
             daybreak_command_description: flags.daybreak_command_description,
         }
@@ -179,6 +188,9 @@ impl CommandPopup {
         if filter.is_empty() {
             for command in self.commands.iter() {
                 if matches!(command, CommandItem::Builtin(cmd) if ALIAS_COMMANDS.contains(cmd)) {
+                    continue;
+                }
+                if self.is_unavailable(command) {
                     continue;
                 }
                 out.push((command.clone(), None));
@@ -260,10 +272,13 @@ impl CommandPopup {
 
         out.extend(exact);
         out.extend(prefix);
+        if self.side_conversation_active {
+            out.sort_by_key(|(item, _)| self.is_unavailable(item));
+        }
         out
     }
 
-    fn filtered_items(&self) -> Vec<CommandItem> {
+    pub(crate) fn filtered_items(&self) -> Vec<CommandItem> {
         self.filtered().into_iter().map(|(c, _)| c).collect()
     }
 
@@ -289,11 +304,13 @@ impl CommandPopup {
                     }
                     _ => (name, Vec::new(), false),
                 };
-                let mut selection_prefix = vec![if self.state.selected_idx == Some(index) {
-                    "› ".into()
-                } else {
-                    "  ".into()
-                }];
+                let unavailable = self.is_unavailable(&item);
+                let mut selection_prefix =
+                    vec![if self.state.selected_idx == Some(index) && !unavailable {
+                        "› ".into()
+                    } else {
+                        "  ".into()
+                    }];
                 selection_prefix.extend(name_prefix_spans);
                 GenericDisplayRow {
                     category_tag: None,
@@ -304,8 +321,9 @@ impl CommandPopup {
                     display_shortcut: None,
                     description,
                     wrap_indent: None,
-                    is_disabled,
-                    disabled_reason: None,
+                    is_disabled: is_disabled || unavailable,
+                    disabled_reason: unavailable
+                        .then(|| "not available in a side conversation".to_string()),
                 }
             })
             .collect()
@@ -314,14 +332,24 @@ impl CommandPopup {
     /// Move the selection cursor one step up.
     pub(crate) fn move_up(&mut self) {
         let len = self.filtered_items().len();
-        self.state.move_up_wrap(len);
+        for _ in 0..len {
+            self.state.move_up_wrap(len);
+            if self.selected_item().is_some() {
+                break;
+            }
+        }
         self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
     }
 
     /// Move the selection cursor one step down.
     pub(crate) fn move_down(&mut self) {
         let matches_len = self.filtered_items().len();
-        self.state.move_down_wrap(matches_len);
+        for _ in 0..matches_len {
+            self.state.move_down_wrap(matches_len);
+            if self.selected_item().is_some() {
+                break;
+            }
+        }
         self.state
             .ensure_visible(matches_len, MAX_POPUP_ROWS.min(matches_len));
     }
@@ -332,7 +360,19 @@ impl CommandPopup {
         self.state
             .selected_idx
             .and_then(|idx| matches.get(idx).cloned())
-            .filter(|item| !matches!(item, CommandItem::WorkflowOption(_)))
+            .filter(|item| {
+                !matches!(item, CommandItem::WorkflowOption(_)) && !self.is_unavailable(item)
+            })
+    }
+
+    fn is_unavailable(&self, item: &CommandItem) -> bool {
+        self.side_conversation_active
+            && match item {
+                CommandItem::Builtin(cmd) => !cmd.available_in_side_conversation(),
+                CommandItem::ServiceTier(_)
+                | CommandItem::Workflow(_)
+                | CommandItem::WorkflowOption(_) => true,
+            }
     }
 
     pub(crate) fn unique_workflow_option_name_completion(&self) -> Option<String> {
@@ -518,6 +558,44 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
+
+    #[test]
+    fn unavailable_side_conversation_command_is_shown_only_when_searched() {
+        let mut popup = CommandPopup::new(
+            CommandPopupFlags {
+                side_conversation_active: true,
+                ..CommandPopupFlags::default()
+            },
+            Vec::new(),
+        );
+        popup.on_composer_text_change("/".to_string());
+        assert!(
+            !popup
+                .filtered_items()
+                .contains(&CommandItem::Builtin(SlashCommand::Archive))
+        );
+
+        popup.on_composer_text_change("/arch".to_string());
+        assert_eq!(
+            popup.filtered_items(),
+            vec![CommandItem::Builtin(SlashCommand::Archive)]
+        );
+        assert_eq!(popup.selected_item(), None);
+
+        let width = 76;
+        let area = Rect::new(
+            /*x*/ 0,
+            /*y*/ 0,
+            width,
+            popup.calculate_required_height(width),
+        );
+        let mut buf = Buffer::empty(area);
+        popup.render_ref(area, &mut buf);
+        insta::assert_snapshot!("side_conversation_unavailable_command", format!("{buf:?}"));
+        popup.on_composer_text_change("/a".to_string());
+        popup.move_up();
+        assert!(popup.selected_item().is_some());
+    }
 
     #[test]
     fn filter_includes_init_when_typing_prefix() {

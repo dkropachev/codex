@@ -55,6 +55,7 @@ async fn resume_replays_usage_with_its_completed_compaction_item_id() -> Result<
         event_line(EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: turn_id.to_string(),
             root_turn_id: None,
+            turn_attribution: None,
             trace_id: None,
             started_at: None,
             model_context_window: None,

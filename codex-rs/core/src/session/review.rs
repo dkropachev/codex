@@ -80,6 +80,7 @@ pub(super) async fn review(sess: &Arc<Session>, sub_id: String, review_request: 
                 &turn_context,
                 EventMsg::TurnComplete(TurnCompleteEvent {
                     turn_id: sub_id,
+                    root_turn_id: Some(turn_context.root_turn_id()),
                     last_agent_message: None,
                     error: terminal_error,
                     started_at: None,

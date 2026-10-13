@@ -9,18 +9,6 @@ use codex_protocol::turn_input::TurnInputSubmission;
 use super::CodexThread;
 
 impl CodexThread {
-    /// Starts inferred user or automatic work only when the thread is idle.
-    ///
-    /// Core declines the input without recording or enqueueing it when idle
-    /// work cannot start.
-    pub async fn start_turn_if_idle(
-        &self,
-        request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
-    ) -> CodexResult<StartIfIdleSubmission> {
-        self.start_turn_if_idle_with_mode(request, TurnInputMode::StartIfIdle)
-            .await
-    }
-
     /// Starts a user-owned regular turn only when the thread is idle.
     ///
     /// Unlike inferred idle starts, empty user input retains ordinary user-turn
@@ -39,9 +27,13 @@ impl CodexThread {
         mode: TurnInputMode,
     ) -> CodexResult<StartIfIdleSubmission> {
         match self.submit_turn_input_with_mode(request, mode).await? {
-            TurnInputSubmission::Started { turn_id } => {
-                Ok(StartIfIdleSubmission::Started { turn_id })
-            }
+            TurnInputSubmission::Started {
+                turn_id,
+                root_turn_id,
+            } => Ok(StartIfIdleSubmission::Started {
+                turn_id,
+                root_turn_id,
+            }),
             TurnInputSubmission::NotSubmitted { reason } => {
                 Ok(StartIfIdleSubmission::NotSubmitted { reason })
             }
