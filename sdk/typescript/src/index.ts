@@ -37,7 +37,6 @@ export type {
   ModelReasoningEffort,
   WebSearchMode,
 } from "./threadOptions";
-export type { TurnOptions } from "./turnOptions";
 export type {
   WorkflowContext,
   WorkflowUserInputAnswer,
