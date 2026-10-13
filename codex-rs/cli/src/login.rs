@@ -608,50 +608,12 @@ pub async fn run_logout(
     all: bool,
 ) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
-    let auth_route_config = config.auth_route_config();
-
-    // Cleanup is independent of the current feature gate. Retain the grant lock
-    // through account removal so another process cannot commit a late login.
-    let enterprise_guard = async {
-        let Some(profile) = &config.mcp_enterprise_managed_auth else {
-            return Ok::<_, anyhow::Error>(None);
-        };
-        let auth = config
-            .auth_config()
-            .load_auth(/*enable_codex_api_key_env*/ false)
-            .await?;
-        let Some(scope) = ema_auth_scope(auth.as_ref()) else {
-            return Ok(None);
-        };
-        EnterpriseOAuthCredentialGuard::acquire(
-            &profile.idp.credential_name(&scope),
-            &profile.idp.issuer,
-            config.auth_keyring_backend_kind(),
-        )
-        .await
-        .map(Some)
-    }
-    .await;
-    let cleanup_failed = match &enterprise_guard {
-        Ok(Some(guard)) => guard.delete_tokens().is_err(),
-        Ok(None) => false,
-        Err(_) => true,
-    };
-    if cleanup_failed {
-        eprintln!("Warning: failed to remove enterprise authorization; continuing account logout");
-    }
 
     let result = if all {
         logout_all_accounts(&config).await
     } else {
         let account_home = account_codex_home(&config.codex_home, account_id.as_deref());
-        logout_with_revoke(
-            &account_home,
-            config.cli_auth_credentials_store_mode,
-            config.auth_keyring_backend_kind(),
-            &auth_route_config,
-        )
-        .await
+        logout_account(&config, &account_home).await
     };
 
     let logged_out = match result {
@@ -661,8 +623,6 @@ pub async fn run_logout(
             std::process::exit(1);
         }
     };
-    drop(enterprise_guard);
-
     let cleared_bedrock_config = if (all || account_id.is_none())
         && let Some(paths) = ConfigEditsBuilder::bedrock_provider_config_paths_to_clear(&config)
     {
@@ -690,15 +650,50 @@ pub async fn run_logout(
     std::process::exit(0);
 }
 
-async fn logout_all_accounts(config: &Config) -> std::io::Result<bool> {
-    let auth_route_config = config.auth_route_config();
-    let mut removed = logout_with_revoke(
-        &config.codex_home,
+async fn logout_account(config: &Config, account_home: &Path) -> std::io::Result<bool> {
+    // Cleanup is independent of the current feature gate. Retain the grant lock
+    // through account removal so another process cannot commit a late login.
+    let enterprise_guard = async {
+        let Some(profile) = &config.mcp_enterprise_managed_auth else {
+            return Ok::<_, anyhow::Error>(None);
+        };
+        let mut auth_config = config.auth_config();
+        auth_config.codex_home = account_home.to_path_buf();
+        let auth = auth_config
+            .load_auth(/*enable_codex_api_key_env*/ false)
+            .await?;
+        let Some(scope) = ema_auth_scope(auth.as_ref()) else {
+            return Ok(None);
+        };
+        EnterpriseOAuthCredentialGuard::acquire(
+            &profile.idp.credential_name(&scope),
+            &profile.idp.issuer,
+            config.auth_keyring_backend_kind(),
+        )
+        .await
+        .map(Some)
+    }
+    .await;
+    let cleanup_failed = match &enterprise_guard {
+        Ok(Some(guard)) => guard.delete_tokens().is_err(),
+        Ok(None) => false,
+        Err(_) => true,
+    };
+    if cleanup_failed {
+        eprintln!("Warning: failed to remove enterprise authorization; continuing account logout");
+    }
+
+    logout_with_revoke(
+        account_home,
         config.cli_auth_credentials_store_mode,
         config.auth_keyring_backend_kind(),
-        &auth_route_config,
+        &config.auth_route_config(),
     )
-    .await?;
+    .await
+}
+
+async fn logout_all_accounts(config: &Config) -> std::io::Result<bool> {
+    let mut removed = logout_account(config, &config.codex_home).await?;
     let accounts_dir = config.codex_home.join("accounts");
     let Ok(entries) = std::fs::read_dir(accounts_dir) else {
         return Ok(removed);
@@ -708,13 +703,7 @@ async fn logout_all_accounts(config: &Config) -> std::io::Result<bool> {
         if !path.is_dir() {
             continue;
         }
-        removed |= logout_with_revoke(
-            &path,
-            config.cli_auth_credentials_store_mode,
-            config.auth_keyring_backend_kind(),
-            &auth_route_config,
-        )
-        .await?;
+        removed |= logout_account(config, &path).await?;
     }
     Ok(removed)
 }

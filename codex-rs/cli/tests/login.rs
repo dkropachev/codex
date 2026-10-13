@@ -306,6 +306,132 @@ fn logout_named_account_preserves_default_bedrock_auth_and_config() -> Result<()
     Ok(())
 }
 
+#[tokio::test]
+async fn logout_cleans_up_enterprise_authorization_for_selected_accounts() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(path("/backend-api/wham/config/bundle"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "config_toml": {"enterprise_managed": []},
+            "requirements_toml": {"enterprise_managed": []},
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/revoke"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let home = TempDir::new()?;
+    let named_home = home.path().join("accounts/work");
+    std::fs::create_dir_all(&named_home)?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "cli_auth_credentials_store = \"file\"\nchatgpt_base_url = \"{}/backend-api\"\n[mcp_enterprise_managed_auth.idp]\nissuer = \"https://idp.example\"\nclient_id = \"enterprise-client\"\n",
+            server.uri()
+        ),
+    )?;
+    // A failed lock acquisition makes each attempted grant cleanup observable
+    // without reading or changing the host's keyring.
+    std::fs::write(home.path().join("mcp-oauth-locks"), "not a directory")?;
+    codex_login::login_with_api_key(
+        home.path(),
+        "sk-default",
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+    write_chatgpt_auth(
+        &named_home,
+        ChatGptAuthFixture::new("named-access")
+            .account_id("named-workspace")
+            .chatgpt_user_id("named-user"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let output = codex_command(home.path())?
+        .current_dir(home.path())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .env(
+            REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR,
+            format!("{}/oauth/revoke", server.uri()),
+        )
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .env_remove("OPENAI_API_KEY")
+        .args(["logout", "--account", "work"])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("failed to remove enterprise authorization")
+    );
+    assert_eq!(read_auth_json(home.path())?["OPENAI_API_KEY"], "sk-default");
+    assert!(!named_home.join("auth.json").exists());
+
+    write_chatgpt_auth(
+        home.path(),
+        ChatGptAuthFixture::new("default-access")
+            .account_id("default-workspace")
+            .chatgpt_user_id("default-user"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let default_auth = read_auth_json(home.path())?;
+    let output = codex_command(home.path())?
+        .current_dir(home.path())
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .env_remove("OPENAI_API_KEY")
+        .args(["logout", "--account", "work"])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stderr)
+            .contains("failed to remove enterprise authorization")
+    );
+    assert_eq!(read_auth_json(home.path())?, default_auth);
+
+    write_chatgpt_auth(
+        &named_home,
+        ChatGptAuthFixture::new("named-access")
+            .account_id("named-workspace")
+            .chatgpt_user_id("named-user"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let output = codex_command(home.path())?
+        .current_dir(home.path())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .env(
+            REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR,
+            format!("{}/oauth/revoke", server.uri()),
+        )
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .env_remove("OPENAI_API_KEY")
+        .args(["logout", "--all"])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr)
+            .matches("failed to remove enterprise authorization")
+            .count(),
+        2
+    );
+    assert!(!home.path().join("auth.json").exists());
+    assert!(!named_home.join("auth.json").exists());
+    Ok(())
+}
+
 #[test]
 fn login_with_access_token_rejects_invalid_jwt() -> Result<()> {
     let codex_home = TempDir::new()?;
