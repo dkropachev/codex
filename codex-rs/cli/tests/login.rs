@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -429,6 +430,86 @@ async fn logout_cleans_up_enterprise_authorization_for_selected_accounts() -> Re
     );
     assert!(!home.path().join("auth.json").exists());
     assert!(!named_home.join("auth.json").exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn logout_uses_stored_account_identity_with_ambient_access_token() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(path("/backend-api/wham/config/bundle"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "config_toml": {"enterprise_managed": []},
+            "requirements_toml": {"enterprise_managed": []},
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "email": "ambient@example.com",
+            "chatgpt_user_id": "ambient-user",
+            "chatgpt_account_id": "ambient-workspace",
+            "chatgpt_plan_type": "enterprise",
+            "chatgpt_account_is_fedramp": false,
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/revoke"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let home = TempDir::new()?;
+    let named_home = home.path().join("accounts/work");
+    std::fs::create_dir_all(&named_home)?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "cli_auth_credentials_store = \"file\"\nchatgpt_base_url = \"{}/backend-api\"\n[mcp_enterprise_managed_auth.idp]\nissuer = \"https://idp.example\"\nclient_id = \"enterprise-client\"\n",
+            server.uri()
+        ),
+    )?;
+    let mut expected_lock_files = None;
+    for ambient_token in [None, Some("at-ambient")] {
+        write_chatgpt_auth(
+            &named_home,
+            ChatGptAuthFixture::new("named-access")
+                .account_id("named-workspace")
+                .chatgpt_user_id("named-user"),
+            AuthCredentialsStoreMode::File,
+        )?;
+        let mut command = codex_command(home.path())?;
+        command
+            .current_dir(home.path())
+            .env("NO_PROXY", "127.0.0.1,localhost")
+            .env("no_proxy", "127.0.0.1,localhost")
+            .env("CODEX_AUTHAPI_BASE_URL", server.uri())
+            .env(
+                REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR,
+                format!("{}/oauth/revoke", server.uri()),
+            )
+            .env_remove("OPENAI_API_KEY")
+            .args(["logout", "--account", "work"]);
+        if let Some(token) = ambient_token {
+            command.env(CODEX_ACCESS_TOKEN_ENV_VAR, token);
+        } else {
+            command.env_remove(CODEX_ACCESS_TOKEN_ENV_VAR);
+        }
+        command
+            .assert()
+            .success()
+            .stderr(contains("Successfully logged out"));
+
+        let lock_files: BTreeSet<_> = std::fs::read_dir(home.path().join("mcp-oauth-locks"))?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<std::io::Result<_>>()?;
+        assert!(!lock_files.is_empty());
+        if ambient_token.is_none() {
+            expected_lock_files = Some(lock_files);
+        } else {
+            assert_eq!(Some(lock_files), expected_lock_files);
+        }
+    }
     Ok(())
 }
 

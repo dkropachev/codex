@@ -7,6 +7,7 @@
 //! into a one-shot CLI command while still producing a durable `codex-login.log` artifact that
 //! support can request from users.
 
+use codex_config::McpEmaAuthScope;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEdit;
@@ -15,8 +16,11 @@ use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::AuthRouteConfig;
 use codex_login::CLIENT_ID;
+use codex_login::CodexAuth;
 use codex_login::ServerOptions;
+use codex_login::auth::AgentIdentityStorage;
 use codex_login::is_workload_identity_selected;
+use codex_login::load_auth_dot_json;
 use codex_login::login_with_access_token;
 use codex_login::login_with_agent_identity;
 use codex_login::login_with_api_key;
@@ -657,12 +661,62 @@ async fn logout_account(config: &Config, account_home: &Path) -> std::io::Result
         let Some(profile) = &config.mcp_enterprise_managed_auth else {
             return Ok::<_, anyhow::Error>(None);
         };
-        let mut auth_config = config.auth_config();
-        auth_config.codex_home = account_home.to_path_buf();
-        let auth = auth_config
-            .load_auth(/*enable_codex_api_key_env*/ false)
-            .await?;
-        let Some(scope) = ema_auth_scope(auth.as_ref()) else {
+        let Some(auth) = load_auth_dot_json(
+            account_home,
+            config.cli_auth_credentials_store_mode,
+            config.auth_keyring_backend_kind(),
+        )?
+        else {
+            return Ok(None);
+        };
+        let mode = auth.auth_mode.unwrap_or_else(|| {
+            if auth.personal_access_token.is_some() {
+                AuthMode::PersonalAccessToken
+            } else if auth.bedrock_api_key.is_some() {
+                AuthMode::BedrockApiKey
+            } else if auth.bedrock_access_keys.is_some() {
+                AuthMode::BedrockAccessKeys
+            } else if auth.openai_api_key.is_some() {
+                AuthMode::ApiKey
+            } else {
+                AuthMode::Chatgpt
+            }
+        });
+        let scope = match mode {
+            AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => auth.tokens.and_then(|tokens| {
+                McpEmaAuthScope::new(tokens.id_token.chatgpt_user_id?, tokens.account_id?)
+            }),
+            AuthMode::AgentIdentity => match auth.agent_identity {
+                Some(AgentIdentityStorage::Record(record)) => {
+                    McpEmaAuthScope::new(record.chatgpt_user_id, record.account_id)
+                }
+                Some(AgentIdentityStorage::Jwt(jwt)) => {
+                    let auth = CodexAuth::from_agent_identity_jwt(
+                        &jwt,
+                        Some(&config.chatgpt_base_url),
+                        &config.auth_route_config(),
+                    )
+                    .await?;
+                    ema_auth_scope(Some(&auth))
+                }
+                None => None,
+            },
+            AuthMode::PersonalAccessToken => {
+                if let Some(token) = auth.personal_access_token {
+                    let auth =
+                        CodexAuth::from_personal_access_token(&token, &config.auth_route_config())
+                            .await?;
+                    ema_auth_scope(Some(&auth))
+                } else {
+                    None
+                }
+            }
+            AuthMode::ApiKey
+            | AuthMode::Headers
+            | AuthMode::BedrockApiKey
+            | AuthMode::BedrockAccessKeys => None,
+        };
+        let Some(scope) = scope else {
             return Ok(None);
         };
         EnterpriseOAuthCredentialGuard::acquire(
