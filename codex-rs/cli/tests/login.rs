@@ -598,6 +598,32 @@ async fn logout_finds_saved_pat_scope_after_file_to_keyring_switch() -> Result<(
     Ok(())
 }
 
+#[test]
+fn keyring_logout_infers_legacy_file_scope() -> Result<()> {
+    let home = TempDir::new()?;
+    write_chatgpt_auth(
+        home.path(),
+        ChatGptAuthFixture::new("legacy-access")
+            .account_id("legacy-workspace")
+            .chatgpt_user_id("legacy-user"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        "cli_auth_credentials_store = \"keyring\"\n[mcp_enterprise_managed_auth.idp]\nissuer = \"https://idp.example\"\nclient_id = \"enterprise-client\"\n",
+    )?;
+    std::fs::write(home.path().join("mcp-oauth-locks"), "not a directory")?;
+
+    codex_command(home.path())?
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .args(["logout"])
+        .assert()
+        .success()
+        .stderr(contains("failed to remove enterprise authorization"));
+    assert!(!home.path().join("auth.json").exists());
+    Ok(())
+}
+
 #[tokio::test]
 async fn logout_uses_stored_account_identity_with_ambient_access_token() -> Result<()> {
     let server = MockServer::start().await;

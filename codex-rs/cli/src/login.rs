@@ -717,6 +717,7 @@ async fn logout_account(config: &Config, account_home: &Path) -> std::io::Result
     let mut saved_guards = Vec::new();
     let mut saved_cleanup_failed = false;
     let mut seen_scopes = std::collections::HashSet::new();
+    let mut stored_auth = Vec::new();
     let stores_to_delete: &[AuthCredentialsStoreMode] = match config.cli_auth_credentials_store_mode
     {
         AuthCredentialsStoreMode::File => &[AuthCredentialsStoreMode::File],
@@ -726,8 +727,24 @@ async fn logout_account(config: &Config, account_home: &Path) -> std::io::Result
         ],
         AuthCredentialsStoreMode::Ephemeral => &[],
     };
-    for &mode in stores_to_delete {
-        match load_auth_dot_json(account_home, mode, config.auth_keyring_backend_kind()) {
+    let mut stores = stores_to_delete
+        .iter()
+        .copied()
+        .map(|mode| (mode, config.auth_keyring_backend_kind()))
+        .collect::<Vec<_>>();
+    // Secrets logout also removes the older direct-keyring entry.
+    if matches!(
+        config.cli_auth_credentials_store_mode,
+        AuthCredentialsStoreMode::Keyring | AuthCredentialsStoreMode::Auto
+    ) && config.auth_keyring_backend_kind() == AuthKeyringBackendKind::Secrets
+    {
+        stores.push((
+            AuthCredentialsStoreMode::Keyring,
+            AuthKeyringBackendKind::Direct,
+        ));
+    }
+    for (mode, backend) in stores {
+        match load_auth_dot_json(account_home, mode, backend) {
             Ok(Some(auth)) => {
                 if let Some((credential_name, issuer)) = saved_scope(&auth)
                     && seen_scopes.insert((credential_name.clone(), issuer.clone()))
@@ -746,96 +763,96 @@ async fn logout_account(config: &Config, account_home: &Path) -> std::io::Result
                         Err(_) => saved_cleanup_failed = true,
                     }
                 }
+                stored_auth.push(auth);
             }
             Ok(None) => {}
             // Report the unreadable store, but still clean scopes from other readable stores.
             Err(_) => saved_cleanup_failed = true,
         }
     }
-    let enterprise_guard = async {
-        let Some(auth) = load_auth_dot_json(
-            account_home,
-            config.cli_auth_credentials_store_mode,
-            config.auth_keyring_backend_kind(),
-        )?
-        else {
-            return Ok::<_, anyhow::Error>(None);
-        };
-        let mode = auth.auth_mode.unwrap_or_else(|| {
-            if auth.personal_access_token.is_some() {
-                AuthMode::PersonalAccessToken
-            } else if auth.bedrock_api_key.is_some() {
-                AuthMode::BedrockApiKey
-            } else if auth.bedrock_access_keys.is_some() {
-                AuthMode::BedrockAccessKeys
-            } else if auth.openai_api_key.is_some() {
-                AuthMode::ApiKey
-            } else {
-                AuthMode::Chatgpt
-            }
-        });
-        if saved_scope(&auth).is_some() {
-            return Ok(None);
-        }
-        let Some(profile) = &config.mcp_enterprise_managed_auth else {
-            return Ok(None);
-        };
-        let scope = match mode {
-            AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => auth.tokens.and_then(|tokens| {
-                McpEmaAuthScope::new(tokens.id_token.chatgpt_user_id?, tokens.account_id?)
-            }),
-            AuthMode::AgentIdentity => match auth.agent_identity {
-                Some(AgentIdentityStorage::Record(record)) => {
-                    McpEmaAuthScope::new(record.chatgpt_user_id, record.account_id)
-                }
-                Some(AgentIdentityStorage::Jwt(jwt)) => {
-                    let auth = CodexAuth::from_agent_identity_jwt(
-                        &jwt,
-                        Some(&config.chatgpt_base_url),
-                        &config.auth_route_config(),
-                    )
-                    .await?;
-                    ema_auth_scope(Some(&auth))
-                }
-                None => None,
-            },
-            AuthMode::PersonalAccessToken => {
-                if let Some(token) = auth.personal_access_token {
-                    let auth =
-                        CodexAuth::from_personal_access_token(&token, &config.auth_route_config())
-                            .await?;
-                    ema_auth_scope(Some(&auth))
+    for auth in stored_auth {
+        let enterprise_guard = async {
+            let mode = auth.auth_mode.unwrap_or_else(|| {
+                if auth.personal_access_token.is_some() {
+                    AuthMode::PersonalAccessToken
+                } else if auth.bedrock_api_key.is_some() {
+                    AuthMode::BedrockApiKey
+                } else if auth.bedrock_access_keys.is_some() {
+                    AuthMode::BedrockAccessKeys
+                } else if auth.openai_api_key.is_some() {
+                    AuthMode::ApiKey
                 } else {
-                    None
+                    AuthMode::Chatgpt
                 }
+            });
+            if saved_scope(&auth).is_some() {
+                return Ok(None);
             }
-            AuthMode::ApiKey
-            | AuthMode::Headers
-            | AuthMode::BedrockApiKey
-            | AuthMode::BedrockAccessKeys => None,
-        };
-        let Some(scope) = scope else {
-            return Ok(None);
-        };
-        let credential_name = profile.idp.credential_name(&scope);
-        if seen_scopes.contains(&(credential_name.clone(), profile.idp.issuer.clone())) {
-            return Ok(None);
+            let Some(profile) = &config.mcp_enterprise_managed_auth else {
+                return Ok(None);
+            };
+            let scope = match mode {
+                AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => auth.tokens.and_then(|tokens| {
+                    McpEmaAuthScope::new(tokens.id_token.chatgpt_user_id?, tokens.account_id?)
+                }),
+                AuthMode::AgentIdentity => match auth.agent_identity {
+                    Some(AgentIdentityStorage::Record(record)) => {
+                        McpEmaAuthScope::new(record.chatgpt_user_id, record.account_id)
+                    }
+                    Some(AgentIdentityStorage::Jwt(jwt)) => {
+                        let auth = CodexAuth::from_agent_identity_jwt(
+                            &jwt,
+                            Some(&config.chatgpt_base_url),
+                            &config.auth_route_config(),
+                        )
+                        .await?;
+                        ema_auth_scope(Some(&auth))
+                    }
+                    None => None,
+                },
+                AuthMode::PersonalAccessToken => {
+                    if let Some(token) = auth.personal_access_token {
+                        let auth = CodexAuth::from_personal_access_token(
+                            &token,
+                            &config.auth_route_config(),
+                        )
+                        .await?;
+                        ema_auth_scope(Some(&auth))
+                    } else {
+                        None
+                    }
+                }
+                AuthMode::ApiKey
+                | AuthMode::Headers
+                | AuthMode::BedrockApiKey
+                | AuthMode::BedrockAccessKeys => None,
+            };
+            let Some(scope) = scope else {
+                return Ok(None);
+            };
+            let credential_name = profile.idp.credential_name(&scope);
+            if !seen_scopes.insert((credential_name.clone(), profile.idp.issuer.clone())) {
+                return Ok(None);
+            }
+            EnterpriseOAuthCredentialGuard::acquire(
+                &credential_name,
+                &profile.idp.issuer,
+                config.auth_keyring_backend_kind(),
+            )
+            .await
+            .map(Some)
         }
-        EnterpriseOAuthCredentialGuard::acquire(
-            &credential_name,
-            &profile.idp.issuer,
-            config.auth_keyring_backend_kind(),
-        )
-        .await
-        .map(Some)
+        .await;
+        match enterprise_guard {
+            Ok(Some(guard)) => {
+                saved_cleanup_failed |= guard.delete_tokens().is_err();
+                saved_guards.push(guard);
+            }
+            Ok(None) => {}
+            Err(_) => saved_cleanup_failed = true,
+        }
     }
-    .await;
-    let legacy_cleanup_failed = match &enterprise_guard {
-        Ok(Some(guard)) => guard.delete_tokens().is_err(),
-        Ok(None) => false,
-        Err(_) => true,
-    };
-    if saved_cleanup_failed || legacy_cleanup_failed {
+    if saved_cleanup_failed {
         eprintln!("Warning: failed to remove enterprise authorization; continuing account logout");
     }
 
