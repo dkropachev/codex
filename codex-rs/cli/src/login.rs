@@ -17,6 +17,7 @@ use codex_login::AuthManager;
 use codex_login::AuthRouteConfig;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
+use codex_login::EnterpriseAccessToken;
 use codex_login::ServerOptions;
 use codex_login::auth::AgentIdentityStorage;
 use codex_login::is_workload_identity_selected;
@@ -292,13 +293,15 @@ pub async fn run_login_with_agent_identity(
     let login_result = if let Some(profile) = &config.mcp_enterprise_managed_auth {
         login_with_access_token_for_enterprise(
             &config.codex_home,
-            &agent_identity,
+            EnterpriseAccessToken {
+                token: &agent_identity,
+                idp: &profile.idp,
+            },
             config.cli_auth_credentials_store_mode,
             effective_chatgpt_workspaces.as_deref(),
             Some(&config.chatgpt_base_url),
             config.auth_keyring_backend_kind(),
             &auth_route_config,
-            &profile.idp,
         )
         .await
     } else {
@@ -346,13 +349,15 @@ pub async fn run_login_with_access_token(
     let login_result = if let Some(profile) = &config.mcp_enterprise_managed_auth {
         login_with_access_token_for_enterprise(
             &config.codex_home,
-            &access_token,
+            EnterpriseAccessToken {
+                token: &access_token,
+                idp: &profile.idp,
+            },
             config.cli_auth_credentials_store_mode,
             effective_chatgpt_workspaces.as_deref(),
             Some(&config.chatgpt_base_url),
             config.auth_keyring_backend_kind(),
             &auth_route_config,
-            &profile.idp,
         )
         .await
     } else {

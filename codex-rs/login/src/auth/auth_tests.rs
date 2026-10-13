@@ -161,13 +161,15 @@ async fn login_with_access_token_writes_agent_identity_jwt() {
     };
     super::login_with_access_token_for_enterprise(
         dir.path(),
-        &agent_identity,
+        super::EnterpriseAccessToken {
+            token: &agent_identity,
+            idp: &idp,
+        },
         AuthCredentialsStoreMode::File,
         /*forced_chatgpt_workspace_id*/ None,
         Some(&chatgpt_base_url),
         AuthKeyringBackendKind::default(),
         &crate::test_support::transport_default_auth_route_config(),
-        &idp,
     )
     .await
     .expect("login_with_access_token should succeed");

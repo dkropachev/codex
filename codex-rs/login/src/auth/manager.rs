@@ -1071,51 +1071,62 @@ pub async fn login_with_access_token(
 ) -> std::io::Result<()> {
     save_access_token(
         codex_home,
-        access_token,
+        AccessTokenToSave::Standard(access_token),
         auth_credentials_store_mode,
         forced_chatgpt_workspace_id,
         chatgpt_base_url,
         keyring_backend_kind,
         auth_route_config,
-        /*ema_idp*/ None,
     )
     .await
+}
+
+/// A verified access token and the trusted enterprise IdP profile used by this login.
+pub struct EnterpriseAccessToken<'a> {
+    pub token: &'a str,
+    pub idp: &'a codex_config::McpServerIdpOAuthConfig,
 }
 
 /// Save a verified access token with the trusted enterprise IdP profile used by this login.
 pub async fn login_with_access_token_for_enterprise(
     codex_home: &Path,
-    access_token: &str,
+    credentials: EnterpriseAccessToken<'_>,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     forced_chatgpt_workspace_id: Option<&[String]>,
     chatgpt_base_url: Option<&str>,
     keyring_backend_kind: AuthKeyringBackendKind,
     auth_route_config: &AuthRouteConfig,
-    ema_idp: &codex_config::McpServerIdpOAuthConfig,
 ) -> std::io::Result<()> {
     save_access_token(
         codex_home,
-        access_token,
+        AccessTokenToSave::Enterprise(credentials),
         auth_credentials_store_mode,
         forced_chatgpt_workspace_id,
         chatgpt_base_url,
         keyring_backend_kind,
         auth_route_config,
-        Some(ema_idp),
     )
     .await
 }
 
+enum AccessTokenToSave<'a> {
+    Standard(&'a str),
+    Enterprise(EnterpriseAccessToken<'a>),
+}
+
 async fn save_access_token(
     codex_home: &Path,
-    access_token: &str,
+    credentials: AccessTokenToSave<'_>,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     forced_chatgpt_workspace_id: Option<&[String]>,
     chatgpt_base_url: Option<&str>,
     keyring_backend_kind: AuthKeyringBackendKind,
     auth_route_config: &AuthRouteConfig,
-    ema_idp: Option<&codex_config::McpServerIdpOAuthConfig>,
 ) -> std::io::Result<()> {
+    let (access_token, ema_idp) = match credentials {
+        AccessTokenToSave::Standard(token) => (token, None),
+        AccessTokenToSave::Enterprise(EnterpriseAccessToken { token, idp }) => (token, Some(idp)),
+    };
     let auth_dot_json = match classify_codex_access_token(access_token) {
         CodexAccessToken::PersonalAccessToken(access_token) => {
             let auth = PersonalAccessTokenAuth::load(access_token, auth_route_config).await?;
