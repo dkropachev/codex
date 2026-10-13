@@ -506,6 +506,7 @@ async fn migration_preserves_review_lifecycle_and_messages() {
             user_message("ordinary repeated prompt"),
             user_message("ordinary repeated prompt"),
             RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
+                root_turn_id: None,
                 turn_id: Some("ordinary-interrupted".to_string()),
                 reason: TurnAbortReason::Interrupted,
                 error: None,

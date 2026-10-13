@@ -83,7 +83,11 @@ async fn rate_limit_plaintext_loses_to_valid_error_header() {
                 }
             }))
             .unwrap();
-            let error = map_api_error(process_responses_event(event).unwrap_err().into_api_error());
+            let error = map_api_error(
+                process_responses_event(event, /*usage_limit_snapshot*/ None)
+                    .unwrap_err()
+                    .into_api_error(),
+            );
             assert_eq!(
                 error.retry_after(),
                 RetryAfter::from_delay(Duration::from_secs(expected_seconds))
@@ -105,7 +109,11 @@ async fn streamed_retry_after_uses_http_header_validation() {
             "response": {"error": {"code": "rate_limit_exceeded", "message": "Try again in 12 seconds.", "headers": error_headers}}
         }))
         .unwrap();
-        let error = map_api_error(process_responses_event(event).unwrap_err().into_api_error());
+        let error = map_api_error(
+            process_responses_event(event, /*usage_limit_snapshot*/ None)
+                .unwrap_err()
+                .into_api_error(),
+        );
         assert_eq!(
             error.retry_after(),
             RetryAfter::from_delay(Duration::from_secs(expected_seconds))
@@ -125,7 +133,11 @@ async fn retry_header_survives_other_failed_responses() {
             "response": {"error": {"code": code, "headers": {"retry-after": "7"}}},
         }))
         .unwrap();
-        let error = map_api_error(process_responses_event(event).unwrap_err().into_api_error());
+        let error = map_api_error(
+            process_responses_event(event, /*usage_limit_snapshot*/ None)
+                .unwrap_err()
+                .into_api_error(),
+        );
         assert_eq!(
             (
                 error.to_codex_protocol_error(),
@@ -150,7 +162,11 @@ async fn retry_header_does_not_override_terminal_errors() {
             "response": {"error": {"code": code, "headers": {"retry-after": "1"}}}
         }))
         .unwrap();
-        let error = map_api_error(process_responses_event(event).unwrap_err().into_api_error());
+        let error = map_api_error(
+            process_responses_event(event, /*usage_limit_snapshot*/ None)
+                .unwrap_err()
+                .into_api_error(),
+        );
         assert_eq!(error.retry_delay(/*retry_count*/ 1), None, "{code}");
     }
 }
