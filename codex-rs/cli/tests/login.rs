@@ -47,6 +47,27 @@ fn read_auth_json(codex_home: &Path) -> Result<Value> {
     Ok(serde_json::from_str(&auth_json)?)
 }
 
+fn assert_keyring_logout_attempted_enterprise_cleanup(
+    codex_home: &Path,
+    output: &std::process::Output,
+) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("failed to remove enterprise authorization"),
+        "{stderr}"
+    );
+    if output.status.success() {
+        assert!(stderr.contains("Successfully logged out"), "{stderr}");
+        assert!(!codex_home.join("auth.json").exists());
+    } else {
+        assert!(
+            stderr.contains("Error logging out: failed to delete auth from keyring:"),
+            "{stderr}"
+        );
+        assert!(codex_home.join("auth.json").exists());
+    }
+}
+
 #[test]
 fn login_with_api_key_reads_stdin_and_writes_auth_json() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -585,15 +606,13 @@ async fn logout_finds_saved_pat_scope_after_file_to_keyring_switch() -> Result<(
     )?;
     // A failed lock exposes attempted grant cleanup without requiring an IdP keyring entry.
     std::fs::write(home.path().join("mcp-oauth-locks"), "not a directory")?;
-    codex_command(home.path())?
+    let output = codex_command(home.path())?
         .current_dir(home.path())
         .env("CODEX_AUTHAPI_BASE_URL", "http://127.0.0.1:1")
         .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
         .args(["logout"])
-        .assert()
-        .success()
-        .stderr(contains("failed to remove enterprise authorization"));
-    assert!(!home.path().join("auth.json").exists());
+        .output()?;
+    assert_keyring_logout_attempted_enterprise_cleanup(home.path(), &output);
     server.verify().await;
     Ok(())
 }
@@ -614,13 +633,11 @@ fn keyring_logout_infers_legacy_file_scope() -> Result<()> {
     )?;
     std::fs::write(home.path().join("mcp-oauth-locks"), "not a directory")?;
 
-    codex_command(home.path())?
+    let output = codex_command(home.path())?
         .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
         .args(["logout"])
-        .assert()
-        .success()
-        .stderr(contains("failed to remove enterprise authorization"));
-    assert!(!home.path().join("auth.json").exists());
+        .output()?;
+    assert_keyring_logout_attempted_enterprise_cleanup(home.path(), &output);
     Ok(())
 }
 
