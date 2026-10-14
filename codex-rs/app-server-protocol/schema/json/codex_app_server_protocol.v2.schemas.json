@@ -10635,6 +10635,21 @@
       ],
       "type": "object"
     },
+    "ManagedWorkflowEntry": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "managed": {
+          "$ref": "#/definitions/ManagedWorkflowInfo"
+        }
+      },
+      "required": [
+        "id",
+        "managed"
+      ],
+      "type": "object"
+    },
     "ManagedWorkflowInfo": {
       "properties": {
         "dismissedRelease": {

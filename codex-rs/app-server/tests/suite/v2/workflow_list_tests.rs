@@ -5,10 +5,13 @@ use std::sync::atomic::AtomicBool;
 use anyhow::Result;
 use app_test_support::TestAppServer;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ManagedWorkflowEntry;
 use codex_app_server_protocol::ManagedWorkflowInfo;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::WorkflowListParams;
 use codex_app_server_protocol::WorkflowListResponse;
+use codex_app_server_protocol::WorkflowManagedListParams;
+use codex_app_server_protocol::WorkflowManagedListResponse;
 use codex_app_server_protocol::WorkflowReleaseIdentity;
 use codex_app_server_protocol::WorkflowSummary;
 use codex_app_server_protocol::WorkflowUpdatePolicy;
@@ -193,6 +196,25 @@ async fn workflow_list_paginates_and_respects_project_override() -> Result<()> {
     assert_eq!(
         override_page.data[0].path,
         project_override.display().to_string()
+    );
+    let managed_page: WorkflowManagedListResponse = server
+        .request(|request_id| ClientRequest::WorkflowManagedList {
+            request_id,
+            params: WorkflowManagedListParams {
+                cursor: None,
+                limit: Some(10),
+            },
+        })
+        .await?;
+    assert_eq!(
+        managed_page,
+        WorkflowManagedListResponse {
+            data: vec![ManagedWorkflowEntry {
+                id: "team/build".into(),
+                managed: first.data[0].managed.clone().expect("managed release"),
+            }],
+            next_cursor: None,
+        }
     );
     let default_workflow = home.path().join(".codex/workflows/team/default");
     fs::create_dir_all(&default_workflow)?;
