@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/workflows__slash_commands.rs
+assertion_line: 372
+expression: "cells.iter().map(|cell|\nlines_to_single_string(cell).trim().to_string()).collect::<Vec<_>>().join(\"\\n\")"
+---
+• Model changed to gpt-5.6-sol medium for Workflow mode.
+■ Cannot load workflows: connection lost

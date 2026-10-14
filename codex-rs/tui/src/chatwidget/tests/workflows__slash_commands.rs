@@ -358,6 +358,27 @@ async fn workflow_management_shows_source_errors() {
 }
 
 #[tokio::test]
+async fn workflow_management_request_failure_is_visible() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    chat.dispatch_command(SlashCommand::Workflow);
+    let request_id = chat
+        .workflow_management_request_id
+        .expect("management request");
+    let cwd = chat.workflow_invocation_cwd();
+    chat.on_workflow_management_loaded(request_id, cwd, Err("connection lost".to_string()));
+
+    let cells = drain_insert_history_normalized(&mut rx);
+    insta::assert_snapshot!(
+        cells
+            .iter()
+            .map(|cell| lines_to_single_string(cell).trim().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+#[tokio::test]
 async fn workflow_management_discards_response_after_cwd_refresh() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
