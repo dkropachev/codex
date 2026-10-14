@@ -561,6 +561,7 @@ pub(crate) async fn run_turn(
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
+                    handoff_siblings,
                 } = sampling_request_output;
                 if model_needs_follow_up {
                     sess.input_queue
@@ -620,9 +621,30 @@ pub(crate) async fn run_turn(
                     );
                 }
 
-                let handoff_summary = sess
+                let mut handoff_summary = sess
                     .take_handoff_summary_request(&turn_context.sub_id)
                     .await;
+                let mut siblings = Vec::new();
+                if let Some(request) = &handoff_summary {
+                    match handoff_siblings.retain(
+                        sess.clone_history().await.annotated_items(),
+                        &request.call_id,
+                    ) {
+                        Ok(retained) => siblings = retained,
+                        Err(()) => {
+                            handoff_summary = None;
+                            let item = crate::context::ContextualUserFragment::into(
+                                crate::context::HandoffRejected,
+                            );
+                            sess.record_conversation_items(
+                                &turn_context,
+                                &step_context.settings.model_info,
+                                &[item],
+                            )
+                            .await;
+                        }
+                    }
+                }
                 let should_roll_over = needs_follow_up
                     && (handoff_summary.is_some()
                         || sess.take_new_context_window_request().await
@@ -639,8 +661,14 @@ pub(crate) async fn run_turn(
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if should_roll_over {
                     let compaction_result = if let Some(summary) = handoff_summary {
-                        crate::context_handoff::install_checkpoint(&sess, &step_context, summary)
-                            .await
+                        crate::context_handoff::install_checkpoint(
+                            &sess,
+                            &step_context,
+                            summary.summary,
+                            siblings,
+                            summary.cancellation_token,
+                        )
+                        .await
                     } else {
                         run_auto_compact(
                             &sess,
@@ -1787,6 +1815,7 @@ async fn run_sampling_request(
                 SamplingRequestResult {
                     needs_follow_up: true,
                     last_agent_message: None,
+                    handoff_siblings: Default::default(),
                 },
                 std::mem::take(original_input),
             ));
@@ -1966,6 +1995,7 @@ fn response_item_starts_visible_output(item: &ResponseItem) -> bool {
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
+    handoff_siblings: crate::context_handoff_siblings::HandoffSiblings,
 }
 
 #[derive(Debug)]
@@ -2713,6 +2743,7 @@ async fn try_run_sampling_request(
         });
     }
     let mut in_flight: FuturesOrdered<InFlightFuture<'static>> = FuturesOrdered::new();
+    let mut handoff_siblings = crate::context_handoff_siblings::HandoffSiblings::default();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
@@ -2784,6 +2815,7 @@ async fn try_run_sampling_request(
                 break Ok(SamplingRequestResult {
                     needs_follow_up: true,
                     last_agent_message,
+                    handoff_siblings: Default::default(),
                 });
             }
             Err(_) => break Err(CodexErr::TurnAborted),
@@ -2875,6 +2907,7 @@ async fn try_run_sampling_request(
                     continue;
                 }
 
+                handoff_siblings.observe(&item);
                 let mut ctx = HandleOutputCtx {
                     sess: sess.clone(),
                     step_context: Arc::clone(&step_context),
@@ -2945,6 +2978,7 @@ async fn try_run_sampling_request(
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
                         last_agent_message,
+                        handoff_siblings: Default::default(),
                     });
                 }
             }
@@ -3143,9 +3177,11 @@ async fn try_run_sampling_request(
                 if let Some(false) = end_turn {
                     needs_follow_up = true;
                 }
+                handoff_siblings.complete();
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,
+                    handoff_siblings: Default::default(),
                 });
             }
             ResponseEvent::OutputTextDelta(delta) => {
@@ -3369,10 +3405,15 @@ async fn try_run_sampling_request(
         }
     }
 
-    outcome.map_err(|err| SamplingRequestFailure {
-        err,
-        visible_output_started,
-    })
+    outcome
+        .map(|mut result| {
+            result.handoff_siblings = handoff_siblings;
+            result
+        })
+        .map_err(|err| SamplingRequestFailure {
+            err,
+            visible_output_started,
+        })
 }
 
 pub(crate) fn get_last_assistant_message_from_turn<'a>(

@@ -32,11 +32,18 @@ enum AutoCompactWindowPrefill {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct HandoffSummaryRequest {
+    pub(crate) call_id: String,
+    pub(crate) summary: String,
+    pub(crate) cancellation_token: CancellationToken,
+}
+
+#[derive(Debug, Clone)]
 pub(super) struct AutoCompactWindow {
     window_number: u64,
     ids: AutoCompactWindowIds,
     new_context_window_requested: bool,
-    handoff_summary_requested: Option<(String, String, CancellationToken)>,
+    handoff_summary_requested: Option<(String, HandoffSummaryRequest)>,
     /// Absolute input-token baseline for the current compaction window.
     ///
     /// `body_after_prefix` subtracts this from later active-context usage. It is
@@ -109,19 +116,21 @@ impl AutoCompactWindow {
     pub(super) fn request_handoff_summary(
         &mut self,
         turn_id: &str,
-        summary: String,
-        cancellation_token: CancellationToken,
+        request: HandoffSummaryRequest,
     ) {
-        self.handoff_summary_requested = Some((turn_id.to_string(), summary, cancellation_token));
+        self.handoff_summary_requested = Some((turn_id.to_string(), request));
     }
 
-    pub(super) fn take_handoff_summary_request(&mut self, turn_id: &str) -> Option<String> {
+    pub(super) fn take_handoff_summary_request(
+        &mut self,
+        turn_id: &str,
+    ) -> Option<HandoffSummaryRequest> {
         self.handoff_summary_requested
             .take()
-            .filter(|(owner, _, cancellation_token)| {
-                owner == turn_id && !cancellation_token.is_cancelled()
+            .filter(|(owner, request)| {
+                owner == turn_id && !request.cancellation_token.is_cancelled()
             })
-            .map(|(_, summary, _)| summary)
+            .map(|(_, request)| request)
     }
 
     /// Records the request-input side of the first server usage sample. The

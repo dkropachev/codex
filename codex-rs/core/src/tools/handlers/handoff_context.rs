@@ -68,12 +68,16 @@ impl ToolExecutor<ToolInvocation> for HandoffContextHandler {
                 .session
                 .request_handoff_summary(
                     &invocation.turn.sub_id,
-                    summary,
-                    invocation.cancellation_token,
+                    crate::state::HandoffSummaryRequest {
+                        call_id: invocation.call_id,
+                        summary,
+                        cancellation_token: invocation.cancellation_token,
+                    },
                 )
                 .await;
             Ok(boxed_tool_output(FunctionToolOutput::from_text(
-                "Context handoff queued.".to_string(),
+                "Context handoff queued, subject to complete bounded sibling retention."
+                    .to_string(),
                 Some(true),
             )))
         })

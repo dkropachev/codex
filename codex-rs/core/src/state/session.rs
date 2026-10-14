@@ -338,14 +338,16 @@ impl SessionState {
     pub(crate) fn request_handoff_summary(
         &mut self,
         turn_id: &str,
-        summary: String,
-        cancellation_token: CancellationToken,
+        request: super::HandoffSummaryRequest,
     ) {
         self.auto_compact_window
-            .request_handoff_summary(turn_id, summary, cancellation_token);
+            .request_handoff_summary(turn_id, request);
     }
 
-    pub(crate) fn take_handoff_summary_request(&mut self, turn_id: &str) -> Option<String> {
+    pub(crate) fn take_handoff_summary_request(
+        &mut self,
+        turn_id: &str,
+    ) -> Option<super::HandoffSummaryRequest> {
         self.auto_compact_window
             .take_handoff_summary_request(turn_id)
     }

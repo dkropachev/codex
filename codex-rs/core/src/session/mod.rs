@@ -4583,16 +4583,18 @@ impl Session {
     pub(crate) async fn request_handoff_summary(
         &self,
         turn_id: &str,
-        summary: String,
-        cancellation_token: CancellationToken,
+        request: crate::state::HandoffSummaryRequest,
     ) {
         self.state
             .lock()
             .await
-            .request_handoff_summary(turn_id, summary, cancellation_token);
+            .request_handoff_summary(turn_id, request);
     }
 
-    pub(crate) async fn take_handoff_summary_request(&self, turn_id: &str) -> Option<String> {
+    pub(crate) async fn take_handoff_summary_request(
+        &self,
+        turn_id: &str,
+    ) -> Option<crate::state::HandoffSummaryRequest> {
         self.state
             .lock()
             .await

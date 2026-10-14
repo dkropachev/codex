@@ -17,23 +17,33 @@ use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use codex_analytics::CompactionTrigger;
 use codex_features::Feature;
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::AgentStatus;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 /// Installs a model-provided summary without starting another model request.
 pub(crate) async fn install_checkpoint(
     sess: &Arc<Session>,
     step_context: &Arc<StepContext>,
     summary: String,
+    siblings: Vec<ResponseItemEnvelope>,
+    cancellation_token: CancellationToken,
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
+    if cancellation_token.is_cancelled() {
+        return Err(CodexErr::TurnAborted);
+    }
     match run_pre_compact_hooks(sess, turn_context, CompactionTrigger::Auto).await {
         PreCompactHookOutcome::Continue => {}
         PreCompactHookOutcome::Stopped => return Err(CodexErr::TurnAborted),
+    }
+    if cancellation_token.is_cancelled() {
+        return Err(CodexErr::TurnAborted);
     }
 
     let item = TurnItem::ContextCompaction(ContextCompactionItem::new());
@@ -61,7 +71,14 @@ pub(crate) async fn install_checkpoint(
             RETAINED_MESSAGE_TOKEN_BUDGET,
         ));
     }
+    new_history.extend(siblings);
+    if cancellation_token.is_cancelled() {
+        return Err(CodexErr::TurnAborted);
+    }
     let (window_number, window_ids) = sess.advance_auto_compact_window().await;
+    if cancellation_token.is_cancelled() {
+        return Err(CodexErr::TurnAborted);
+    }
     sess.replace_compacted_history(
         new_history,
         step_context.to_turn_context_item(),
