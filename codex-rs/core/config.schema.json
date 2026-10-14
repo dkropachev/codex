@@ -1008,9 +1008,6 @@
             "guardianv2_decisions_comparison": {
               "type": "boolean"
             },
-            "handoff_context": {
-              "type": "boolean"
-            },
             "hooks": {
               "type": "boolean"
             },
@@ -7882,9 +7879,6 @@
           "$ref": "#/definitions/FeatureToml_for_GuardianV2ConfigToml"
         },
         "guardianv2_decisions_comparison": {
-          "type": "boolean"
-        },
-        "handoff_context": {
           "type": "boolean"
         },
         "hooks": {

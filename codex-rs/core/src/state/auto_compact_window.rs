@@ -1,5 +1,4 @@
 use codex_protocol::protocol::TokenUsage;
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,19 +30,11 @@ enum AutoCompactWindowPrefill {
     Estimated(i64),
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct HandoffSummaryRequest {
-    pub(crate) call_id: String,
-    pub(crate) summary: String,
-    pub(crate) cancellation_token: CancellationToken,
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct AutoCompactWindow {
     window_number: u64,
     ids: AutoCompactWindowIds,
     new_context_window_requested: bool,
-    handoff_summary_requested: Option<(String, HandoffSummaryRequest)>,
     /// Absolute input-token baseline for the current compaction window.
     ///
     /// `body_after_prefix` subtracts this from later active-context usage. It is
@@ -60,7 +51,6 @@ impl AutoCompactWindow {
             window_number: 0,
             ids,
             new_context_window_requested: false,
-            handoff_summary_requested: None,
             prefill_input_tokens: None,
             token_budget_reminder_delivered: false,
             auto_compact_fallback_delivered: false,
@@ -89,7 +79,6 @@ impl AutoCompactWindow {
         self.ids.previous_window_id = Some(self.ids.window_id);
         self.ids.window_id = Uuid::now_v7();
         self.new_context_window_requested = false;
-        self.handoff_summary_requested = None;
         self.token_budget_reminder_delivered = false;
         self.auto_compact_fallback_delivered = false;
         (self.window_number, self.ids)
@@ -111,26 +100,6 @@ impl AutoCompactWindow {
         let requested = self.new_context_window_requested;
         self.new_context_window_requested = false;
         requested
-    }
-
-    pub(super) fn request_handoff_summary(
-        &mut self,
-        turn_id: &str,
-        request: HandoffSummaryRequest,
-    ) {
-        self.handoff_summary_requested = Some((turn_id.to_string(), request));
-    }
-
-    pub(super) fn take_handoff_summary_request(
-        &mut self,
-        turn_id: &str,
-    ) -> Option<HandoffSummaryRequest> {
-        self.handoff_summary_requested
-            .take()
-            .filter(|(owner, request)| {
-                owner == turn_id && !request.cancellation_token.is_cancelled()
-            })
-            .map(|(_, request)| request)
     }
 
     /// Records the request-input side of the first server usage sample. The

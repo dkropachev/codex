@@ -335,23 +335,6 @@ impl SessionState {
         self.auto_compact_window.take_new_context_window_request()
     }
 
-    pub(crate) fn request_handoff_summary(
-        &mut self,
-        turn_id: &str,
-        request: super::HandoffSummaryRequest,
-    ) {
-        self.auto_compact_window
-            .request_handoff_summary(turn_id, request);
-    }
-
-    pub(crate) fn take_handoff_summary_request(
-        &mut self,
-        turn_id: &str,
-    ) -> Option<super::HandoffSummaryRequest> {
-        self.auto_compact_window
-            .take_handoff_summary_request(turn_id)
-    }
-
     pub(crate) fn start_new_context_window(&mut self) -> (u64, AutoCompactWindowIds) {
         let window = self.auto_compact_window.advance();
         self.auto_compact_window.clear_prefill();

@@ -11436,13 +11436,14 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
             .await
             .unwrap(),
     );
-    let (initial_a, expected_snapshot) = crate::compact::build_compaction_replacement_history(
-        &session,
-        &step_a,
-        &world_a,
-        Vec::new(),
-    )
-    .await;
+    let (initial_a, expected_snapshot) =
+        crate::compaction_checkpoint::build_compaction_replacement_history(
+            &session,
+            &step_a,
+            &world_a,
+            Vec::new(),
+        )
+        .await;
 
     let mut selected_b = step_a.settings.selected().clone();
     selected_b.collaboration_mode.settings.model = "model-b".to_string();
@@ -11476,13 +11477,14 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
         .0;
     let initial_b = crate::context_manager::updates::merge_world_state_updates(initial_b);
     let turn_contributions_b = session.build_turn_context_contribution_items(&step_b).await;
-    let (restored_a, restored_snapshot) = crate::compact::build_compaction_replacement_history(
-        &session,
-        &step_a,
-        &world_a,
-        Vec::new(),
-    )
-    .await;
+    let (restored_a, restored_snapshot) =
+        crate::compaction_checkpoint::build_compaction_replacement_history(
+            &session,
+            &step_a,
+            &world_a,
+            Vec::new(),
+        )
+        .await;
 
     assert_eq!(restored_a, initial_a);
     assert_eq!(restored_snapshot, expected_snapshot);

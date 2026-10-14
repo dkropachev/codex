@@ -20,7 +20,7 @@ use crate::agent::status::is_final;
 use crate::agents_md_manager::SessionInstructions;
 use crate::attestation::AttestationProvider;
 use crate::compact;
-use crate::compact::CompactedHistoryMetadata;
+use crate::compaction_checkpoint::CompactedHistoryMetadata;
 use crate::config::ManagedFeatures;
 use crate::context::ContextualUserFragment;
 use crate::context::DeveloperInstructions;
@@ -4578,27 +4578,6 @@ impl Session {
     pub(crate) async fn take_new_context_window_request(&self) -> bool {
         let mut state = self.state.lock().await;
         state.take_new_context_window_request()
-    }
-
-    pub(crate) async fn request_handoff_summary(
-        &self,
-        turn_id: &str,
-        request: crate::state::HandoffSummaryRequest,
-    ) {
-        self.state
-            .lock()
-            .await
-            .request_handoff_summary(turn_id, request);
-    }
-
-    pub(crate) async fn take_handoff_summary_request(
-        &self,
-        turn_id: &str,
-    ) -> Option<crate::state::HandoffSummaryRequest> {
-        self.state
-            .lock()
-            .await
-            .take_handoff_summary_request(turn_id)
     }
 
     pub(crate) async fn start_new_context_window(

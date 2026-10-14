@@ -2,9 +2,17 @@
 
 ## Summary
 
-Context management keeps long-running threads usable without allowing one client to replace another client's active work. It defines atomic app-server contracts for standalone compaction and idle-only turn starts, a manual TUI handoff to a fresh thread, an opt-in in-place Core handoff, and a passive context-pressure hint.
+Context management keeps long-running threads usable without allowing one client to replace another client's active work. It defines atomic app-server contracts for standalone compaction and idle-only turn starts, plus a manual TUI handoff to a fresh thread and a passive context-pressure hint.
 
 ## Behavior
+
+### Preparatory Compaction Infrastructure
+
+This stage only extracts replacement-history assembly and persistence metadata into the private Core `compaction_checkpoint` module. Existing local and remote-v2 compaction use the same builders, context placement, and session persistence as before; no model-visible context, wire format, lifecycle, or runtime behavior changes.
+
+No in-place checkpoint tool or feature flag is exposed. Checkpoint activation, live-handle inventory, sibling-result retention, and their end-to-end safety coverage are deferred to a follow-up stage.
+
+Existing assembly tests move with the implementation to `core/src/compaction_checkpoint_tests.rs`, preserving prefix-first, context-boundary, summary-last, and compaction-last coverage.
 
 `thread/compact/start` starts only after Core atomically reserves an idle thread. It returns Core's exact `turnId`; a busy thread returns an invalid-request error without interruption. Its optional `source` defaults to `manual`; `automaticContextManagement` selects the automatic trigger for hooks and metrics, while model-backed strategies also carry it in request metadata and compaction analytics.
 
@@ -16,15 +24,6 @@ When the latest active context use first reaches 70% of the adjusted model windo
 
 Automatic handoff is disabled unless `[tui].auto_handoff_threshold_percent` is set to a value from 71 through 85. A live Default-mode turn at or above that adjusted active-context threshold may start automation after it completes. Replayed usage alone never starts it. The primary thread must be idle and free of queued input, pending interactions, active goals, and active descendants. Automation first submits a visible wrap-up turn, then uses the existing Handoff-mode planner and verified fresh-thread transfer. A failed or interrupted step leaves the source thread in place and does not immediately retry.
 
-The experimental `handoff_context` feature exposes `handoff_context(summary)` for an in-place checkpoint. The complete summary, including its checkpoint prefix, must fit within 10,000 estimated tokens. Core finishes the other tool calls in that response before installing the checkpoint, then continues in the same turn and thread. It reinjects a bounded inventory of live agent and terminal-process handles. A cancelled turn's queued summary cannot replace a later turn's context. Live handles remain available only within the current Codex process. The tool is disabled by default and does not add automatic conditions, guidance, pricing, or hard-stage policy. Manual `/handoff` and the existing compaction presentation remain unchanged.
-
-After the summary, the checkpoint retains complete function/custom sibling call-result pairs from that sampled response, including direct Code Mode `exec` results and ordinary failures. Calls/results from earlier responses are not retained. Selection preserves recorded wire and harness metadata without additional truncation; normal history replacement updates host-only cumulative MCP attribution. Admission permits at most 32 calls including the checkpoint (at most 31 retained pairs / 62 items), 10,000 estimated tokens per serialized model-visible ResponseItem, and 20,000 across those sibling items. Host-only harness metadata is not charged to these model-visible limits. Exactly one checkpoint and a completed response are required. Cancellation is checked again after pre-compaction hooks and context construction, before advancing the window or replacing history. Unsupported response items, missing or ambiguous pairs, or exceeded limits skip the checkpoint and preserve ordinary history, with bounded feedback to consume the existing results and retry the checkpoint alone without rerunning operations. Ordinary context-limit safeguards still apply.
-
-```toml
-[features]
-handoff_context = true
-```
-
 ## Entry Points
 
 - [codex-rs/protocol/src/turn_input.rs](../protocol/src/turn_input.rs)
@@ -34,9 +33,6 @@ handoff_context = true
 - [codex-rs/tui/src/handoff.rs](../tui/src/handoff.rs)
 - [codex-rs/tui/src/chatwidget/handoff.rs](../tui/src/chatwidget/handoff.rs)
 - [codex-rs/tui/src/app/handoff.rs](../tui/src/app/handoff.rs)
-- [codex-rs/features/src/lib.rs](../features/src/lib.rs)
-- [codex-rs/core/src/context_handoff.rs](../core/src/context_handoff.rs)
-- [codex-rs/core/src/tools/handlers/handoff_context.rs](../core/src/tools/handlers/handoff_context.rs)
 
 ## Subfeatures
 
@@ -85,22 +81,6 @@ handoff_context = true
 - Attachment usage replay identifies the latest completed compaction item when Core's persisted token count is available; Core recomputes usage before completing each compaction item.
 - The hint is informational and leaves explicit `/compact` and `/handoff` unchanged.
 
-### In-Place Handoff
-
-#### Entry Points
-
-- [codex-rs/features/src/lib.rs](../features/src/lib.rs)
-- [codex-rs/core/src/context_handoff.rs](../core/src/context_handoff.rs)
-- [codex-rs/core/src/compact.rs](../core/src/compact.rs)
-- [codex-rs/core/src/session/turn.rs](../core/src/session/turn.rs)
-
-#### Invariants
-
-- The checkpoint tool is disabled unless `features.handoff_context` is enabled.
-- The summary checkpoint removes earlier model history and is persisted in the rollout.
-- The same Core session, agent controller, MCP bindings, and background-process manager continue after an in-place checkpoint.
-- Existing compaction lifecycle events and TUI presentation are reused.
-
 ## Invariants
 
 - Admission is decided inside Core, not from a stale app-server status snapshot, and a losing request cannot abort or steer the winning turn.
@@ -124,8 +104,6 @@ Core coverage proves atomic reservation, exact IDs, automatic provenance, and no
 - Streamed remote-v2 standalone compaction preserves automatic trigger/reason metadata: codex-rs/core/tests/suite/compact_remote.rs:standalone_automatic_compaction_preserves_remote_provenance
 - TokenBudget standalone automatic compaction selects auto hooks: codex-rs/core/tests/suite/token_budget.rs:token_budget_automatic_standalone_compaction_runs_auto_hooks
 - TokenBudget standalone automatic compaction preserves its correlated lifecycle on auto-selected execution environments: codex-rs/core/tests/suite/token_budget.rs:token_budget_automatic_standalone_compaction_supports_remote_executor
-- In-place handoff checkpoints the model summary and continues in the same turn with old history removed: codex-rs/core/tests/suite/context_handoff.rs:model_handoff_installs_summary_in_same_turn
-- The complete prefixed summary obeys the context-item cap: codex-rs/core/tests/suite/context_handoff.rs:context_handoff_caps_complete_checkpoint_summary
 
 ### app-server-api (app-server API behavior)
 

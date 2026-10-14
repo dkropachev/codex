@@ -1117,7 +1117,7 @@ async fn compaction_initial_context_preserves_separate_guardian_developer_messag
             .await
             .expect("world state should build"),
     );
-    let (refreshed, _) = crate::compact::build_compaction_replacement_history(
+    let (refreshed, _) = crate::compaction_checkpoint::build_compaction_replacement_history(
         &session,
         &step_context,
         &world_state,

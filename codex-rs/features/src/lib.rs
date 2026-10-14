@@ -385,8 +385,6 @@ pub enum Feature {
     Goals,
     /// Add current context-window metadata to model-visible context.
     TokenBudget,
-    /// Checkpoint context in the same turn while retaining live handles.
-    HandoffContext,
     /// Enables experimental context management.
     ContextManagement,
     /// Track and report a shared token budget across a session's agent threads.
@@ -1846,12 +1844,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "goals",
         stage: Stage::Stable,
         default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::HandoffContext,
-        key: "handoff_context",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::TokenBudget,
