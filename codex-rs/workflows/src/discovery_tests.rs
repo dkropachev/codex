@@ -42,6 +42,37 @@ fn discovers_canonical_and_legacy_packages_with_project_precedence() {
 }
 
 #[test]
+fn bounded_discovery_rejects_deep_trees() {
+    let temp = TempDir::new().expect("tempdir");
+    let home = temp.path().join("home");
+    let root = home.join("workflows");
+    let mut current = root;
+    for _ in 0..=MAX_DISCOVERY_DEPTH {
+        current = current.join("nested");
+    }
+    fs::create_dir_all(&current).expect("create deep workflow tree");
+
+    let error = discover_workflow_commands_bounded(&home, temp.path())
+        .expect_err("deep workflow trees must be rejected");
+    assert!(error.to_string().contains("directory depth limit"));
+}
+
+#[test]
+fn bounded_discovery_rejects_wide_trees() {
+    let temp = TempDir::new().expect("tempdir");
+    let home = temp.path().join("home");
+    let root = home.join("workflows");
+    fs::create_dir_all(&root).expect("create workflow root");
+    for index in 0..=MAX_DISCOVERY_ENTRIES {
+        fs::write(root.join(format!("{index}")), "").expect("create directory entry");
+    }
+
+    let error = discover_workflow_commands_bounded(&home, temp.path())
+        .expect_err("wide workflow trees must be rejected");
+    assert!(error.to_string().contains("directory entry limit"));
+}
+
+#[test]
 fn ignores_symlinked_workflow_directories() {
     let temp = TempDir::new().expect("tempdir");
     let home = temp.path().join("home");
