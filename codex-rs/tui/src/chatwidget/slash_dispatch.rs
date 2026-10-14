@@ -1171,7 +1171,9 @@ impl ChatWidget {
                 }
                 let words = shlex::split(trimmed).unwrap_or_default();
                 let use_management_rpc = match words.as_slice() {
-                    [command, rest @ ..] if command == "install" => !rest.is_empty(),
+                    [command, source, ..] if command == "install" => {
+                        !source.starts_with('~') && !source.contains('$')
+                    }
                     [command] if command == "check-updates" => true,
                     [command, id] if command == "update" => id != "--all",
                     [command, _, _] if command == "set-policy" => true,

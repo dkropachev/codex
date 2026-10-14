@@ -544,6 +544,20 @@ async fn workflow_slash_update_uses_rpc_and_legacy_flags_use_host_cli() {
         _ => None,
     });
     assert_eq!(command, Some("codex workflow update --all".to_string()));
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Workflow,
+        "install ~/sources/review".to_string(),
+        Vec::new(),
+    );
+    let command = std::iter::from_fn(|| op_rx.try_recv().ok()).find_map(|op| match op {
+        Op::RunUserShellCommand { command } => Some(command),
+        _ => None,
+    });
+    assert_eq!(
+        command,
+        Some("codex workflow install ~/sources/review".to_string())
+    );
 }
 
 #[tokio::test]
