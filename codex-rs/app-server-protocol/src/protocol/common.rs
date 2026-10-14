@@ -788,6 +788,18 @@ client_request_definitions! {
         serialization: None,
         response: v2::WorkflowUninstallResponse,
     },
+    #[experimental("workflow/resolveSource")]
+    WorkflowResolveSource => "workflow/resolveSource" {
+        params: v2::WorkflowResolveSourceParams,
+        serialization: None,
+        response: v2::WorkflowResolveSourceResponse,
+    },
+    #[experimental("workflow/install")]
+    WorkflowInstall => "workflow/install" {
+        params: v2::WorkflowInstallParams,
+        serialization: None,
+        response: v2::WorkflowInstallResponse,
+    },
     ThreadApproveGuardianDeniedAction => "thread/approveGuardianDeniedAction" {
         params: v2::ThreadApproveGuardianDeniedActionParams,
         serialization: thread_id(params.thread_id),

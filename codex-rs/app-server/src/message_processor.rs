@@ -1560,6 +1560,12 @@ impl MessageProcessor {
             ClientRequest::WorkflowUninstall { params, .. } => {
                 self.workflow_list_processor.uninstall(params).await
             }
+            ClientRequest::WorkflowResolveSource { params, .. } => {
+                self.workflow_list_processor.resolve_source(params).await
+            }
+            ClientRequest::WorkflowInstall { params, .. } => {
+                self.workflow_list_processor.install(params).await
+            }
             ClientRequest::ThreadApproveGuardianDeniedAction { params, .. } => {
                 self.thread_processor
                     .thread_approve_guardian_denied_action(&request_id, params)

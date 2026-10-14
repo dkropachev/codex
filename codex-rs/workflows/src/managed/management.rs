@@ -103,6 +103,25 @@ impl ManagedWorkflowService {
         request: ManagedWorkflowInstallRequest<'_>,
         policy: WorkflowUpdatePolicy,
     ) -> anyhow::Result<ManagedWorkflowInstallation> {
+        self.install_selected_release(request, policy, None)
+    }
+
+    /// Installs only when the source still advertises the release selected by the caller.
+    pub fn install_with_policy_expected(
+        &self,
+        request: ManagedWorkflowInstallRequest<'_>,
+        policy: WorkflowUpdatePolicy,
+        expected_release: &WorkflowReleaseIdentity,
+    ) -> anyhow::Result<ManagedWorkflowInstallation> {
+        self.install_selected_release(request, policy, Some(expected_release))
+    }
+
+    fn install_selected_release(
+        &self,
+        request: ManagedWorkflowInstallRequest<'_>,
+        policy: WorkflowUpdatePolicy,
+        expected_release: Option<&WorkflowReleaseIdentity>,
+    ) -> anyhow::Result<ManagedWorkflowInstallation> {
         let ManagedWorkflowInstallRequest {
             source,
             dependency_runtime,
@@ -110,6 +129,11 @@ impl ManagedWorkflowService {
         } = request;
         let source = WorkflowGitSource::parse(source)?;
         let release = super::git_command::resolve_workflow_git_release(&source, Some(cancelled))?;
+        if expected_release
+            .is_some_and(|expected| *expected != WorkflowReleaseIdentity::from(release.clone()))
+        {
+            anyhow::bail!("workflow source release changed before install");
+        }
         let staged = fetch::stage_resolved_workflow_release_cancellable(
             &self.fetch_root,
             &source,

@@ -20,6 +20,7 @@ use codex_workflows::ManagedWorkflowUpdateRequest;
 use codex_workflows::WorkflowUpdatePolicy;
 use futures::StreamExt;
 use tokio::sync::RwLock;
+use tokio::sync::Semaphore;
 use tokio::sync::watch;
 
 use crate::error_code::invalid_params;
@@ -53,10 +54,15 @@ pub(super) struct WorkflowUpdates {
     config: Arc<Config>,
     notification_tx: watch::Sender<u64>,
     mutation_tx: watch::Sender<u64>,
+    source_requests: Arc<Semaphore>,
 }
 
 impl WorkflowUpdates {
-    pub(super) fn start(config: Arc<Config>, outgoing: Arc<OutgoingMessageSender>) -> Self {
+    pub(super) fn start(
+        config: Arc<Config>,
+        outgoing: Arc<OutgoingMessageSender>,
+        source_requests: Arc<Semaphore>,
+    ) -> Self {
         let snapshot = Arc::new(RwLock::new(Snapshot {
             scan_id: 1,
             scanning: true,
@@ -81,11 +87,13 @@ impl WorkflowUpdates {
             Arc::clone(&snapshot),
             Some(recovered_tx),
             ScanMode::Startup,
+            Arc::clone(&source_requests),
         ));
         let worker_config = Arc::clone(&config);
         let worker_snapshot = Arc::clone(&snapshot);
         let worker_recovered = recovered.clone();
         let worker_notifications = notification_tx.clone();
+        let worker_source_requests = Arc::clone(&source_requests);
         tokio::spawn(async move {
             let mut completed = worker_notifications.subscribe();
             while mutation_rx.changed().await.is_ok() {
@@ -95,6 +103,7 @@ impl WorkflowUpdates {
                         Arc::clone(&worker_snapshot),
                         worker_recovered.clone(),
                         worker_notifications.clone(),
+                        Arc::clone(&worker_source_requests),
                     )
                     .await;
                     if result.started {
@@ -117,6 +126,7 @@ impl WorkflowUpdates {
             config,
             notification_tx,
             mutation_tx,
+            source_requests,
         }
     }
 
@@ -133,6 +143,7 @@ impl WorkflowUpdates {
             Arc::clone(&self.snapshot),
             self.recovered.clone(),
             self.notification_tx.clone(),
+            Arc::clone(&self.source_requests),
         )
         .await
     }
@@ -187,6 +198,7 @@ async fn refresh_snapshot(
     snapshot: Arc<RwLock<Snapshot>>,
     mut recovered: watch::Receiver<bool>,
     notification_tx: watch::Sender<u64>,
+    source_requests: Arc<Semaphore>,
 ) -> WorkflowCheckUpdatesResponse {
     if !*recovered.borrow() {
         let _ = recovered.changed().await;
@@ -213,6 +225,7 @@ async fn refresh_snapshot(
         snapshot,
         /*recovered_tx*/ None,
         ScanMode::Explicit,
+        source_requests,
     ));
     WorkflowCheckUpdatesResponse {
         scan_id,
@@ -226,6 +239,7 @@ async fn run_scan(
     snapshot: Arc<RwLock<Snapshot>>,
     recovered_tx: Option<watch::Sender<bool>>,
     mode: ScanMode,
+    source_requests: Arc<Semaphore>,
 ) {
     let prepare_config = Arc::clone(&config);
     let prepared = match tokio::task::spawn_blocking(move || prepare(prepare_config.as_ref())).await
@@ -257,7 +271,16 @@ async fn run_scan(
     if let Ok(Some((service, records))) = prepared
         && !records.is_empty()
     {
-        run_checks(service, records, snapshot, notification_tx, config, mode).await;
+        run_checks(
+            service,
+            records,
+            snapshot,
+            notification_tx,
+            config,
+            mode,
+            source_requests,
+        )
+        .await;
     }
 }
 
@@ -287,14 +310,22 @@ async fn run_checks(
     notification_tx: watch::Sender<u64>,
     config: Arc<Config>,
     mode: ScanMode,
+    source_requests: Arc<Semaphore>,
 ) {
     let mut checks = futures::stream::iter(records.into_iter().map(|record| {
         let service = Arc::clone(&service);
         let config = Arc::clone(&config);
+        let source_requests = Arc::clone(&source_requests);
         async move {
             let id = record.id.clone();
             let installed = record.installed.clone();
             let policy = record.policy;
+            let Ok(_permit) = source_requests.acquire_owned().await else {
+                return update_entry(
+                    record,
+                    ManagedWorkflowUpdate::Error("workflow source scan stopped".into()),
+                );
+            };
             let checked = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
                 let cancelled = AtomicBool::new(false);
                 let checked = service.check_update(&id, &cancelled)?;
