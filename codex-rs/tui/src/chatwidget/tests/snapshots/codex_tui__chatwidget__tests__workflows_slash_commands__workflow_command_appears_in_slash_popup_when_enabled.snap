@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests/workflows__slash_commands.rs
+assertion_line: 149
+expression: popup
+---
+› /code-review  Run a code review workflow on the current branch.
+
+› /code
+
+  GPT-5.6-Sol default · /tmp/project

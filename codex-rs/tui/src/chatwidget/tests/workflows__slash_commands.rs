@@ -16,6 +16,46 @@ fn write_workflow_command(chat: &mut ChatWidget, command: &str, description: &st
     workflow_dir.to_path_buf()
 }
 
+fn sync_remote_workflow_commands(chat: &mut ChatWidget) {
+    chat.sync_workflow_commands();
+    let commands = codex_workflows::discover_workflow_commands(
+        &chat.config.codex_home,
+        &chat.workflow_invocation_cwd(),
+    );
+    chat.apply_workflow_commands_result(
+        chat.workflow_commands_generation,
+        chat.workflow_invocation_cwd(),
+        Ok(commands),
+    );
+}
+
+#[tokio::test]
+async fn late_workflow_discovery_does_not_replace_newer_server_results() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    let cwd = chat.workflow_invocation_cwd();
+    let stale_generation = chat.workflow_commands_generation;
+    chat.sync_workflow_commands();
+    let current_generation = chat.workflow_commands_generation;
+    let current_command = codex_workflows::WorkflowCommand {
+        id: "team/review".to_string(),
+        command: "review".to_string(),
+        description: "Run review".to_string(),
+        option_hints: Vec::new(),
+        workflow_dir: PathBuf::from("/app-server/workflows/team/review"),
+    };
+
+    chat.apply_workflow_commands_result(
+        stale_generation,
+        cwd.clone(),
+        Ok(vec![current_command.clone()]),
+    );
+    assert_eq!(chat.workflow_commands, Vec::new());
+
+    chat.apply_workflow_commands_result(current_generation, cwd, Ok(vec![current_command.clone()]));
+    assert_eq!(chat.workflow_commands, vec![current_command]);
+}
+
 fn next_shell_command(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> String {
     loop {
         match op_rx.try_recv() {
@@ -127,12 +167,13 @@ async fn workflow_command_appears_in_slash_popup_when_enabled() {
         "code-review",
         "Run a code review workflow on the current branch.",
     );
-    chat.sync_workflow_commands();
+    sync_remote_workflow_commands(&mut chat);
 
     chat.bottom_pane
         .set_composer_text("/code".to_string(), Vec::new(), Vec::new());
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
+    insta::assert_snapshot!(popup);
     assert!(
         popup.contains("/code-review"),
         "expected workflow command in popup:\n{popup}"
@@ -147,7 +188,7 @@ async fn workflow_command_appears_in_slash_popup_when_enabled() {
 async fn workflow_command_is_hidden_and_rejected_when_feature_disabled() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     write_workflow_command(&mut chat, "code-review", "Run a code review workflow.");
-    chat.sync_workflow_commands();
+    sync_remote_workflow_commands(&mut chat);
 
     chat.bottom_pane
         .set_composer_text("/code".to_string(), Vec::new(), Vec::new());
@@ -256,7 +297,7 @@ async fn bare_workflow_command_dispatches_structured_workflow_op() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
     let workflow_dir = write_workflow_command(&mut chat, "code-review", "Run review.");
-    chat.sync_workflow_commands();
+    sync_remote_workflow_commands(&mut chat);
 
     submit_composer_text(&mut chat, "/code-review");
 
@@ -271,7 +312,7 @@ async fn running_workflow_command_uses_standard_task_status_snapshot() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
     write_workflow_command(&mut chat, "code-review", "Run review.");
-    chat.sync_workflow_commands();
+    sync_remote_workflow_commands(&mut chat);
 
     submit_composer_text(&mut chat, "/code-review");
     let _ = next_workflow_command(&mut op_rx);
@@ -317,7 +358,7 @@ async fn workflow_command_with_args_dispatches_structured_input_json() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
     let workflow_dir = write_workflow_command(&mut chat, "code-review", "Run review.");
-    chat.sync_workflow_commands();
+    sync_remote_workflow_commands(&mut chat);
 
     submit_composer_text(
         &mut chat,
@@ -346,7 +387,7 @@ async fn workflow_command_preserves_explicit_executor_working_directory() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
     let workflow_dir = write_workflow_command(&mut chat, "code-review", "Run review.");
-    chat.sync_workflow_commands();
+    sync_remote_workflow_commands(&mut chat);
 
     submit_composer_text(
         &mut chat,
@@ -367,7 +408,7 @@ async fn workflow_command_rejects_malformed_args_without_clearing_draft() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
     write_workflow_command(&mut chat, "code-review", "Run review.");
-    chat.sync_workflow_commands();
+    sync_remote_workflow_commands(&mut chat);
 
     let bad_command = "/code-review --input '{bad}'";
     chat.bottom_pane
@@ -394,7 +435,7 @@ async fn queued_workflow_command_dispatches_after_active_turn() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
     let workflow_dir = write_workflow_command(&mut chat, "code-review", "Run review.");
-    chat.sync_workflow_commands();
+    sync_remote_workflow_commands(&mut chat);
     chat.thread_id = Some(ThreadId::new());
     handle_turn_started(&mut chat, "turn-1");
 
@@ -421,7 +462,7 @@ async fn queued_malformed_workflow_command_reports_error_and_drains_next_input()
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
     write_workflow_command(&mut chat, "code-review", "Run review.");
-    chat.sync_workflow_commands();
+    sync_remote_workflow_commands(&mut chat);
     chat.thread_id = Some(ThreadId::new());
     handle_turn_started(&mut chat, "turn-1");
 
