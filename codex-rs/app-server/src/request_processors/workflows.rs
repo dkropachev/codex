@@ -24,6 +24,10 @@ use crate::error_code::invalid_params;
 use crate::error_code::method_not_found;
 use crate::outgoing_message::OutgoingMessageSender;
 
+#[path = "workflows/dependency_runtime.rs"]
+mod dependency_runtime;
+#[path = "workflows/mutations.rs"]
+mod mutations;
 #[path = "workflows/update_state.rs"]
 mod update_state;
 use update_state::WorkflowUpdates;
@@ -45,6 +49,16 @@ impl WorkflowListProcessor {
             .enabled(Feature::Workflows)
             .then(|| WorkflowUpdates::start(Arc::clone(&config), outgoing));
         Self { config, updates }
+    }
+
+    async fn ready_for_mutation(&self) -> Result<&WorkflowUpdates, JSONRPCErrorError> {
+        let Some(updates) = &self.updates else {
+            return Err(method_not_found(
+                "workflow management requires the workflows feature",
+            ));
+        };
+        updates.wait_for_recovery().await;
+        Ok(updates)
     }
 
     pub(crate) async fn updates_read(
