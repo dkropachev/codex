@@ -36,6 +36,32 @@ fn policy(value: &str) -> anyhow::Result<WorkflowUpdatePolicy> {
     }
 }
 
+fn install_arguments(args: &str) -> anyhow::Result<(String, WorkflowUpdatePolicy)> {
+    let raw = args.trim().trim_start_matches("install").trim();
+    if raw.is_empty() {
+        anyhow::bail!("usage: /workflow install <source> [--policy prompt|automatic|manual]");
+    }
+    let (raw_source, policy) = match raw.rsplit_once(" --policy ") {
+        Some((source, value)) if !value.contains(char::is_whitespace) => {
+            (source.trim(), policy(value)?)
+        }
+        _ => (raw, WorkflowUpdatePolicy::Prompt),
+    };
+    let source = raw_source
+        .strip_prefix('"')
+        .and_then(|source| source.strip_suffix('"'))
+        .or_else(|| {
+            raw_source
+                .strip_prefix('\'')
+                .and_then(|source| source.strip_suffix('\''))
+        })
+        .unwrap_or(raw_source);
+    if source.is_empty() {
+        anyhow::bail!("workflow source is required");
+    }
+    Ok((source.to_string(), policy))
+}
+
 async fn available_release(
     handle: &AppServerRequestHandle,
     id: &str,
@@ -103,7 +129,14 @@ pub(crate) fn spawn_command(
 ) {
     tokio::spawn(async move {
         let result = tokio::time::timeout(Duration::from_secs(/*secs*/ 30), async {
-            let words = shlex::split(&args).context("invalid workflow command quoting")?;
+            let words = if args.split_whitespace().next() == Some("install") {
+                vec![
+                    "install".to_string(),
+                    args.trim().trim_start_matches("install").trim().to_string(),
+                ]
+            } else {
+                shlex::split(&args).context("invalid workflow command quoting")?
+            };
             let nonce = Uuid::new_v4();
             let Some((command, rest)) = words.split_first() else {
                 anyhow::bail!(
@@ -112,18 +145,13 @@ pub(crate) fn spawn_command(
             };
             match command.as_str() {
                 "install" => {
-                    let (source, policy) = match rest {
-                        [source] => (source, WorkflowUpdatePolicy::Prompt),
-                        [source, flag, value] if flag == "--policy" => (source, policy(value)?),
-                        _ => anyhow::bail!(
-                            "usage: /workflow install <source> [--policy prompt|automatic|manual]"
-                        ),
-                    };
+                    let (source, policy) = install_arguments(&args)?;
                     let resolved: WorkflowResolveSourceResponse = handle
                         .request_typed(ClientRequest::WorkflowResolveSource {
                             request_id: RequestId::String(format!("workflow-resolve-{nonce}")),
                             params: WorkflowResolveSourceParams {
                                 source: source.clone(),
+                                cwd: Some(cwd.to_string_lossy().into_owned()),
                             },
                         })
                         .await?;
@@ -131,7 +159,8 @@ pub(crate) fn spawn_command(
                         .request_typed(ClientRequest::WorkflowInstall {
                             request_id: RequestId::String(format!("workflow-install-{nonce}")),
                             params: WorkflowInstallParams {
-                                source: source.clone(),
+                                source,
+                                cwd: Some(cwd.to_string_lossy().into_owned()),
                                 expected_release: resolved.release,
                                 policy,
                             },
@@ -225,3 +254,7 @@ pub(crate) fn spawn_command(
         }
     });
 }
+
+#[cfg(test)]
+#[path = "workflow_slash_tests.rs"]
+mod tests;
