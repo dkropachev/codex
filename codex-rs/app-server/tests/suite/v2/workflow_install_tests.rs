@@ -45,12 +45,14 @@ async fn workflow_install_requires_selected_release_and_persists_requested_polic
         .with_codex_home(home.path())
         .build_initialized()
         .await?;
-    let source_text = source.display().to_string();
+    let source_text = format!("./{}", source.strip_prefix(sources.path())?.display());
+    let source_cwd = Some(sources.path().display().to_string());
     let selected: WorkflowResolveSourceResponse = server
         .request(|request_id| ClientRequest::WorkflowResolveSource {
             request_id,
             params: WorkflowResolveSourceParams {
                 source: source_text.clone(),
+                cwd: source_cwd.clone(),
             },
         })
         .await?;
@@ -58,6 +60,7 @@ async fn workflow_install_requires_selected_release_and_persists_requested_polic
     commit_tagged_release(&source, "v1.1.0")?;
     let stale = WorkflowInstallParams {
         source: source_text.clone(),
+        cwd: source_cwd.clone(),
         expected_release: selected.release,
         policy: ApiUpdatePolicy::Manual,
     };
@@ -80,6 +83,7 @@ async fn workflow_install_requires_selected_release_and_persists_requested_polic
             request_id,
             params: WorkflowResolveSourceParams {
                 source: source_text.clone(),
+                cwd: source_cwd.clone(),
             },
         })
         .await?;
@@ -88,6 +92,7 @@ async fn workflow_install_requires_selected_release_and_persists_requested_polic
             request_id,
             params: WorkflowInstallParams {
                 source: source_text.clone(),
+                cwd: source_cwd.clone(),
                 expected_release: current.release.clone(),
                 policy: ApiUpdatePolicy::Manual,
             },
@@ -112,6 +117,7 @@ async fn workflow_install_requires_selected_release_and_persists_requested_polic
             "workflow/install",
             Some(serde_json::to_value(WorkflowInstallParams {
                 source: source_text,
+                cwd: source_cwd,
                 expected_release: installed.installed,
                 policy: ApiUpdatePolicy::Prompt,
             })?),
@@ -170,6 +176,7 @@ async fn workflow_install_resolves_untagged_file_url_on_server_host() -> Result<
             request_id,
             params: WorkflowResolveSourceParams {
                 source: source_url.clone(),
+                cwd: None,
             },
         })
         .await?;
@@ -181,6 +188,7 @@ async fn workflow_install_resolves_untagged_file_url_on_server_host() -> Result<
             request_id,
             params: WorkflowInstallParams {
                 source: source_url.clone(),
+                cwd: None,
                 expected_release: selected.release.clone(),
                 policy: ApiUpdatePolicy::Prompt,
             },
@@ -259,6 +267,7 @@ async fn startup_scan_and_source_requests_share_four_git_slots() -> Result<()> {
                     "workflow/resolveSource",
                     Some(serde_json::to_value(WorkflowResolveSourceParams {
                         source: source_text.clone(),
+                        cwd: None,
                     })?),
                 )
                 .await?,
@@ -275,6 +284,7 @@ async fn startup_scan_and_source_requests_share_four_git_slots() -> Result<()> {
             "workflow/resolveSource",
             Some(serde_json::to_value(WorkflowResolveSourceParams {
                 source: source_text,
+                cwd: None,
             })?),
         )
         .await?;

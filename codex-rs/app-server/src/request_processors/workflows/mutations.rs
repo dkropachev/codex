@@ -1,3 +1,5 @@
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -39,10 +41,14 @@ impl WorkflowListProcessor {
         params: WorkflowResolveSourceParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.ready_for_mutation().await?;
-        validate_source(&params.source)?;
+        let source = source_for_host(
+            &params.source,
+            params.cwd.as_deref(),
+            self.config.cwd.as_path(),
+        )?;
         let _slot = self.acquire_source_slot()?;
         let response = mutate(Arc::clone(&self.config), move |_, _| {
-            let source = WorkflowGitSource::parse(&params.source)?;
+            let source = WorkflowGitSource::parse(&source)?;
             let selected =
                 resolve_workflow_git_release_cancellable(&source, &AtomicBool::new(false))?;
             Ok(WorkflowResolveSourceResponse {
@@ -63,7 +69,11 @@ impl WorkflowListProcessor {
         params: WorkflowInstallParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let updates = self.ready_for_mutation().await?;
-        validate_source(&params.source)?;
+        let source = source_for_host(
+            &params.source,
+            params.cwd.as_deref(),
+            self.config.cwd.as_path(),
+        )?;
         validate_identity(&params.expected_release)?;
         let _slot = self.acquire_source_slot()?;
         let response = mutate(Arc::clone(&self.config), move |service, config| {
@@ -81,7 +91,7 @@ impl WorkflowListProcessor {
             };
             let installed = service.install_with_policy_expected(
                 ManagedWorkflowInstallRequest {
-                    source: &params.source,
+                    source: &source,
                     dependency_runtime: runtime.runtime(config),
                     cancelled: &AtomicBool::new(false),
                 },
@@ -250,6 +260,41 @@ fn validate_source(source: &str) -> Result<(), JSONRPCErrorError> {
     }
     Ok(())
 }
+
+fn source_for_host(
+    source: &str,
+    cwd: Option<&str>,
+    configured_cwd: &Path,
+) -> Result<String, JSONRPCErrorError> {
+    validate_source(source)?;
+    let cwd = match cwd {
+        Some(cwd) => {
+            if cwd.len() > 4_096 {
+                return Err(invalid_params("workflow cwd is too long"));
+            }
+            let cwd = PathBuf::from(cwd);
+            if !cwd.is_absolute() {
+                return Err(invalid_params(
+                    "workflow cwd must be absolute on the app-server host",
+                ));
+            }
+            cwd
+        }
+        None => configured_cwd.to_path_buf(),
+    };
+    if Path::new(source).is_relative() && !source.contains("://") && !source.contains(':') {
+        return cwd
+            .join(source)
+            .to_str()
+            .map(str::to_string)
+            .ok_or_else(|| invalid_params("workflow source path is not UTF-8"));
+    }
+    Ok(source.to_string())
+}
+
+#[cfg(test)]
+#[path = "mutations_tests.rs"]
+mod tests;
 
 fn validate_identity(identity: &ApiReleaseIdentity) -> Result<(), JSONRPCErrorError> {
     if identity.commit.len() > 128
