@@ -33,7 +33,7 @@ pub(crate) struct WorkflowManagementData {
     pub(crate) error: Option<String>,
 }
 
-async fn fetch_workflows(
+pub(crate) async fn fetch_workflows(
     handle: &AppServerRequestHandle,
     cwd: &Path,
     nonce: Uuid,

@@ -1872,6 +1872,14 @@ impl App {
                 self.chat_widget
                     .confirm_workflow_uninstall(id, installed, cwd);
             }
+            AppEvent::WorkflowSlashCommand { args, cwd } => {
+                crate::workflow_slash::spawn_command(
+                    app_server.request_handle(),
+                    args,
+                    cwd,
+                    self.app_event_tx.clone(),
+                );
+            }
             AppEvent::WorkflowManagementActionFinished { cwd, result } => {
                 self.chat_widget.on_workflow_action_finished(cwd, result);
             }
