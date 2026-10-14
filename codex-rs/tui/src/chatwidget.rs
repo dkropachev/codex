@@ -610,6 +610,7 @@ pub(crate) struct ChatWidget {
     skills_all: Vec<SkillMetadata>,
     skills_initial_state: Option<HashMap<PathUri, bool>>,
     workflow_commands: Vec<crate::workflow_commands::WorkflowCommand>,
+    workflow_commands_generation: u64,
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     turn_lifecycle: TurnLifecycleState,

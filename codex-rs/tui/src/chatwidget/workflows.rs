@@ -1,21 +1,47 @@
 use super::*;
 use crate::workflow_commands::WorkflowCommand;
-use crate::workflow_commands::discover_workflow_commands;
 
 impl ChatWidget {
     pub(crate) fn sync_workflow_commands(&mut self) {
         let workflows_enabled = self.config.features.enabled(Feature::Workflows);
-        self.workflow_commands = if workflows_enabled {
-            discover_workflow_commands(&self.config.codex_home, &self.config.cwd)
-        } else {
-            Vec::new()
-        };
+        self.workflow_commands_generation = self.workflow_commands_generation.wrapping_add(1);
+        self.workflow_commands.clear();
         let completion_cwd = self.workflow_invocation_cwd();
         self.bottom_pane.set_workflow_commands_context(
             workflows_enabled,
-            completion_cwd,
+            completion_cwd.clone(),
             self.workflow_commands.clone(),
         );
+        if workflows_enabled {
+            self.app_event_tx.send(AppEvent::RefreshWorkflowCommands {
+                generation: self.workflow_commands_generation,
+                cwd: completion_cwd,
+            });
+        }
+    }
+
+    pub(crate) fn apply_workflow_commands_result(
+        &mut self,
+        generation: u64,
+        cwd: PathBuf,
+        result: Result<Vec<WorkflowCommand>, String>,
+    ) {
+        if generation != self.workflow_commands_generation
+            || cwd != self.workflow_invocation_cwd()
+            || !self.config.features.enabled(Feature::Workflows)
+        {
+            return;
+        }
+        match result {
+            Ok(commands) => self.workflow_commands = commands,
+            Err(error) => self.add_error_message(format!("Workflow discovery failed: {error}")),
+        }
+        self.bottom_pane.set_workflow_commands_context(
+            /*enabled*/ true,
+            cwd,
+            self.workflow_commands.clone(),
+        );
+        self.request_redraw();
     }
 
     pub(super) fn current_workflow_commands(&self) -> Vec<WorkflowCommand> {

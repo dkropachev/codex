@@ -1828,6 +1828,22 @@ impl App {
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
+            AppEvent::RefreshWorkflowCommands { generation, cwd } => {
+                crate::workflow_remote::spawn_discovery(
+                    app_server.request_handle(),
+                    generation,
+                    cwd,
+                    self.app_event_tx.clone(),
+                );
+            }
+            AppEvent::WorkflowCommandsLoaded {
+                generation,
+                cwd,
+                result,
+            } => {
+                self.chat_widget
+                    .apply_workflow_commands_result(generation, cwd, result);
+            }
             AppEvent::StartWorkflowCompletion {
                 generation,
                 workflow_dir,

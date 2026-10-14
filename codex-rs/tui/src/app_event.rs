@@ -762,6 +762,19 @@ pub(crate) enum AppEvent {
         matches: Vec<FileMatch>,
     },
 
+    /// Discover workflow commands on the app-server host.
+    RefreshWorkflowCommands {
+        generation: u64,
+        cwd: PathBuf,
+    },
+
+    /// Result of app-server workflow discovery. Older generations are ignored.
+    WorkflowCommandsLoaded {
+        generation: u64,
+        cwd: PathBuf,
+        result: Result<Vec<crate::workflow_commands::WorkflowCommand>, String>,
+    },
+
     /// Load schema and hook completion for only the workflow active in the composer.
     StartWorkflowCompletion {
         generation: u64,

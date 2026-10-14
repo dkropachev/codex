@@ -22,6 +22,47 @@ use serde_json::json;
 use tempfile::TempDir;
 
 #[tokio::test]
+async fn workflow_list_discovers_project_commands_with_server_feature_disabled() -> Result<()> {
+    let home = TempDir::new()?;
+    let project = TempDir::new()?;
+    let workflow_dir = project.path().join(".codex/workflows/team/review");
+    fs::create_dir_all(&workflow_dir)?;
+    fs::write(
+        workflow_dir.join("workflow.yaml"),
+        "id: team/review\ncommand: team-review\nuserDescription: Review changes\n",
+    )?;
+    let mut server = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized()
+        .await?;
+
+    let response: WorkflowListResponse = server
+        .request(|request_id| ClientRequest::WorkflowList {
+            request_id,
+            params: WorkflowListParams {
+                cwd: Some(project.path().display().to_string()),
+                cursor: None,
+                limit: Some(10),
+            },
+        })
+        .await?;
+    assert_eq!(
+        response,
+        WorkflowListResponse {
+            data: vec![WorkflowSummary {
+                id: "team/review".into(),
+                command: "team-review".into(),
+                description: "Review changes".into(),
+                path: workflow_dir.display().to_string(),
+                managed: None,
+            }],
+            next_cursor: None,
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn workflow_list_paginates_and_respects_project_override() -> Result<()> {
     let home = TempDir::new()?;
     let project = TempDir::new()?;
