@@ -6763,6 +6763,19 @@ class WindowsWorldWritableWarningNotification(BaseModel):
     sample_paths: Annotated[list[str], Field(alias="samplePaths")]
 
 
+class WorkflowCompletionItem(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    description: str | None = None
+    value: str
+
+
+class WorkflowCompletionMode(Enum):
+    field = "field"
+    value = "value"
+
+
 class WorkflowReleaseIdentity(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,

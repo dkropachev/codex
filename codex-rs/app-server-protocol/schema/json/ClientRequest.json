@@ -6181,6 +6181,13 @@
       ],
       "type": "object"
     },
+    "WorkflowCompletionMode": {
+      "enum": [
+        "field",
+        "value"
+      ],
+      "type": "string"
+    },
     "WorkflowReleaseIdentity": {
       "properties": {
         "commit": {

@@ -77,16 +77,41 @@ pub fn complete_workflow_cancellable(
     request: &CompletionRequest,
     cancelled: Arc<AtomicBool>,
 ) -> CompletionResult {
+    complete_workflow_with_layout(
+        root,
+        request,
+        cancelled,
+        crate::validation::ExecutableLayout::Developer,
+    )
+}
+
+/// Completes a verified published workflow while its caller retains the run workspace lock.
+pub fn complete_published_workflow_cancellable(
+    root: &Path,
+    request: &CompletionRequest,
+    cancelled: Arc<AtomicBool>,
+) -> CompletionResult {
+    complete_workflow_with_layout(
+        root,
+        request,
+        cancelled,
+        crate::validation::ExecutableLayout::Published,
+    )
+}
+
+fn complete_workflow_with_layout(
+    root: &Path,
+    request: &CompletionRequest,
+    cancelled: Arc<AtomicBool>,
+    layout: crate::validation::ExecutableLayout,
+) -> CompletionResult {
     let deadline = crate::runner::CommandDeadline::after(crate::runner::COMPLETION_TIMEOUT);
     let package = match deadline
         .check(Some(&cancelled))
         .and_then(|()| WorkflowPackage::load(root))
         .and_then(|package| {
             crate::validation::validate_executable_package_cancellable(
-                &package,
-                deadline,
-                &cancelled,
-                crate::validation::ExecutableLayout::Developer,
+                &package, deadline, &cancelled, layout,
             )?;
             Ok(package)
         }) {

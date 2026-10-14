@@ -1566,6 +1566,9 @@ impl MessageProcessor {
             ClientRequest::WorkflowInstall { params, .. } => {
                 self.workflow_list_processor.install(params).await
             }
+            ClientRequest::WorkflowComplete { params, .. } => {
+                self.workflow_list_processor.complete(params).await
+            }
             ClientRequest::ThreadApproveGuardianDeniedAction { params, .. } => {
                 self.thread_processor
                     .thread_approve_guardian_denied_action(&request_id, params)

@@ -27066,6 +27066,30 @@
         "title": "WindowsWorldWritableWarningNotification",
         "type": "object"
       },
+      "WorkflowCompletionItem": {
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
+      "WorkflowCompletionMode": {
+        "enum": [
+          "field",
+          "value"
+        ],
+        "type": "string"
+      },
       "WorkflowReleaseIdentity": {
         "properties": {
           "commit": {

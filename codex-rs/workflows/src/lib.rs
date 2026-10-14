@@ -16,6 +16,7 @@ pub use completion::CompletionItem;
 pub use completion::CompletionMode;
 pub use completion::CompletionRequest;
 pub use completion::CompletionResult;
+pub use completion::complete_published_workflow_cancellable;
 pub use completion::complete_workflow;
 pub use completion::complete_workflow_cancellable;
 pub use discovery::WorkflowCommand;

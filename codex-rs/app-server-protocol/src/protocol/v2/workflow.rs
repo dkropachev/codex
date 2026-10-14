@@ -231,3 +231,42 @@ pub struct WorkflowInstallResponse {
     pub installed: WorkflowReleaseIdentity,
     pub cleanup_pending: bool,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum WorkflowCompletionMode {
+    Field,
+    Value,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowCompleteParams {
+    pub id: String,
+    /// Project directory on the app-server host; defaults to its configured cwd.
+    #[ts(optional = nullable)]
+    pub cwd: Option<String>,
+    pub input: serde_json::Value,
+    #[ts(optional = nullable)]
+    pub active_field: Option<String>,
+    pub prefix: String,
+    pub mode: WorkflowCompletionMode,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowCompletionItem {
+    pub value: String,
+    pub description: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowCompleteResponse {
+    pub items: Vec<WorkflowCompletionItem>,
+    pub error: Option<String>,
+}

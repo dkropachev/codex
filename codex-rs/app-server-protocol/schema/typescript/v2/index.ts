@@ -653,6 +653,8 @@ export type { WindowsSandboxSetupMode } from "./WindowsSandboxSetupMode";
 export type { WindowsSandboxSetupStartParams } from "./WindowsSandboxSetupStartParams";
 export type { WindowsSandboxSetupStartResponse } from "./WindowsSandboxSetupStartResponse";
 export type { WindowsWorldWritableWarningNotification } from "./WindowsWorldWritableWarningNotification";
+export type { WorkflowCompletionItem } from "./WorkflowCompletionItem";
+export type { WorkflowCompletionMode } from "./WorkflowCompletionMode";
 export type { WorkflowReleaseIdentity } from "./WorkflowReleaseIdentity";
 export type { WorkflowSummary } from "./WorkflowSummary";
 export type { WorkflowUpdateEntry } from "./WorkflowUpdateEntry";
