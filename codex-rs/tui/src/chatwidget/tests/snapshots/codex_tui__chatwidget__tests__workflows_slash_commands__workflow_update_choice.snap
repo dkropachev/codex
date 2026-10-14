@@ -1,0 +1,15 @@
+---
+source: tui/src/chatwidget/tests/workflows__slash_commands.rs
+assertion_line: 463
+expression: "render_bottom_popup(&chat, 80)"
+---
+      Update team/review?
+  Wo  1.1.0
+  Se
+
+    › 1. Update
+      2. Dismiss this release
+› te  3. Later
+  te
+      enter select · esc back
+  enter select · esc back

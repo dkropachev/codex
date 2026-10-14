@@ -99,6 +99,15 @@ impl ChatWidget {
         cwd: PathBuf,
         result: Result<WorkflowManagementData, String>,
     ) {
+        if self.workflow_decision_request_id == Some(request_id) {
+            self.workflow_decision_request_id = None;
+            if cwd == self.workflow_invocation_cwd()
+                && let Ok(data) = result
+            {
+                self.show_workflow_update_decisions(data);
+            }
+            return;
+        }
         if self.workflow_management_request_id != Some(request_id)
             || cwd != self.workflow_invocation_cwd()
             || !self.bottom_pane.dismiss_active_view_if_id(VIEW_ID)
@@ -113,13 +122,28 @@ impl ChatWidget {
                 return;
             }
         };
+        let mut workflows = data.workflows;
+        for record in &data.managed {
+            if workflows
+                .iter()
+                .all(|workflow| workflow.id != record.id || workflow.managed.is_none())
+            {
+                workflows.push(codex_app_server_protocol::WorkflowSummary {
+                    id: record.id.clone(),
+                    command: record.id.clone(),
+                    description: "Installed global workflow".to_string(),
+                    path: String::new(),
+                    managed: Some(record.managed.clone()),
+                });
+            }
+        }
         let updates_by_id: HashMap<_, _> = data
             .updates
             .iter()
             .map(|entry| (entry.id.as_str(), entry))
             .collect();
         let mut items: Vec<SelectionItem> = Vec::new();
-        for workflow in &data.workflows {
+        for workflow in &workflows {
             let (name, policy) = match &workflow.managed {
                 Some(managed) => {
                     let release = managed
