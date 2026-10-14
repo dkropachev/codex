@@ -106,7 +106,7 @@ impl WorkflowUpdates {
             Arc::clone(&self.config),
             self.notification_tx.clone(),
             Arc::clone(&self.snapshot),
-            None,
+            /*recovered_tx*/ None,
         ));
         WorkflowCheckUpdatesResponse {
             scan_id,
