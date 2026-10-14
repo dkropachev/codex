@@ -58,6 +58,13 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn workflow_id_for_dir(&self, workflow_dir: &std::path::Path) -> Option<String> {
+        self.workflow_commands
+            .iter()
+            .find(|command| command.workflow_dir == workflow_dir)
+            .map(|command| command.id.clone())
+    }
+
     pub(crate) fn workflow_invocation_cwd(&self) -> PathBuf {
         self.current_cwd
             .clone()

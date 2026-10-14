@@ -243,6 +243,7 @@ mod ui_consts;
 mod unarchive_prompt;
 pub(crate) mod update_action;
 mod workflow_actions;
+mod workflow_completion_rpc;
 mod workflow_remote;
 mod workflow_slash;
 mod worktree_startup;
