@@ -177,6 +177,6 @@ fn tool_and_notice_projection_uses_normal_transcript_presentation() {
       └ A diagram of the history pages
     • Image generation · in_progress
     • Completed `/root/reviewer`
-    • Context refreshed
+    • Context compacted
     ");
 }

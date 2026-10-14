@@ -1,9 +1,13 @@
 use anyhow::Result;
-use codex_config::config_toml::ContextHandoffToml;
 use codex_core::TurnInputRequest;
 use codex_core::compact::SUMMARY_PREFIX;
-use codex_core::config::ContextHandoffConfig;
+use codex_features::Feature;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -16,7 +20,6 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -46,15 +49,7 @@ async fn model_handoff_installs_summary_in_same_turn() -> Result<()> {
     .await;
     let test = test_codex()
         .with_config(|config| {
-            config.context_handoff = Some(
-                ContextHandoffConfig::parse(&ContextHandoffToml {
-                    soft_when: "context.size.tokens >= 0".to_string(),
-                    mid_when: "context.size.tokens > 1000000000".to_string(),
-                    hard_when: "context.size.tokens > 1000000000".to_string(),
-                    ..Default::default()
-                })
-                .unwrap(),
-            );
+            config.features.enable(Feature::HandoffContext).unwrap();
         })
         .build_with_auto_env(&server)
         .await?;
@@ -67,16 +62,10 @@ async fn model_handoff_installs_summary_in_same_turn() -> Result<()> {
     assert!(requests[1].body_contains_text("Continue the user's migration task."));
     assert!(!requests[1].body_contains_text("unique old instruction"));
     assert!(!requests[1].body_contains_text("handoff-1"));
-    for request in &requests {
-        assert_eq!(
-            request
-                .message_input_texts("developer")
-                .into_iter()
-                .filter(|text| text.contains("Consider calling handoff_context"))
-                .count(),
-            1,
-        );
-    }
+    let first_metadata = requests[0].body_json()["client_metadata"].clone();
+    let second_metadata = requests[1].body_json()["client_metadata"].clone();
+    assert!(first_metadata["turn_id"].is_string());
+    assert_eq!(first_metadata["turn_id"], second_metadata["turn_id"]);
     let first_body = requests[0].body_json();
     assert!(
         first_body["tools"]
@@ -86,55 +75,6 @@ async fn model_handoff_installs_summary_in_same_turn() -> Result<()> {
             .filter_map(|tool| tool["name"].as_str())
             .any(|name| name == "handoff_context")
     );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn hard_stage_stops_when_compaction_cannot_lower_threshold() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-    let server = start_mock_server().await;
-    let compact = mount_sse_once(
-        &server,
-        sse(vec![
-            json!({
-                "type": "response.output_item.done",
-                "item": {"type": "compaction", "encrypted_content": "checkpoint"},
-            }),
-            ev_completed("compact-1"),
-        ]),
-    )
-    .await;
-    let test = test_codex()
-        .with_config(|config| {
-            config.context_handoff = Some(
-                ContextHandoffConfig::parse(&ContextHandoffToml {
-                    soft_when: "context.size.tokens > 1000000000".to_string(),
-                    mid_when: "context.size.tokens > 1000000000".to_string(),
-                    hard_when: "context.size.tokens >= 0".to_string(),
-                    ..Default::default()
-                })
-                .unwrap(),
-            );
-        })
-        .build_with_auto_env(&server)
-        .await?;
-    test.codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "continue this task".to_string(),
-            text_elements: Vec::new(),
-        }]))
-        .await?;
-    let message = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::Error(error) => Some(error.message.clone()),
-        _ => None,
-    })
-    .await;
-    assert!(message.contains("hard limit still matches after compaction"));
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-    assert_eq!(compact.requests().len(), 1);
     Ok(())
 }
 
@@ -175,15 +115,7 @@ async fn context_handoff_caps_complete_checkpoint_summary() -> Result<()> {
     .await;
     let test = test_codex()
         .with_config(|config| {
-            config.context_handoff = Some(
-                ContextHandoffConfig::parse(&ContextHandoffToml {
-                    soft_when: "context.size.tokens > 1000000000".to_string(),
-                    mid_when: "context.size.tokens > 1000000000".to_string(),
-                    hard_when: "context.size.tokens > 1000000000".to_string(),
-                    ..Default::default()
-                })
-                .unwrap(),
-            );
+            config.features.enable(Feature::HandoffContext).unwrap();
         })
         .build_with_auto_env(&server)
         .await?;
@@ -212,5 +144,201 @@ async fn context_handoff_caps_complete_checkpoint_summary() -> Result<()> {
         10_000
     );
     assert!(!requests[2].body_contains_text("Preserve this task"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn context_handoff_cancelled_summary_does_not_replace_later_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let interrupted = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("interrupted"),
+            ev_function_call(
+                "old-handoff",
+                "handoff_context",
+                &json!({"summary": "STALE_CHECKPOINT"}).to_string(),
+            ),
+            ev_function_call(
+                "pause",
+                "request_user_input",
+                &json!({"questions": [{
+                    "id": "continue", "header": "Continue", "question": "Continue?",
+                    "options": [
+                        {"label": "Yes", "description": "Proceed"},
+                        {"label": "No", "description": "Stop"}
+                    ]
+                }]})
+                .to_string(),
+            ),
+            ev_completed("interrupted"),
+        ]),
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.features.enable(Feature::HandoffContext).unwrap();
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "prepare the original work".to_string(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::Plan,
+                    settings: Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::RequestUserInput(_))
+    })
+    .await;
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+    assert_eq!(interrupted.requests().len(), 1);
+    let recovery = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("recovery"),
+                ev_function_call("invalid-handoff", "handoff_context", r#"{"summary":""}"#),
+                ev_completed("recovery"),
+            ]),
+            sse(vec![
+                ev_assistant_message("done", "Recovered."),
+                ev_completed("done"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("NEW_USER_REQUEST must remain in context")
+        .await?;
+    let requests = recovery.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].body_contains_text("NEW_USER_REQUEST"));
+    assert!(
+        requests[1]
+            .function_call_output("invalid-handoff")
+            .is_object()
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn context_handoff_tool_requires_independent_opt_in() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    for enabled in [false, true] {
+        let server = start_mock_server().await;
+        let response = mount_sse_once(
+            &server,
+            sse(vec![
+                ev_assistant_message("done", "Ready."),
+                ev_completed("done"),
+            ]),
+        )
+        .await;
+        let test = test_codex()
+            .with_config(move |config| {
+                config.features.disable(Feature::TokenBudget).unwrap();
+                config.features.disable(Feature::HandoffContext).unwrap();
+                if enabled {
+                    config.features.enable(Feature::HandoffContext).unwrap();
+                }
+            })
+            .build_with_auto_env(&server)
+            .await?;
+        test.submit_turn("Inspect available tools.").await?;
+        let body = response.single_request().body_json();
+        let visible = body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "handoff_context");
+        assert_eq!(visible, enabled);
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn context_handoff_retains_live_process() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    core_test_support::skip_if_target_windows!(Ok(()), "uses the POSIX cat command");
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call(
+                    "open",
+                    "exec_command",
+                    r#"{"cmd":"cat","tty":true,"yield_time_ms":1000}"#,
+                ),
+                ev_completed("open"),
+            ]),
+            sse(vec![
+                ev_function_call(
+                    "checkpoint",
+                    "handoff_context",
+                    r#"{"summary":"Continue using the live process."}"#,
+                ),
+                ev_completed("checkpoint"),
+            ]),
+            sse(vec![
+                ev_function_call(
+                    "poll",
+                    "write_stdin",
+                    r#"{"session_id":1000,"chars":"RETAINED_PROCESS\n","yield_time_ms":1000}"#,
+                ),
+                ev_completed("poll"),
+            ]),
+            sse(vec![
+                ev_assistant_message("done", "Done."),
+                ev_completed("done"),
+            ]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_model("gpt-5.5")
+        .with_config(|config| {
+            config.features.enable(Feature::HandoffContext).unwrap();
+            config.features.enable(Feature::UnifiedExec).unwrap();
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn("Keep a live process through a checkpoint.")
+        .await?;
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 4);
+    let inventory = requests[2]
+        .message_input_texts("developer")
+        .into_iter()
+        .find(|text| text.starts_with("<context_handoff_live_handles>"))
+        .expect("live handle inventory");
+    assert_eq!(
+        inventory,
+        "<context_handoff_live_handles>process 1000</context_handoff_live_handles>"
+    );
+    assert!(
+        requests[3].function_call_output("poll")["output"]
+            .as_str()
+            .unwrap()
+            .contains("RETAINED_PROCESS")
+    );
     Ok(())
 }

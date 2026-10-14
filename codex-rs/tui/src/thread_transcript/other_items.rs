@@ -95,7 +95,7 @@ pub(super) fn cells(item: ThreadItem, cwd: &AbsolutePathBuf) -> TranscriptCells 
         }
         ThreadItem::ContextCompaction { .. } => {
             cells.push(Arc::new(history_cell::new_info_event(
-                "Context refreshed".to_string(),
+                "Context compacted".to_string(),
                 /*hint*/ None,
             )));
         }

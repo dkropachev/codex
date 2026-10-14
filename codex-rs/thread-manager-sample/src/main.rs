@@ -292,7 +292,6 @@ async fn new_config(
         tui_show_server_version_notice: true,
         tui_auto_recap: true,
         tui_auto_handoff_threshold_percent: None,
-        context_handoff: None,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         tui_fullscreen_transcript: false,
         tui_mouse_scroll_speed: None,

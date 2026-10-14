@@ -2,4 +2,4 @@
 source: tui/src/chatwidget/tests/compaction_tests.rs
 expression: normalize_compaction_snapshot(lines_to_single_string(&lines))
 ---
-• Context refreshed · <elapsed>
+• Context compacted · <elapsed>

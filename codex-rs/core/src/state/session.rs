@@ -350,10 +350,6 @@ impl SessionState {
             .take_handoff_summary_request(turn_id)
     }
 
-    pub(crate) fn claim_handoff_guidance(&mut self, stage: crate::context_handoff::Stage) -> bool {
-        self.auto_compact_window.claim_handoff_guidance(stage)
-    }
-
     pub(crate) fn start_new_context_window(&mut self) -> (u64, AutoCompactWindowIds) {
         let window = self.auto_compact_window.advance();
         self.auto_compact_window.clear_prefill();

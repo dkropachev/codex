@@ -1301,7 +1301,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         registry.add_with_exposure(NewContextWindowHandler, ToolExposure::DirectModelOnly);
         registry.add(GetContextRemainingHandler);
     }
-    if turn_context.config.context_handoff.is_some() {
+    if features.enabled(Feature::HandoffContext) {
         registry.add_with_exposure(HandoffContextHandler, ToolExposure::DirectModelOnly);
     }
 

@@ -1,258 +1,79 @@
+use crate::compact::CompactedHistoryMetadata;
+use crate::compact::SUMMARY_PREFIX;
+use crate::compact::build_compacted_history;
+use crate::compact::build_compaction_replacement_history;
 use crate::context::ContextualUserFragment;
-use crate::context::HandoffGuidance;
 use crate::context::HandoffInventory;
+use crate::context::UserGoalUpdate;
+use crate::hook_runtime::PostCompactHookOutcome;
+use crate::hook_runtime::PreCompactHookOutcome;
+use crate::hook_runtime::run_post_compact_hooks;
+use crate::hook_runtime::run_pre_compact_hooks;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
-use codex_config::config_toml::ContextHandoffToml;
-use std::collections::BTreeMap;
+use codex_analytics::CompactionTrigger;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
+use codex_protocol::items::ContextCompactionItem;
+use codex_protocol::items::TurnItem;
+use codex_protocol::protocol::AgentStatus;
+use std::sync::Arc;
 
-const MAX_GUIDANCE_BYTES: usize = 4_096;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ContextHandoffConfig {
-    soft: Expr,
-    mid: Expr,
-    hard: Expr,
-    pub soft_guidance: String,
-    pub mid_guidance: String,
-    pub summary_instructions: String,
-    rates: BTreeMap<String, InputRate>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct InputRate {
-    input_per_million: f64,
-    cached_input_per_million: f64,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum Expr {
-    Compare(Field, Op, f64),
-    And(Box<Self>, Box<Self>),
-    Or(Box<Self>, Box<Self>),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Field {
-    Tokens,
-    Price,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Op {
-    Lt,
-    Le,
-    Gt,
-    Ge,
-    Eq,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Stage {
-    None,
-    Soft,
-    Mid,
-    Hard,
-}
-
-#[derive(Default)]
-pub(crate) struct HandoffTurnState {
-    pub(crate) hard_reset_attempted: bool,
-    pub(crate) uncached_after_reset: bool,
-    pub(crate) last_sampled_model: Option<String>,
-}
-
-/// Measures the complete next request, rechecking thresholds after appending
-/// guidance for each newly reached soft or mid stage.
-pub(crate) async fn stage_before_request(
-    sess: &Session,
-    step: &StepContext,
-    state: &HandoffTurnState,
-) -> Stage {
-    let turn = step.turn.as_ref();
-    let Some(policy) = turn.config.context_handoff.as_ref() else {
-        return Stage::None;
-    };
-    let base_instructions = sess.get_prompt_base_instructions().await;
-    let tool_tokens = step
-        .tool_router
-        .model_visible_specs()
-        .iter()
-        .filter_map(|tool| serde_json::to_string(tool).ok())
-        .map(|tool| codex_utils_output_truncation::approx_token_count(&tool) as i64)
-        .sum::<i64>();
-    let switched_model = state
-        .last_sampled_model
-        .as_deref()
-        .is_some_and(|model| model != step.settings.model_info.slug);
-    let usage = sess.token_usage_info().await;
-    let api_billed = turn
-        .auth_manager
-        .as_deref()
-        .and_then(codex_login::AuthManager::auth_cached)
-        .is_none_or(|auth| !auth.uses_codex_backend());
-    loop {
-        let history_tokens = sess
-            .clone_history()
-            .await
-            .estimate_token_count_with_base_instructions(&base_instructions)
-            .unwrap_or(0);
-        let tokens = history_tokens.saturating_add(tool_tokens);
-        let cached = if state.uncached_after_reset || switched_model {
-            0
-        } else {
-            usage.as_ref().map_or(0, |usage| {
-                let last = &usage.last_token_usage;
-                if last.input_tokens > 0 {
-                    tokens.saturating_mul(last.cached_input_tokens.max(0)) / last.input_tokens
-                } else {
-                    0
-                }
-            })
-        };
-        let price = api_billed
-            .then(|| {
-                policy.price(
-                    &turn.config.model_provider_id,
-                    &step.settings.model_info.slug,
-                    step.settings.service_tier.as_deref().unwrap_or("default"),
-                    tokens,
-                    cached,
-                )
-            })
-            .flatten();
-        let stage = policy.stage(tokens, price);
-        if matches!(stage, Stage::Soft | Stage::Mid) && sess.claim_handoff_guidance(stage).await {
-            let (label, guidance) = if stage == Stage::Mid {
-                ("mid", &policy.mid_guidance)
-            } else {
-                ("soft", &policy.soft_guidance)
-            };
-            let (_, _, window_id) = sess.current_window().await;
-            let message = ContextualUserFragment::into(HandoffGuidance(format!(
-                "<handoff_stage>{label}</handoff_stage><handoff_window>{window_id}</handoff_window>\n{guidance}\n{}",
-                policy.summary_instructions
-            )));
-            sess.record_conversation_items(
-                turn,
-                &step.settings.model_info,
-                std::slice::from_ref(&message),
-            )
-            .await;
-        } else {
-            return stage;
-        }
-    }
-}
-
-impl ContextHandoffConfig {
-    pub fn parse(config: &ContextHandoffToml) -> Result<Self, String> {
-        let parse = |name: &str, input: &str| -> Result<Expr, String> {
-            if input.len() > 1_024 {
-                return Err(format!("context_handoff.{name} exceeds 1024 bytes"));
-            }
-            Parser::new(input)
-                .parse()
-                .map_err(|error| format!("context_handoff.{name}: {error}"))
-        };
-        let bounded = |name: &str, text: Option<&str>, default: &str| -> Result<String, String> {
-            let text = text.unwrap_or(default);
-            if text.len() > MAX_GUIDANCE_BYTES {
-                return Err(format!(
-                    "context_handoff.{name} exceeds {MAX_GUIDANCE_BYTES} bytes"
-                ));
-            }
-            Ok(text.to_string())
-        };
-        let mut rates = BTreeMap::new();
-        for (key, rate) in config.rates.iter().flatten() {
-            if key.len() > 256
-                || key.split('/').count() != 3
-                || !rate.input_per_million.is_finite()
-                || rate.input_per_million < 0.0
-                || !rate.cached_input_per_million.is_finite()
-                || rate.cached_input_per_million < 0.0
-            {
-                return Err(format!("invalid context_handoff rate for {key}"));
-            }
-            rates.insert(
-                key.clone(),
-                InputRate {
-                    input_per_million: rate.input_per_million,
-                    cached_input_per_million: rate.cached_input_per_million,
-                },
-            );
-        }
-        Ok(Self {
-            soft: parse("soft_when", &config.soft_when)?,
-            mid: parse("mid_when", &config.mid_when)?,
-            hard: parse("hard_when", &config.hard_when)?,
-            soft_guidance: bounded(
-                "soft_guidance",
-                config.soft_guidance.as_deref(),
-                "Consider calling handoff_context when you reach a safe pause. Include all unfinished work in its summary.",
-            )?,
-            mid_guidance: bounded(
-                "mid_guidance",
-                config.mid_guidance.as_deref(),
-                "Prepare to call handoff_context at the next safe point before the context grows further.",
-            )?,
-            summary_instructions: bounded(
-                "summary_instructions",
-                config.summary_instructions.as_deref(),
-                "Summarize the active task, decisions, unfinished work, and live agent or process IDs.",
-            )?,
-            rates,
-        })
+/// Installs a model-provided summary without starting another model request.
+pub(crate) async fn install_checkpoint(
+    sess: &Arc<Session>,
+    step_context: &Arc<StepContext>,
+    summary: String,
+) -> CodexResult<()> {
+    let turn_context = &step_context.turn;
+    match run_pre_compact_hooks(sess, turn_context, CompactionTrigger::Auto).await {
+        PreCompactHookOutcome::Continue => {}
+        PreCompactHookOutcome::Stopped => return Err(CodexErr::TurnAborted),
     }
 
-    pub(crate) fn stage(&self, tokens: i64, price: Option<f64>) -> Stage {
-        if self.hard.evaluate(tokens, price) {
-            Stage::Hard
-        } else if self.mid.evaluate(tokens, price) {
-            Stage::Mid
-        } else if self.soft.evaluate(tokens, price) {
-            Stage::Soft
-        } else {
-            Stage::None
-        }
+    let item = TurnItem::ContextCompaction(ContextCompactionItem::new());
+    sess.emit_turn_item_started(turn_context, &item).await;
+    let old_history = sess.clone_history().await;
+    let input_goal_ids = UserGoalUpdate::message_ids(old_history.raw_items());
+    let summary_text = format!("{SUMMARY_PREFIX}\n{summary}");
+    let mut new_history = build_compacted_history(Vec::new(), &[], &summary_text);
+    if let Some(item) = new_history.last_mut() {
+        item.set_turn_id_if_missing(&turn_context.sub_id);
     }
-
-    pub(crate) fn price(
-        &self,
-        provider: &str,
-        model: &str,
-        tier: &str,
-        tokens: i64,
-        cached: i64,
-    ) -> Option<f64> {
-        let key = format!("{provider}/{model}/{tier}");
-        let rate = self
-            .rates
-            .get(&key)
-            .copied()
-            .or_else(|| bundled_rate(provider, model, tier))?;
-        let tokens = tokens.max(0);
-        let cached = cached.clamp(/*min*/ 0, tokens);
-        let multiplier = if provider == "openai"
-            && matches!(model, "gpt-6-astra" | "gpt-6.1-sol" | "gpt-6-luna")
-            && tokens > 272_000
-        {
-            2.0
-        } else {
-            1.0
-        };
-        Some(
-            ((tokens - cached) as f64 * rate.input_per_million
-                + cached as f64 * rate.cached_input_per_million)
-                * multiplier
-                / 1_000_000.0,
-        )
+    let world_state = sess
+        .build_world_state_for_step(step_context, /*new_window*/ true)
+        .await?;
+    let (new_history, world_state_baseline) =
+        build_compaction_replacement_history(sess, step_context, &world_state, new_history).await;
+    let (window_number, window_ids) = sess.advance_auto_compact_window().await;
+    sess.replace_compacted_history(
+        new_history,
+        step_context.to_turn_context_item(),
+        world_state_baseline,
+        CompactedHistoryMetadata {
+            input_goal_ids,
+            message: summary_text,
+            window_number,
+            window_ids,
+            compaction_response_id: None,
+            compaction_model_hash: turn_context.model_info().comp_hash.clone(),
+            reviewer_compaction_hash: None,
+        },
+    )
+    .await;
+    sess.recompute_token_usage(&step_context.turn).await;
+    record_live_handles(sess, turn_context).await;
+    sess.emit_turn_item_completed(turn_context, item).await;
+    if let PostCompactHookOutcome::Stopped =
+        run_post_compact_hooks(sess, turn_context, CompactionTrigger::Auto).await
+    {
+        return Err(CodexErr::TurnAborted);
     }
+    Ok(())
 }
 
-pub(crate) async fn record_live_handles(sess: &Session, turn: &TurnContext) {
+async fn record_live_handles(sess: &Session, turn: &TurnContext) {
     let mut entries = Vec::new();
     if let Ok(agents) = sess
         .services
@@ -276,7 +97,16 @@ pub(crate) async fn record_live_handles(sess: &Session, turn: &TurnContext) {
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_else(|| agent.thread_id.to_string());
-            entries.push(format!("agent {name}: {:?}", agent.status));
+            let status = match agent.status {
+                AgentStatus::PendingInit => "pending_init",
+                AgentStatus::Running => "running",
+                AgentStatus::Interrupted => "interrupted",
+                AgentStatus::Completed(_) => "completed",
+                AgentStatus::Errored(_) => "errored",
+                AgentStatus::Shutdown => "shutdown",
+                AgentStatus::NotFound => "not_found",
+            };
+            entries.push(format!("agent {} ({name}): {status}", agent.thread_id));
         }
     }
     for process in sess
@@ -293,163 +123,7 @@ pub(crate) async fn record_live_handles(sess: &Session, turn: &TurnContext) {
         return;
     }
     let inventory = entries.join("\n");
-    let inventory = codex_utils_output_truncation::truncate_text(
-        &inventory,
-        codex_utils_output_truncation::TruncationPolicy::Tokens(/*tokens*/ 1_000),
-    );
     let item = ContextualUserFragment::into(HandoffInventory(inventory));
     sess.record_conversation_items(turn, turn.model_info(), std::slice::from_ref(&item))
         .await;
 }
-
-// Standard API rates published at https://developers.openai.com/api/docs/pricing
-// (checked 2026-10-13). Unknown models and tiers deliberately have no estimate.
-fn bundled_rate(provider: &str, model: &str, tier: &str) -> Option<InputRate> {
-    if provider != "openai" {
-        return None;
-    }
-    let (input, cached) = match model {
-        "gpt-6-astra" => (5.0, 0.5),
-        "gpt-6.1-sol" => (2.0, 0.1),
-        "gpt-6-luna" => (0.05, 0.005),
-        _ => return None,
-    };
-    let multiplier = match tier {
-        "default" | "standard" => 1.0,
-        "fast" | "priority" => 2.0,
-        "ultrafast" if model == "gpt-6.1-sol" => 6.0,
-        "batch" | "flex" => 0.5,
-        _ => return None,
-    };
-    Some(InputRate {
-        input_per_million: input * multiplier,
-        cached_input_per_million: cached * multiplier,
-    })
-}
-
-impl Expr {
-    fn evaluate(&self, tokens: i64, price: Option<f64>) -> bool {
-        match self {
-            Self::Compare(field, op, value) => {
-                let observed = match field {
-                    Field::Tokens => Some(tokens as f64),
-                    Field::Price => price,
-                };
-                observed.is_some_and(|observed| match op {
-                    Op::Lt => observed < *value,
-                    Op::Le => observed <= *value,
-                    Op::Gt => observed > *value,
-                    Op::Ge => observed >= *value,
-                    Op::Eq => observed == *value,
-                })
-            }
-            Self::And(left, right) => left.evaluate(tokens, price) && right.evaluate(tokens, price),
-            Self::Or(left, right) => left.evaluate(tokens, price) || right.evaluate(tokens, price),
-        }
-    }
-}
-
-struct Parser<'a> {
-    text: &'a str,
-    position: usize,
-}
-impl<'a> Parser<'a> {
-    fn new(text: &'a str) -> Self {
-        Self { text, position: 0 }
-    }
-    fn rest(&self) -> &'a str {
-        &self.text[self.position..]
-    }
-    fn whitespace(&mut self) {
-        while self
-            .rest()
-            .as_bytes()
-            .first()
-            .is_some_and(u8::is_ascii_whitespace)
-        {
-            self.position += 1;
-        }
-    }
-    fn consume(&mut self, token: &str) -> bool {
-        self.whitespace();
-        if self.rest().starts_with(token) {
-            self.position += token.len();
-            true
-        } else {
-            false
-        }
-    }
-    fn parse(mut self) -> Result<Expr, String> {
-        let expr = self.or()?;
-        self.whitespace();
-        if self.rest().is_empty() {
-            Ok(expr)
-        } else {
-            Err(format!("unexpected input at byte {}", self.position))
-        }
-    }
-    fn or(&mut self) -> Result<Expr, String> {
-        let mut expr = self.and()?;
-        while self.consume("||") {
-            expr = Expr::Or(Box::new(expr), Box::new(self.and()?));
-        }
-        Ok(expr)
-    }
-    fn and(&mut self) -> Result<Expr, String> {
-        let mut expr = self.atom()?;
-        while self.consume("&&") {
-            expr = Expr::And(Box::new(expr), Box::new(self.atom()?));
-        }
-        Ok(expr)
-    }
-    fn atom(&mut self) -> Result<Expr, String> {
-        if self.consume("(") {
-            let expr = self.or()?;
-            if !self.consume(")") {
-                return Err("expected ')'".to_string());
-            }
-            return Ok(expr);
-        }
-        let field = if self.consume("context.size.tokens") {
-            Field::Tokens
-        } else if self.consume("context.size.price") {
-            Field::Price
-        } else {
-            return Err("expected context.size.tokens or context.size.price".to_string());
-        };
-        let op = if self.consume(">=") {
-            Op::Ge
-        } else if self.consume("<=") {
-            Op::Le
-        } else if self.consume("==") {
-            Op::Eq
-        } else if self.consume(">") {
-            Op::Gt
-        } else if self.consume("<") {
-            Op::Lt
-        } else {
-            return Err("expected comparison operator".to_string());
-        };
-        self.whitespace();
-        let bytes = self.rest().as_bytes();
-        let len = bytes
-            .iter()
-            .take_while(|byte| byte.is_ascii_digit() || **byte == b'.')
-            .count();
-        if len == 0 {
-            return Err("expected nonnegative number".to_string());
-        }
-        let value = self.rest()[..len]
-            .parse::<f64>()
-            .map_err(|_| "invalid number")?;
-        if !value.is_finite() {
-            return Err("number must be finite".to_string());
-        }
-        self.position += len;
-        Ok(Expr::Compare(field, op, value))
-    }
-}
-
-#[cfg(test)]
-#[path = "context_handoff_tests.rs"]
-mod tests;

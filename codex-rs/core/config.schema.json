@@ -1008,6 +1008,9 @@
             "guardianv2_decisions_comparison": {
               "type": "boolean"
             },
+            "handoff_context": {
+              "type": "boolean"
+            },
             "hooks": {
               "type": "boolean"
             },
@@ -1433,68 +1436,6 @@
           "default": null
         }
       },
-      "type": "object"
-    },
-    "ContextHandoffRateToml": {
-      "additionalProperties": false,
-      "properties": {
-        "cached_input_per_million": {
-          "description": "USD per million cached input tokens.",
-          "format": "double",
-          "type": "number"
-        },
-        "input_per_million": {
-          "description": "USD per million non-cached input tokens.",
-          "format": "double",
-          "type": "number"
-        }
-      },
-      "required": [
-        "cached_input_per_million",
-        "input_per_million"
-      ],
-      "type": "object"
-    },
-    "ContextHandoffToml": {
-      "additionalProperties": false,
-      "properties": {
-        "hard_when": {
-          "description": "Forced summarizing-compaction condition; takes priority over both reminders.",
-          "type": "string"
-        },
-        "mid_guidance": {
-          "description": "Optional mid-stage reminder text, limited to 4,096 bytes.",
-          "type": "string"
-        },
-        "mid_when": {
-          "description": "Mid-stage reminder condition; takes priority over `soft_when`.",
-          "type": "string"
-        },
-        "rates": {
-          "additionalProperties": {
-            "$ref": "#/definitions/ContextHandoffRateToml"
-          },
-          "description": "Input prices in USD per million tokens, keyed by `provider/model/tier`.",
-          "type": "object"
-        },
-        "soft_guidance": {
-          "description": "Optional soft reminder text, limited to 4,096 bytes.",
-          "type": "string"
-        },
-        "soft_when": {
-          "description": "Soft reminder condition over estimated next-request tokens and USD input cost.",
-          "type": "string"
-        },
-        "summary_instructions": {
-          "description": "Optional instructions for the model's handoff summary, limited to 4,096 bytes.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "hard_when",
-        "mid_when",
-        "soft_when"
-      ],
       "type": "object"
     },
     "ContextManagementConfigToml": {
@@ -7646,14 +7587,6 @@
     "computer_use": {
       "$ref": "#/definitions/ComputerUseConfigToml"
     },
-    "context_handoff": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/ContextHandoffToml"
-        }
-      ],
-      "description": "Optional in-place context handoff policy."
-    },
     "daybreak": {
       "description": "Default Daybreak preference for new threads and non-interactive turns.",
       "type": "boolean"
@@ -7949,6 +7882,9 @@
           "$ref": "#/definitions/FeatureToml_for_GuardianV2ConfigToml"
         },
         "guardianv2_decisions_comparison": {
+          "type": "boolean"
+        },
+        "handoff_context": {
           "type": "boolean"
         },
         "hooks": {

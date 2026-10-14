@@ -14,9 +14,6 @@ use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::context::CyberPolicyAutoRecovery;
 use crate::context::UserVerificationNotice;
-use crate::context_handoff::HandoffTurnState;
-use crate::context_handoff::Stage as HandoffStage;
-use crate::context_handoff::stage_before_request;
 use crate::cyber_access_program;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::feedback_tags;
@@ -178,13 +175,6 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<Option<String>> {
-    let mut handoff_state = HandoffTurnState {
-        last_sampled_model: sess
-            .previous_turn_settings()
-            .await
-            .map(|settings| settings.model),
-        ..Default::default()
-    };
     sess.take_handoff_summary_request(&turn_context.sub_id)
         .await;
     if crate::guardian::is_basic_session_source(&turn_context.session_source) {
@@ -519,58 +509,31 @@ pub(crate) async fn run_turn(
                 .await?
             }
         };
-        super::time_reminder::maybe_record_current_time_reminder(
-            sess.as_ref(),
-            turn_context.as_ref(),
-            &window_id,
-        )
-        .await?;
-        sess.record_step_world_state_if_changed(step_context.as_ref())
-            .await?;
-        // Isolated Guardian reviewers deliberately have no skill catalog.
-        if !crate::guardian::is_basic_session_source(&turn_context.session_source) {
-            validate_required_skills(
-                &sess.services.thread_extension_data,
-                &turn_context.extension_data,
-                step_context.environments.required_skills(),
-            )
-            .map_err(CodexErr::Fatal)?;
-        }
-        // Keep the override after accepted input so history truncation removes them together.
-        sess.record_reasoning_effort_override(step_context.as_ref())
-            .await;
-        if stage_before_request(sess.as_ref(), step_context.as_ref(), &handoff_state).await
-            == HandoffStage::Hard
-        {
-            if handoff_state.hard_reset_attempted {
-                return Err(CodexErr::Fatal(
-                        "Context handoff hard limit still matches after compaction; the thread and live tools remain available.".to_string(),
-                    ));
-            }
-            handoff_state.hard_reset_attempted = true;
-            if let Err(err) = run_auto_compact(
-                &sess,
-                Arc::clone(&step_context),
-                Arc::clone(&step_context),
-                &mut client_session,
-                CompactionReason::ContextLimit,
-                CompactionPhase::MidTurn,
-            )
-            .await
-            {
-                if matches!(err.details(), CodexErrorDetails::TurnAborted) {
-                    return Err(err);
-                }
-                return Err(CodexErr::Fatal(format!(
-                    "Context handoff could not compact this thread: {err}. Live tools remain available."
-                )));
-            }
-            crate::context_handoff::record_live_handles(&sess, turn_context.as_ref()).await;
-            handoff_state.uncached_after_reset = true;
-            continue;
-        }
-        handoff_state.hard_reset_attempted = false;
         let sampling_request_result: CodexResult<_> = async {
+            super::time_reminder::maybe_record_current_time_reminder(
+                sess.as_ref(),
+                turn_context.as_ref(),
+                &window_id,
+            )
+            .await?;
+
+            sess.record_step_world_state_if_changed(step_context.as_ref())
+                .await?;
+
+            // Isolated Guardian reviewers deliberately have no skill catalog.
+            if !crate::guardian::is_basic_session_source(&turn_context.session_source) {
+                validate_required_skills(
+                    &sess.services.thread_extension_data,
+                    &turn_context.extension_data,
+                    step_context.environments.required_skills(),
+                )
+                .map_err(CodexErr::Fatal)?;
+            }
+
+            // Keep the override after accepted input so history truncation removes them together.
+            sess.record_reasoning_effort_override(step_context.as_ref())
+                .await;
+
             // Construct the input that we will send to the model.
             let sampling_request_input: Vec<ResponseItem> = async {
                 sess.clone_history()
@@ -594,9 +557,6 @@ pub(crate) async fn run_turn(
         .await;
         match sampling_request_result {
             Ok((sampling_request_output, sampling_request_input)) => {
-                handoff_state.uncached_after_reset = false;
-                handoff_state.last_sampled_model =
-                    Some(step_context.settings.model_info.slug.clone());
                 guardian_budget_compacted = false;
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
@@ -679,7 +639,7 @@ pub(crate) async fn run_turn(
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if should_roll_over {
                     let compaction_result = if let Some(summary) = handoff_summary {
-                        crate::compact::install_handoff_checkpoint(&sess, &step_context, summary)
+                        crate::context_handoff::install_checkpoint(&sess, &step_context, summary)
                             .await
                     } else {
                         run_auto_compact(
@@ -708,7 +668,6 @@ pub(crate) async fn run_turn(
                     if run_pending_session_start_hooks(&sess, &turn_context).await {
                         return Ok(None);
                     }
-                    handoff_state.uncached_after_reset = true;
                     // After a signaled step, drain the steer even if compaction
                     // leaves the estimated context above the token limit.
                     can_drain_pending_input = !model_needs_follow_up
@@ -1547,9 +1506,7 @@ async fn run_auto_compact(
         conversation.id = %sess.thread_id,
         turn.id = %turn_context.sub_id,
     );
-    if turn_context.config.features.enabled(Feature::TokenBudget)
-        && turn_context.config.context_handoff.is_none()
-    {
+    if turn_context.config.features.enabled(Feature::TokenBudget) {
         // Compaction is the reset request, so force a new context window
         // instead of consuming a pending `new_context` tool request.
         emit_compact_metric(
