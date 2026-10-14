@@ -56,6 +56,26 @@ async fn late_workflow_discovery_does_not_replace_newer_server_results() {
     assert_eq!(chat.workflow_commands, vec![current_command]);
 }
 
+#[tokio::test]
+async fn workflow_discovery_error_is_visible() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    chat.apply_workflow_commands_result(
+        chat.workflow_commands_generation,
+        chat.workflow_invocation_cwd(),
+        Err("source unavailable".to_string()),
+    );
+
+    let cells = drain_insert_history_normalized(&mut rx);
+    insta::assert_snapshot!(
+        cells
+            .iter()
+            .map(|cell| lines_to_single_string(cell).trim().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
 fn next_shell_command(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> String {
     loop {
         match op_rx.try_recv() {

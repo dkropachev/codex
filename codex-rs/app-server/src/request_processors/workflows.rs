@@ -111,11 +111,6 @@ impl WorkflowListProcessor {
         &self,
         params: WorkflowListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        if !self.config.features.enabled(Feature::Workflows) {
-            return Err(method_not_found(
-                "workflow management requires the workflows feature",
-            ));
-        }
         if let Some(updates) = &self.updates {
             updates.wait_for_recovery().await;
         }
