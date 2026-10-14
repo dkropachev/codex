@@ -41,7 +41,11 @@ impl WorkflowListProcessor {
         params: WorkflowResolveSourceParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.ready_for_mutation().await?;
-        let source = source_for_host(&params.source, params.cwd.as_deref())?;
+        let source = source_for_host(
+            &params.source,
+            params.cwd.as_deref(),
+            self.config.cwd.as_path(),
+        )?;
         let _slot = self.acquire_source_slot()?;
         let response = mutate(Arc::clone(&self.config), move |_, _| {
             let source = WorkflowGitSource::parse(&source)?;
@@ -65,7 +69,11 @@ impl WorkflowListProcessor {
         params: WorkflowInstallParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let updates = self.ready_for_mutation().await?;
-        let source = source_for_host(&params.source, params.cwd.as_deref())?;
+        let source = source_for_host(
+            &params.source,
+            params.cwd.as_deref(),
+            self.config.cwd.as_path(),
+        )?;
         validate_identity(&params.expected_release)?;
         let _slot = self.acquire_source_slot()?;
         let response = mutate(Arc::clone(&self.config), move |service, config| {
@@ -253,20 +261,27 @@ fn validate_source(source: &str) -> Result<(), JSONRPCErrorError> {
     Ok(())
 }
 
-fn source_for_host(source: &str, cwd: Option<&str>) -> Result<String, JSONRPCErrorError> {
+fn source_for_host(
+    source: &str,
+    cwd: Option<&str>,
+    configured_cwd: &Path,
+) -> Result<String, JSONRPCErrorError> {
     validate_source(source)?;
-    let Some(cwd) = cwd else {
-        return Ok(source.to_string());
+    let cwd = match cwd {
+        Some(cwd) => {
+            if cwd.len() > 4_096 {
+                return Err(invalid_params("workflow cwd is too long"));
+            }
+            let cwd = PathBuf::from(cwd);
+            if !cwd.is_absolute() {
+                return Err(invalid_params(
+                    "workflow cwd must be absolute on the app-server host",
+                ));
+            }
+            cwd
+        }
+        None => configured_cwd.to_path_buf(),
     };
-    if cwd.len() > 4_096 {
-        return Err(invalid_params("workflow cwd is too long"));
-    }
-    let cwd = PathBuf::from(cwd);
-    if !cwd.is_absolute() {
-        return Err(invalid_params(
-            "workflow cwd must be absolute on the app-server host",
-        ));
-    }
     if Path::new(source).is_relative() && !source.contains("://") && !source.contains(':') {
         return cwd
             .join(source)
@@ -276,6 +291,10 @@ fn source_for_host(source: &str, cwd: Option<&str>) -> Result<String, JSONRPCErr
     }
     Ok(source.to_string())
 }
+
+#[cfg(test)]
+#[path = "mutations_tests.rs"]
+mod tests;
 
 fn validate_identity(identity: &ApiReleaseIdentity) -> Result<(), JSONRPCErrorError> {
     if identity.commit.len() > 128
