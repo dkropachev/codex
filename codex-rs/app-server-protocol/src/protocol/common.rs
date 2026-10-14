@@ -752,6 +752,12 @@ client_request_definitions! {
         serialization: None,
         response: v2::WorkflowListResponse,
     },
+    #[experimental("workflow/managedList")]
+    WorkflowManagedList => "workflow/managedList" {
+        params: v2::WorkflowManagedListParams,
+        serialization: None,
+        response: v2::WorkflowManagedListResponse,
+    },
     #[experimental("workflow/updatesRead")]
     WorkflowUpdatesRead => "workflow/updatesRead" {
         params: v2::WorkflowUpdatesReadParams,

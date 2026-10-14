@@ -7,9 +7,12 @@ use tokio::sync::Semaphore;
 
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::ManagedWorkflowEntry;
 use codex_app_server_protocol::ManagedWorkflowInfo;
 use codex_app_server_protocol::WorkflowListParams;
 use codex_app_server_protocol::WorkflowListResponse;
+use codex_app_server_protocol::WorkflowManagedListParams;
+use codex_app_server_protocol::WorkflowManagedListResponse;
 use codex_app_server_protocol::WorkflowReleaseIdentity;
 use codex_app_server_protocol::WorkflowSummary;
 use codex_app_server_protocol::WorkflowUpdatePolicy;
@@ -150,6 +153,57 @@ impl WorkflowListProcessor {
                 .map_err(|error| internal_error(format!("workflow list failed: {error:#}")))?;
         Ok(Some(response.into()))
     }
+
+    pub(crate) async fn managed_list(
+        &self,
+        params: WorkflowManagedListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        if let Some(updates) = &self.updates {
+            updates.wait_for_recovery().await;
+        }
+        let limit = params
+            .limit
+            .map(|limit| limit as usize)
+            .unwrap_or(DEFAULT_PAGE_LIMIT);
+        if limit == 0 || limit > MAX_PAGE_LIMIT {
+            return Err(invalid_params(
+                "workflow managed list limit must be between 1 and 100",
+            ));
+        }
+        let offset = match params.cursor {
+            Some(cursor) if cursor.len() <= MAX_CURSOR_BYTES => cursor
+                .parse::<usize>()
+                .ok()
+                .filter(|offset| *offset <= 4_096)
+                .ok_or_else(|| invalid_params("invalid workflow managed list cursor"))?,
+            Some(_) => return Err(invalid_params("workflow managed list cursor is too long")),
+            None => 0,
+        };
+        let config = Arc::clone(&self.config);
+        let response = tokio::task::spawn_blocking(move || {
+            let records = managed_records(config.as_ref())?;
+            let mut data = records
+                .into_iter()
+                .skip(offset)
+                .take(limit + 1)
+                .map(|record| ManagedWorkflowEntry {
+                    id: record.id.clone(),
+                    managed: managed_info(&record),
+                })
+                .collect::<Vec<_>>();
+            let next_cursor = if data.len() > limit {
+                data.pop();
+                Some((offset + data.len()).to_string())
+            } else {
+                None
+            };
+            Ok::<_, anyhow::Error>(WorkflowManagedListResponse { data, next_cursor })
+        })
+        .await
+        .map_err(|error| internal_error(format!("workflow managed list task failed: {error}")))?
+        .map_err(|error| internal_error(format!("workflow managed list failed: {error:#}")))?;
+        Ok(Some(response.into()))
+    }
 }
 
 fn list(
@@ -158,18 +212,7 @@ fn list(
     offset: usize,
     limit: usize,
 ) -> anyhow::Result<WorkflowListResponse> {
-    let management = config.codex_home.join(".workflow-management");
-    let has_entries = |root: &AbsolutePathBuf| -> anyhow::Result<bool> {
-        Ok(root.as_path().is_dir() && fs::read_dir(root.as_path())?.next().is_some())
-    };
-    let managed = if has_entries(&management.join("receipts"))?
-        || has_entries(&management.join("journals"))?
-    {
-        ManagedWorkflowService::new(&config.codex_home, &config.codex_home.join("workflows"))?
-            .list_installed()?
-    } else {
-        Vec::new()
-    };
+    let managed = managed_records(config)?;
     let root = config.codex_home.join("workflows");
     let managed_by_path = managed
         .into_iter()
@@ -200,6 +243,22 @@ fn list(
         None
     };
     Ok(WorkflowListResponse { data, next_cursor })
+}
+
+fn managed_records(config: &Config) -> anyhow::Result<Vec<ManagedWorkflowRecord>> {
+    let management = config.codex_home.join(".workflow-management");
+    let has_entries = |root: &AbsolutePathBuf| -> anyhow::Result<bool> {
+        Ok(root.as_path().is_dir() && fs::read_dir(root.as_path())?.next().is_some())
+    };
+    let records = if has_entries(&management.join("receipts"))?
+        || has_entries(&management.join("journals"))?
+    {
+        ManagedWorkflowService::new(&config.codex_home, &config.codex_home.join("workflows"))?
+            .list_installed()?
+    } else {
+        Vec::new()
+    };
+    Ok(records)
 }
 
 fn managed_info(record: &ManagedWorkflowRecord) -> ManagedWorkflowInfo {

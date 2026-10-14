@@ -1542,6 +1542,9 @@ impl MessageProcessor {
             ClientRequest::WorkflowList { params, .. } => {
                 self.workflow_list_processor.list(params).await
             }
+            ClientRequest::WorkflowManagedList { params, .. } => {
+                self.workflow_list_processor.managed_list(params).await
+            }
             ClientRequest::WorkflowUpdatesRead { params, .. } => {
                 self.workflow_list_processor.updates_read(params).await
             }

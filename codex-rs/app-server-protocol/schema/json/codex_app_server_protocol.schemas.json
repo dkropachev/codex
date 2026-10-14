@@ -14643,6 +14643,21 @@
         ],
         "type": "object"
       },
+      "ManagedWorkflowEntry": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "managed": {
+            "$ref": "#/definitions/v2/ManagedWorkflowInfo"
+          }
+        },
+        "required": [
+          "id",
+          "managed"
+        ],
+        "type": "object"
+      },
       "ManagedWorkflowInfo": {
         "properties": {
           "dismissedRelease": {

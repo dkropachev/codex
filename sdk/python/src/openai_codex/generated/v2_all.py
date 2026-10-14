@@ -11242,6 +11242,14 @@ class ListMcpServerStatusResponse(BaseModel):
     ] = None
 
 
+class ManagedWorkflowEntry(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: str
+    managed: ManagedWorkflowInfo
+
+
 class ModelsRequirements(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
