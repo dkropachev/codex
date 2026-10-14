@@ -1869,18 +1869,7 @@ impl App {
                 );
             }
             AppEvent::WorkflowManagementActionFinished { cwd, result } => {
-                if cwd == self.chat_widget.workflow_invocation_cwd() {
-                    match result {
-                        Ok(message) => {
-                            self.chat_widget.add_info_message(message, /*hint*/ None);
-                            self.chat_widget.sync_workflow_commands();
-                            self.chat_widget.open_workflow_management();
-                        }
-                        Err(error) => self
-                            .chat_widget
-                            .add_error_message(format!("Workflow action failed: {error}")),
-                    }
-                }
+                self.chat_widget.on_workflow_action_finished(cwd, result);
             }
             AppEvent::StartWorkflowCompletion {
                 generation,

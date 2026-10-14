@@ -414,6 +414,25 @@ async fn workflow_management_discards_response_after_cwd_refresh() {
 }
 
 #[tokio::test]
+async fn workflow_action_results_are_visible_and_success_refreshes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    let cwd = chat.workflow_invocation_cwd();
+    chat.on_workflow_action_finished(cwd.clone(), Err("stale release".to_string()));
+    chat.on_workflow_action_finished(cwd, Ok("Workflow policy updated".to_string()));
+
+    let cells = drain_insert_history_normalized(&mut rx);
+    insta::assert_snapshot!(
+        cells
+            .iter()
+            .map(|cell| lines_to_single_string(cell).trim().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    assert!(chat.workflow_management_request_id.is_some());
+}
+
+#[tokio::test]
 async fn bare_workflow_slash_reports_disabled_when_feature_off() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

@@ -12,6 +12,24 @@ use crate::workflow_remote::WorkflowManagementData;
 pub(super) const VIEW_ID: &str = "workflow-management";
 
 impl ChatWidget {
+    pub(crate) fn on_workflow_action_finished(
+        &mut self,
+        cwd: PathBuf,
+        result: Result<String, String>,
+    ) {
+        if cwd != self.workflow_invocation_cwd() {
+            return;
+        }
+        match result {
+            Ok(message) => {
+                self.add_info_message(message, /*hint*/ None);
+                self.sync_workflow_commands();
+                self.open_workflow_management();
+            }
+            Err(error) => self.add_error_message(format!("Workflow action failed: {error}")),
+        }
+    }
+
     pub(crate) fn open_workflow_management(&mut self) {
         if !self.config.features.enabled(Feature::Workflows) {
             self.add_error_message("Workflows are disabled.".to_string());
