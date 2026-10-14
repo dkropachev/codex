@@ -124,7 +124,7 @@ async fn compaction_status_clears_when_turn_ends_without_item_completion() {
         assert!(!chat.bottom_pane.status_indicator_visible());
         let history = drain_insert_history(&mut rx);
         let lines: Vec<_> = history.into_iter().flatten().collect();
-        assert!(!lines_to_single_string(&lines).contains("Context compacted"));
+        assert!(!lines_to_single_string(&lines).contains("Context refreshed"));
         handle_turn_started(&mut chat, "turn-2");
         assert_eq!(
             chat.bottom_pane.status_widget().unwrap().header(),
@@ -154,7 +154,7 @@ async fn compaction_history_does_not_start_a_timer_or_finish_live_compaction() {
     );
     let history = drain_insert_history(&mut rx);
     let lines: Vec<_> = history.into_iter().flatten().collect();
-    assert_eq!(lines_to_single_string(&lines).trim(), "• Context compacted");
+    assert_eq!(lines_to_single_string(&lines).trim(), "• Context refreshed");
 }
 
 #[tokio::test]
@@ -196,7 +196,7 @@ async fn compaction_snapshot_restores_elapsed_time_and_clears_on_replayed_comple
         .into_iter()
         .flatten()
         .collect();
-    assert_eq!(lines_to_single_string(&lines).trim(), "• Context compacted");
+    assert_eq!(lines_to_single_string(&lines).trim(), "• Context refreshed");
 }
 
 #[tokio::test]

@@ -1921,7 +1921,7 @@ impl Session {
         None
     }
 
-    async fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
+    pub(crate) async fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
         let state = self.state.lock().await;
         state.previous_turn_settings()
     }
@@ -4578,6 +4578,21 @@ impl Session {
     pub(crate) async fn take_new_context_window_request(&self) -> bool {
         let mut state = self.state.lock().await;
         state.take_new_context_window_request()
+    }
+
+    pub(crate) async fn request_handoff_summary(&self, summary: String) {
+        self.state.lock().await.request_handoff_summary(summary);
+    }
+
+    pub(crate) async fn take_handoff_summary_request(&self) -> Option<String> {
+        self.state.lock().await.take_handoff_summary_request()
+    }
+
+    pub(crate) async fn claim_handoff_guidance(
+        &self,
+        stage: crate::context_handoff::Stage,
+    ) -> bool {
+        self.state.lock().await.claim_handoff_guidance(stage)
     }
 
     pub(crate) async fn start_new_context_window(

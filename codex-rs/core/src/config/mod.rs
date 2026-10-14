@@ -1,6 +1,7 @@
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::context::world_state::validate_managed_developer_instructions;
+pub use crate::context_handoff::ContextHandoffConfig;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
@@ -619,6 +620,8 @@ pub enum ThreadStoreConfig {
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
+    /// Opt-in in-place context handoff policy.
+    pub context_handoff: Option<ContextHandoffConfig>,
     /// App-server-owned destination policy; other runtimes remain unmanaged.
     pub application_network_policy: codex_http_client::NetworkPolicy,
     /// Auth bootstrap routing installed by the app-server configuration owner.
@@ -3331,6 +3334,16 @@ impl Config {
             .tui
             .as_ref()
             .and_then(|tui| tui.auto_handoff_threshold_percent);
+        let context_handoff = cfg.context_handoff.as_ref()
+            .map(ContextHandoffConfig::parse)
+            .transpose()
+            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+        if context_handoff.is_some() && tui_auto_handoff_threshold_percent.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "context_handoff cannot be combined with tui.auto_handoff_threshold_percent",
+            ));
+        }
         if let Some(percent) = tui_auto_handoff_threshold_percent
             && !(71..=85).contains(&percent)
         {
@@ -4634,6 +4647,7 @@ impl Config {
                 .unwrap_or(true),
             tui_auto_recap: cfg.tui.as_ref().map(|t| t.auto_recap).unwrap_or(/*default*/ true),
             tui_auto_handoff_threshold_percent,
+            context_handoff,
             model_availability_nux: cfg
                 .tui
                 .as_ref()

@@ -40,7 +40,7 @@ impl ChatWidget {
     }
 
     pub(super) fn on_context_compaction_completed(&mut self, id: &str, from_replay: bool) {
-        let mut message = "Context compacted".to_string();
+        let mut message = "Context refreshed".to_string();
         if let Some(active) = self.status_state.compaction.as_ref()
             && active.id == id
         {
@@ -48,7 +48,7 @@ impl ChatWidget {
                 let elapsed = crate::status_indicator_widget::fmt_elapsed_compact(
                     active.started_at.elapsed().as_secs(),
                 );
-                message = format!("Context compacted · {elapsed}");
+                message = format!("Context refreshed · {elapsed}");
             }
             self.clear_context_compaction();
         }

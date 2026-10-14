@@ -178,6 +178,8 @@ pub struct FeatureToggleToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ConfigToml {
+    /// Optional in-place context handoff policy.
+    pub context_handoff: Option<ContextHandoffToml>,
     /// Optional override of model selection.
     pub model: Option<String>,
     /// Default Daybreak preference for new threads and non-interactive turns.
@@ -594,6 +596,34 @@ pub struct ConfigToml {
     pub experimental_use_unified_exec_tool: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ContextHandoffToml {
+    /// Soft reminder condition over estimated next-request tokens and USD input cost.
+    pub soft_when: String,
+    /// Mid-stage reminder condition; takes priority over `soft_when`.
+    pub mid_when: String,
+    /// Forced summarizing-compaction condition; takes priority over both reminders.
+    pub hard_when: String,
+    /// Optional soft reminder text, limited to 4,096 bytes.
+    pub soft_guidance: Option<String>,
+    /// Optional mid-stage reminder text, limited to 4,096 bytes.
+    pub mid_guidance: Option<String>,
+    /// Optional instructions for the model's handoff summary, limited to 4,096 bytes.
+    pub summary_instructions: Option<String>,
+    /// Input prices in USD per million tokens, keyed by `provider/model/tier`.
+    pub rates: Option<std::collections::BTreeMap<String, ContextHandoffRateToml>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ContextHandoffRateToml {
+    /// USD per million non-cached input tokens.
+    pub input_per_million: f64,
+    /// USD per million cached input tokens.
+    pub cached_input_per_million: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]

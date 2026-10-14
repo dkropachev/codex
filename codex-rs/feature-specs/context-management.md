@@ -2,7 +2,7 @@
 
 ## Summary
 
-Context management keeps long-running threads usable without allowing one client to replace another client's active work. It defines atomic app-server contracts for standalone compaction and idle-only turn starts, plus a manual TUI handoff to a fresh thread and a passive context-pressure hint.
+Context management keeps long-running threads usable without allowing one client to replace another client's active work. It defines atomic app-server contracts for standalone compaction and idle-only turn starts, a manual TUI handoff to a fresh thread, an opt-in in-place Core handoff, and a passive context-pressure hint.
 
 ## Behavior
 
@@ -16,6 +16,21 @@ When the latest active context use first reaches 70% of the adjusted model windo
 
 Automatic handoff is disabled unless `[tui].auto_handoff_threshold_percent` is set to a value from 71 through 85. A live Default-mode turn at or above that adjusted active-context threshold may start automation after it completes. Replayed usage alone never starts it. The primary thread must be idle and free of queued input, pending interactions, active goals, and active descendants. Automation first submits a visible wrap-up turn, then uses the existing Handoff-mode planner and verified fresh-thread transfer. A failed or interrupted step leaves the source thread in place and does not immediately retry.
 
+The opt-in `[context_handoff]` policy checks the next request's estimated input tokens and API input price before sampling. It accepts comparisons over `context.size.tokens` and `context.size.price`, joined with `&&`, `||`, and parentheses. Configure all three conditions; the highest matching stage wins. Soft and mid stages append their bounded guidance once per context window. `soft_guidance`, `mid_guidance`, and `summary_instructions` are optional strings with defaults and a 4,096-byte limit each. The model can call `handoff_context(summary)` to checkpoint a summary of at most 10,000 estimated tokens and continue the same turn and thread. Core finishes the other tool calls in that response before installing the checkpoint. It reinjects a bounded inventory of live agent and terminal-process handles. At the hard stage, Core runs summarizing compaction and checks again; failure or a still-matching hard condition ends the turn without destroying those handles. This preserves running handles only within the current Codex process.
+
+`context.size.price` estimates USD input cost from cached-token observations and configured rates; output cost is excluded. Price comparisons evaluate false for ChatGPT subscription sessions or unknown rates. Bundled OpenAI API rates cover GPT-6 Astra, GPT-6.1 Sol, and GPT-6 Luna; `[context_handoff.rates."provider/model/tier"]` overrides input and cached-input rates in USD per million tokens. The affected bundled models use the full-request long-context input-rate uplift above 272,000 estimated input tokens. Local estimates are a best-effort boundary rather than a billing guarantee. `[context_handoff]` cannot be combined with `[tui].auto_handoff_threshold_percent`; manual `/handoff` remains available.
+
+```toml
+[context_handoff]
+soft_when = "context.size.tokens >= 180000 || context.size.price >= 0.20"
+mid_when = "context.size.tokens >= 230000 || context.size.price >= 0.30"
+hard_when = "context.size.tokens >= 270000 || context.size.price >= 0.40"
+
+[context_handoff.rates."openai/custom/default"]
+input_per_million = 2.0
+cached_input_per_million = 0.2
+```
+
 ## Entry Points
 
 - [codex-rs/protocol/src/turn_input.rs](../protocol/src/turn_input.rs)
@@ -25,6 +40,9 @@ Automatic handoff is disabled unless `[tui].auto_handoff_threshold_percent` is s
 - [codex-rs/tui/src/handoff.rs](../tui/src/handoff.rs)
 - [codex-rs/tui/src/chatwidget/handoff.rs](../tui/src/chatwidget/handoff.rs)
 - [codex-rs/tui/src/app/handoff.rs](../tui/src/app/handoff.rs)
+- [codex-rs/config/src/config_toml.rs](../config/src/config_toml.rs)
+- [codex-rs/core/src/context_handoff.rs](../core/src/context_handoff.rs)
+- [codex-rs/core/src/tools/handlers/handoff_context.rs](../core/src/tools/handlers/handoff_context.rs)
 
 ## Subfeatures
 
@@ -73,6 +91,22 @@ Automatic handoff is disabled unless `[tui].auto_handoff_threshold_percent` is s
 - Attachment usage replay identifies the latest completed compaction item when Core's persisted token count is available; Core recomputes usage before completing each compaction item.
 - The hint is informational and leaves explicit `/compact` and `/handoff` unchanged.
 
+### In-Place Handoff
+
+#### Entry Points
+
+- [codex-rs/core/src/config/mod.rs](../core/src/config/mod.rs)
+- [codex-rs/core/src/context_handoff.rs](../core/src/context_handoff.rs)
+- [codex-rs/core/src/compact.rs](../core/src/compact.rs)
+- [codex-rs/core/src/session/turn.rs](../core/src/session/turn.rs)
+
+#### Invariants
+
+- The policy is disabled when its config table is absent. All conditions and guidance bounds are validated at config load.
+- Guidance is appended to history without changing earlier context items. The summary checkpoint removes earlier model history and is persisted in the rollout.
+- The same Core session, agent controller, MCP bindings, and background-process manager continue after an in-place checkpoint.
+- TUI renders one compact “Context refreshed” item and does not display the handoff tool's summary arguments in the normal transcript.
+
 ## Invariants
 
 - Admission is decided inside Core, not from a stale app-server status snapshot, and a losing request cannot abort or steer the winning turn.
@@ -96,6 +130,9 @@ Core coverage proves atomic reservation, exact IDs, automatic provenance, and no
 - Streamed remote-v2 standalone compaction preserves automatic trigger/reason metadata: codex-rs/core/tests/suite/compact_remote.rs:standalone_automatic_compaction_preserves_remote_provenance
 - TokenBudget standalone automatic compaction selects auto hooks: codex-rs/core/tests/suite/token_budget.rs:token_budget_automatic_standalone_compaction_runs_auto_hooks
 - TokenBudget standalone automatic compaction preserves its correlated lifecycle on auto-selected execution environments: codex-rs/core/tests/suite/token_budget.rs:token_budget_automatic_standalone_compaction_supports_remote_executor
+- In-place handoff checkpoints the model summary and continues in the same turn with old history removed and guidance rearmed in the new window: codex-rs/core/tests/suite/context_handoff.rs:model_handoff_installs_summary_in_same_turn
+- A still-matching hard condition stops the turn after one summarizing compaction request: codex-rs/core/tests/suite/context_handoff.rs:hard_stage_stops_when_compaction_cannot_lower_threshold
+- Condition precedence, missing prices, rate overrides, and the long-context boundary: codex-rs/core/src/context_handoff_tests.rs
 
 ### app-server-api (app-server API behavior)
 

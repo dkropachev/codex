@@ -1,3 +1,4 @@
+use crate::context_handoff::Stage;
 use codex_protocol::protocol::TokenUsage;
 use uuid::Uuid;
 
@@ -30,11 +31,14 @@ enum AutoCompactWindowPrefill {
     Estimated(i64),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct AutoCompactWindow {
     window_number: u64,
     ids: AutoCompactWindowIds,
     new_context_window_requested: bool,
+    handoff_summary_requested: Option<String>,
+    handoff_soft_delivered: bool,
+    handoff_mid_delivered: bool,
     /// Absolute input-token baseline for the current compaction window.
     ///
     /// `body_after_prefix` subtracts this from later active-context usage. It is
@@ -51,6 +55,9 @@ impl AutoCompactWindow {
             window_number: 0,
             ids,
             new_context_window_requested: false,
+            handoff_summary_requested: None,
+            handoff_soft_delivered: false,
+            handoff_mid_delivered: false,
             prefill_input_tokens: None,
             token_budget_reminder_delivered: false,
             auto_compact_fallback_delivered: false,
@@ -79,6 +86,9 @@ impl AutoCompactWindow {
         self.ids.previous_window_id = Some(self.ids.window_id);
         self.ids.window_id = Uuid::now_v7();
         self.new_context_window_requested = false;
+        self.handoff_summary_requested = None;
+        self.handoff_soft_delivered = false;
+        self.handoff_mid_delivered = false;
         self.token_budget_reminder_delivered = false;
         self.auto_compact_fallback_delivered = false;
         (self.window_number, self.ids)
@@ -100,6 +110,23 @@ impl AutoCompactWindow {
         let requested = self.new_context_window_requested;
         self.new_context_window_requested = false;
         requested
+    }
+
+    pub(super) fn request_handoff_summary(&mut self, summary: String) {
+        self.handoff_summary_requested = Some(summary);
+    }
+
+    pub(super) fn take_handoff_summary_request(&mut self) -> Option<String> {
+        self.handoff_summary_requested.take()
+    }
+
+    pub(super) fn claim_handoff_guidance(&mut self, stage: Stage) -> bool {
+        let delivered = match stage {
+            Stage::Mid => &mut self.handoff_mid_delivered,
+            Stage::Soft => &mut self.handoff_soft_delivered,
+            Stage::None | Stage::Hard => return false,
+        };
+        !std::mem::replace(delivered, true)
     }
 
     /// Records the request-input side of the first server usage sample. The
@@ -178,6 +205,10 @@ mod tests {
         assert!(!window.claim_token_budget_reminder());
         assert!(window.claim_auto_compact_fallback());
         assert!(!window.claim_auto_compact_fallback());
+        assert!(window.claim_handoff_guidance(Stage::Soft));
+        assert!(!window.claim_handoff_guidance(Stage::Soft));
+        assert!(window.claim_handoff_guidance(Stage::Mid));
+        assert!(!window.claim_handoff_guidance(Stage::Mid));
         window.request_new_context_window();
         assert!(window.take_new_context_window_request());
         assert!(!window.take_new_context_window_request());
@@ -186,6 +217,8 @@ mod tests {
         assert_eq!(window_number, 4);
         assert_eq!(window.window_number(), 4);
         assert_eq!(window.ids(), ids);
+        assert!(window.claim_handoff_guidance(Stage::Soft));
+        assert!(window.claim_handoff_guidance(Stage::Mid));
         assert_eq!(ids.first_window_id, first_window_id);
         assert_eq!(ids.previous_window_id, Some(restored_window_id));
         assert_eq!(ids.window_id.get_version_num(), 7);
