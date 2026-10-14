@@ -231,6 +231,9 @@ pub struct WorkflowUninstallResponse {
 #[ts(export_to = "v2/")]
 pub struct WorkflowResolveSourceParams {
     pub source: String,
+    /// Directory on the app-server host for resolving a relative local source.
+    #[ts(optional = nullable)]
+    pub cwd: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -245,6 +248,9 @@ pub struct WorkflowResolveSourceResponse {
 #[ts(export_to = "v2/")]
 pub struct WorkflowInstallParams {
     pub source: String,
+    /// Directory on the app-server host for resolving a relative local source.
+    #[ts(optional = nullable)]
+    pub cwd: Option<String>,
     pub expected_release: WorkflowReleaseIdentity,
     pub policy: WorkflowUpdatePolicy,
 }
