@@ -110,7 +110,7 @@ fn installs_tagged_and_untagged_local_releases_with_prompt_policy() {
 fn selected_install_rejects_a_changed_release_before_publication() {
     let root = tempfile::tempdir().expect("root");
     let repository = root.path().join("source");
-    source(&repository, "team/build", false);
+    source(&repository, "team/build", /*tagged*/ false);
     let service = ManagedWorkflowService::new(
         &absolute(root.path()),
         &absolute(&root.path().join("workflows")),

@@ -103,7 +103,7 @@ impl ManagedWorkflowService {
         request: ManagedWorkflowInstallRequest<'_>,
         policy: WorkflowUpdatePolicy,
     ) -> anyhow::Result<ManagedWorkflowInstallation> {
-        self.install_selected_release(request, policy, None)
+        self.install_selected_release(request, policy, /*expected_release*/ None)
     }
 
     /// Installs only when the source still advertises the release selected by the caller.
