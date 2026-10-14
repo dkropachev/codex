@@ -1915,36 +1915,18 @@ impl App {
                 }
                 let cancelled = Arc::new(AtomicBool::new(false));
                 self.workflow_completion_cancel = Some(Arc::clone(&cancelled));
-                let tx = self.app_event_tx.clone();
-                std::mem::drop(tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(/*millis*/ 75)).await;
-                    if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
-                        return;
-                    }
-                    let task_cancelled = Arc::clone(&cancelled);
-                    let task_workflow_dir = workflow_dir.clone();
-                    let task_request = request.clone();
-                    let Ok(result) = tokio::task::spawn_blocking(move || {
-                        codex_workflows::complete_workflow_cancellable(
-                            &task_workflow_dir,
-                            &task_request,
-                            task_cancelled,
-                        )
-                    })
-                    .await
-                    else {
-                        return;
-                    };
-                    if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
-                        return;
-                    }
-                    tx.send(AppEvent::WorkflowCompletionResult {
+                crate::workflow_completion_rpc::spawn_completion(
+                    app_server.request_handle(),
+                    crate::workflow_completion_rpc::WorkflowCompletionTask {
+                        id: self.chat_widget.workflow_id_for_dir(&workflow_dir),
+                        cwd: self.chat_widget.workflow_invocation_cwd(),
                         generation,
                         workflow_dir,
                         request,
-                        result,
-                    });
-                }));
+                        cancelled,
+                        tx: self.app_event_tx.clone(),
+                    },
+                );
             }
             AppEvent::CancelWorkflowCompletion => {
                 if let Some(cancelled) = self.workflow_completion_cancel.take() {

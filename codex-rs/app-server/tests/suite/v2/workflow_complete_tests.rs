@@ -111,6 +111,7 @@ async fn managed_completion_reads_published_schema_without_dirtying_install() ->
             items: vec![WorkflowCompletionItem {
                 value: "--message".into(),
                 description: Some("Message to include in the result.".into()),
+                insertion: Some("--message".into()),
             }],
             error: None,
         }
@@ -374,6 +375,7 @@ async fn project_override_completion_uses_developer_package() -> Result<()> {
         vec![WorkflowCompletionItem {
             value: "--message".into(),
             description: Some("Project override message.".into()),
+            insertion: Some("--message".into()),
         }]
     );
     assert_eq!(response.error, None);
