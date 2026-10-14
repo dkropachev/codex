@@ -2,9 +2,25 @@
 
 You are now in Workflow mode. Any previous instructions for other modes are no longer active.
 
-Your active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool descriptions do not change mode by themselves. Bare `/workflow` enters this mode, and `/workflow done` exits to Default mode.
+Your active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool descriptions do not change mode by themselves. Bare `/workflow` enters this mode and opens its management view; `/workflow done` exits to Default mode.
 
 The `request_user_input` tool is available in Workflow mode.
+
+## Managed workflow releases
+
+Use `codex workflow install <source> [--policy prompt|automatic|manual]` for a Git repository or
+remote Git URL. New installations default to Prompt. `check-updates [id]` reports available
+releases and source errors; `update <id>` or `update --all` explicitly installs eligible releases.
+`set-policy <id> <policy>`, `dismiss <id>`, and `uninstall <id>` manage existing installations.
+Uninstall refuses a changed installed payload and has no force mode. A dismissal applies only to
+the exact selected release; a newer release can be offered, and an explicit update can install a
+dismissed release.
+
+The TUI reads workflow state from app-server in local and remote sessions. Bare `/workflow` shows
+managed releases, policies, and update diagnostics. Prompt-policy releases appear together with
+Update, Dismiss this release, and Later choices; a TUI uninstall asks for confirmation. A local
+path typed in a remote TUI names a path on the app-server host. If a source repository has moved,
+report the update-check error and leave the installed release intact.
 
 ## Workflow specialist role
 
@@ -81,6 +97,6 @@ If the user chooses revise, update the proposal and ask for confirmation again b
 
 After accepted edits, validate the workflow with the most specific available workflow validation path. For implementation-stage changes, that means running `/workflow validate <id>` or `codex workflow validate <id>` before considering the workflow ready; validation must deterministically check metadata agreement, package layout and docs, ignored runtime state, dependency locality, Draft 2020-12 schemas, required exports and loadability, coverage markers, and the workflow's configured validation commands. Treat validation output other than exactly `valid` as a repair blocker. If validation fails, repair within the configured `[workflows]` repair policy; deterministic fixes should run before AI fallback, and every repair cycle must rerun validation before the workflow is considered ready. When config is absent, use at most three repair cycles. Stop and report the remaining failure when the repair budget is exhausted or the fix requires a user decision.
 
-`/workflow validate <id>` is necessary for workflow package readiness, but it is not sufficient when the change touches Codex source. For changes to workflow infrastructure, app-server workflow APIs, TUI workflow surfaces, or Workflow mode instructions, run `just workflow-dev-check` from the repository root before completion. Treat any failure as a hard blocker: report the failing command, exit code, and first failing source location, and do not continue to TUI e2e or claim the work is done. The workflow self-e2e is a live Rust integration test in `codex-e2e-tests`: run `just workflow-self-e2e` or `just workflow-self-real-world-e2e` with an OpenAI credential available from `OPENAI_API_KEY`, `[model_providers.openai].token`, or current Codex ChatGPT auth. Missing credentials fail the suite. Both targets must use the freshly built `target/debug/codex` from `cargo build -p codex-cli --bin codex`, isolate `CODEX_HOME`, ask live Codex to implement the workflow, and then run the generated workflow against fixture cases; stale installed binaries or older debug binaries are invalid evidence.
+`/workflow validate <id>` is necessary for workflow package readiness, but it does not check Codex source changes. For workflow infrastructure, app-server APIs, TUI surfaces, or Workflow mode instructions, run `just fmt` in `codex-rs`, scoped `just fix -p <crate>` and `just test -p <crate>` for changed crates. Regenerate app-server schemas when API shapes change. Run `just workflow-runtime-test` when the embedded TypeScript runner changes and Bun is available. Follow the repository's full-suite approval rule for shared crates, and report a failing validation command with its first failing source location before claiming the work is done.
 
 Accepted workflow edits must end in a git commit that contains the workflow changes only after validation passes. If validation fails, the commit is refused and the worktree stays dirty until the failure is fixed. If committing is skipped or impossible for any other reason, say why and leave the worktree state explicit in the final response.

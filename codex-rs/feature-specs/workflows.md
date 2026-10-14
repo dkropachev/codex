@@ -52,6 +52,29 @@ queued input and is synchronized to that thread before the input is submitted. W
 compatibility handling should preserve older command spellings where the CLI intentionally supports
 them.
 
+Installable workflows select a verified Git release from a remote URL or a repository on the
+app-server host. A stable tag is preferred; an untagged repository uses its verified HEAD. The
+shared management service validates the canonical package and any Bun lock, installs dependencies
+through the sandboxed frozen install path, verifies the finished tree, and publishes a receipt and
+payload transaction. New installs default to Prompt. Receipts retain a canonical `file://` source
+for local repositories so checks remain stable across working-directory changes; moving that
+repository is reported as a source error.
+
+Prompt, Automatic, and Manual policies govern startup checks. Automatic installs an eligible
+release, Prompt offers it, and Manual reports it in the update state without acting. Dismissing a
+release suppresses only that exact identity for prompt and automatic actions. An explicit update
+can install a dismissed release. A moved tag, downgrade, stale receipt, dirty installed tree, or
+unavailable sandbox must leave the prior installed release intact. Installation, replacement,
+uninstall, and interrupted dependency work recover through the shared workflow store before
+startup scans begin. Uninstall verifies its active payload and receipt and has no force mode.
+
+The TUI obtains discovery and management state from app-server in local and remote sessions.
+`/workflow` opens the management view; prompt updates appear in one decision view with Update,
+Dismiss this release, and Later per release. A path entered in a remote TUI is resolved on the
+app-server host. Management actions carry the exact installed and selected release identities so
+stale UI state cannot replace or remove a newer release. Existing workflow execution and editing
+aliases remain available through the host CLI path.
+
 Workflow agent roles are built-in role definitions used by the workflow orchestration path. They
 must remain discoverable, renderable in prompts, and compatible with the generic agent-role
 application path.
@@ -63,6 +86,9 @@ application path.
 - [codex-rs/workflows/src/lib.rs](../workflows/src/lib.rs)
 - [codex-rs/tui/src/workflow_commands.rs](../tui/src/workflow_commands.rs)
 - [codex-rs/tui/src/slash_command.rs](../tui/src/slash_command.rs)
+- [codex-rs/workflows/src/managed/management.rs](../workflows/src/managed/management.rs)
+- [codex-rs/app-server/src/request_processors/workflows.rs](../app-server/src/request_processors/workflows.rs)
+- [codex-rs/tui/src/workflow_remote.rs](../tui/src/workflow_remote.rs)
 - [codex-rs/core/src/tasks/workflow_command.rs](../core/src/tasks/workflow_command.rs)
 - [codex-rs/core/src/tasks/workflow_command/runtime.rs](../core/src/tasks/workflow_command/runtime.rs)
 - [codex-rs/core/src/agent/role.rs](../core/src/agent/role.rs)
@@ -88,6 +114,36 @@ application path.
 - Validation findings are deterministic, and successful validation prints exactly `valid`.
 - Existing-ID and symlink collisions never overwrite or partially replace a workflow package.
 - Workflow command dispatch should fail closed for unknown workflow names.
+
+### Managed Workflow Releases
+
+#### Entry Points
+
+- [codex-rs/workflows/src/managed/management.rs](../workflows/src/managed/management.rs)
+- [codex-rs/workflows/src/managed/store.rs](../workflows/src/managed/store.rs)
+- [codex-rs/cli/src/workflow_cmd/managed.rs](../cli/src/workflow_cmd/managed.rs)
+- [codex-rs/app-server-protocol/src/protocol/v2/workflow.rs](../app-server-protocol/src/protocol/v2/workflow.rs)
+- [codex-rs/app-server/src/request_processors/workflows.rs](../app-server/src/request_processors/workflows.rs)
+- [codex-rs/tui/src/chatwidget/workflow_management.rs](../tui/src/chatwidget/workflow_management.rs)
+- [codex-rs/tui/src/chatwidget/workflow_update_decisions.rs](../tui/src/chatwidget/workflow_update_decisions.rs)
+
+#### Invariants
+
+- Installation selects an exact stable tag or verified HEAD and derives the install ID from the
+  package manifest. Occupied or unmanaged targets are never overwritten.
+- A managed receipt binds source, installed release, policy, and optional exact dismissed release.
+  Local sources use canonical credential-free `file://` URLs without changing receipt v1.
+- Git checks have at most four concurrent source operations. The app-server retains a bounded,
+  generation-numbered snapshot with per-workflow errors and notifies clients to reread it.
+- Automatic startup actions recheck policy and dismissal under the workflow lock. Explicit update
+  uses expected installed and available identities and may install a dismissed release.
+- Install, replace, and uninstall journals recover safely and idempotently. A dirty payload,
+  stale receipt, moved tag, downgrade, or conflicting filesystem state fails closed.
+- Managed execution and completion hold the workflow lock and use a verified private copy so
+  runtime writes do not dirty the installed payload.
+- App-server v2 mutation requests carry expected release identities. TUI clients reread retained
+  state after attachment, reconnect, and notifications; a remote TUI labels paths as belonging to
+  the app-server host.
 
 ### Workflow Roles
 
@@ -223,6 +279,11 @@ request and terminates the workflow without partial output.
 - Workflow command RPC rejects execution during an active unified-exec turn: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_rejects_active_turn
 - Hosted workflow commands receive correlated single-choice and free-text answers across sequential requests, replay pending input on live resume, and do not replay resolved input: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_round_trips_choice_and_freeform_user_input
 - Interrupting a workflow clears its pending input request and produces no partial result: codex-rs/app-server/tests/suite/v2/workflows__thread_command.rs:thread_workflow_command_interrupt_clears_pending_user_input
+- Managed discovery, project override behavior, and independent managed receipts: codex-rs/app-server/tests/suite/v2/workflow_list_tests.rs:workflow_list_paginates_and_respects_project_override
+- Startup update snapshots, reconnect reads, automatic policy actions, and source diagnostics: codex-rs/app-server/tests/suite/v2/workflow_updates_tests.rs:workflow_updates_snapshot_survives_restart_and_reports_local_source_error,workflow_updates_snapshot_is_retained_for_a_reconnected_client,automatic_startup_update_installs_release_but_explicit_check_only_reports_it
+- Stale mutation identities and dirty uninstall refusal: codex-rs/app-server/tests/suite/v2/workflow_mutations_tests.rs:workflow_mutations_enforce_release_identity_and_preserve_payload_on_refusal
+- Exact source selection, local file URLs, relative host paths, and shared source concurrency: codex-rs/app-server/tests/suite/v2/workflow_install_tests.rs:workflow_install_requires_selected_release_and_persists_requested_policy,workflow_install_resolves_untagged_file_url_on_server_host,startup_scan_and_source_requests_share_four_git_slots
+- Managed completion runs against the published payload under a lock: codex-rs/app-server/tests/suite/v2/workflow_complete_tests.rs:managed_completion_reads_published_schema_without_dirtying_install,managed_completion_holds_run_lock_and_preserves_installed_payload
 
 ### cli (main CLI command behavior)
 
@@ -236,6 +297,8 @@ for unknown workflows.
 - Canonical execution, configured output limits, and migration diagnostics are covered: codex-rs/cli/tests/workflows__cli.rs:workflow_alias_positional_args_report_migration_guidance,workflow_run_executes_fresh_scaffold_and_formats_markdown,workflow_run_legacy_package_reports_migration_guidance,workflow_run_passes_the_effective_output_limit_to_bun,workflow_run_rejects_an_incomplete_canonical_package,workflow_run_by_nested_id_merges_json_input_and_flags,workflow_run_invokes_bun_with_structured_input
 - Safe scaffolding and exact validation output are covered: codex-rs/cli/tests/workflows__cli.rs:workflow_develop_refuses_to_overwrite_an_existing_target,workflow_develop_refuses_to_traverse_a_symlink,workflow_develop_scaffolds_project_workflow,workflow_validate_prints_exact_success_marker_for_fresh_scaffold,workflow_validate_reports_an_ambiguous_alias,workflow_validate_reports_an_undiscoverable_package_by_safe_id_path,workflow_validate_reports_invalid_workflow_at_cli_boundary
 - Discovery and compatibility management behavior remains covered: codex-rs/cli/tests/workflows__cli.rs:exact_workflow_id_takes_precedence_over_another_packages_alias,workflow_list_outputs_discovered_commands_as_json,workflow_list_requires_workflows_feature,workflow_management_commands_match_old_surface,workflow_recover_normalizes_input_and_applies_recovery_fields,workflow_run_unknown_command_reports_available_commands,workflow_show_json_and_root_status_cover_management_outputs
+- Managed release lifecycle, policy commands, update-all error isolation, and edit guards are covered: codex-rs/cli/tests/workflows__managed.rs:managed_cli_install_check_update_policy_dismiss_and_uninstall,update_all_continues_after_one_workflow_fails,managed_discovery_shows_release_and_refuses_direct_edits
+- Execution holds the shared managed workflow lock: codex-rs/cli/tests/workflows__managed_lock.rs.
 - Compatibility editing and repair behavior remains covered: codex-rs/cli/tests/workflows__cli.rs:workflow_alias_invokes_bun_like_old_cli_surface,workflow_editing_commands_match_old_surface,workflow_fix_keeps_valid_code_review_workflow_without_usage_options,workflow_fix_prefers_an_exact_id_over_another_packages_alias,workflow_fix_rejects_runtime_arguments,workflow_fix_repairs_workflow_without_running_unsupported_fix_action,workflow_fix_scaffolds_missing_workflow_source_for_discovery_fallback,workflow_fix_tolerates_broken_metadata_and_source_without_running_workflow,workflow_repair_alias_repairs_workflow_without_running_workflow_runtime
 
 ### tui-e2e (full terminal TUI behavior)
@@ -263,9 +326,11 @@ switches and disappear after they are answered or resolved.
 
 #### Test cases
 
-- Workflow mode indicators, running status, truncation notices, and slash-command dispatch are covered: codex-rs/tui/src/chatwidget/tests/workflows__slash_commands.rs:bare_workflow_command_dispatches_structured_workflow_op,bare_workflow_slash_enters_workflow_mode,bare_workflow_slash_reports_disabled_when_feature_off,queued_malformed_workflow_command_reports_error_and_drains_next_input,queued_workflow_command_dispatches_after_active_turn,running_workflow_command_uses_standard_task_status_snapshot,workflow_command_appears_in_slash_popup_when_enabled,workflow_command_is_hidden_and_rejected_when_feature_disabled,workflow_command_preserves_explicit_executor_working_directory,workflow_command_rejects_malformed_args_without_clearing_draft,workflow_command_with_args_dispatches_structured_input_json,workflow_custom_output_limit_truncation_notice_snapshot,workflow_done_slash_exits_to_default_mode,workflow_slash_with_args_dispatches_workflow_cli_command
+- Workflow mode indicators, running status, truncation notices, and slash-command dispatch are covered: codex-rs/tui/src/chatwidget/tests/workflows__slash_commands.rs:bare_workflow_command_dispatches_structured_workflow_op,bare_workflow_slash_enters_workflow_mode,bare_workflow_slash_reports_disabled_when_feature_off,queued_malformed_workflow_command_reports_error_and_drains_next_input,queued_workflow_command_dispatches_after_active_turn,running_workflow_command_uses_standard_task_status_snapshot,workflow_command_appears_in_slash_popup_when_enabled,workflow_command_is_hidden_and_rejected_when_feature_disabled,workflow_command_preserves_explicit_executor_working_directory,workflow_command_rejects_malformed_args_without_clearing_draft,workflow_command_with_args_dispatches_structured_input_json,workflow_custom_output_limit_truncation_notice_snapshot,workflow_done_slash_exits_to_default_mode,workflow_slash_with_args_dispatches_management_rpc
+- Management loading, available releases, source errors, exact action results, uninstall confirmation, and combined prompt decisions have TUI snapshots in codex-rs/tui/src/chatwidget/tests/workflows__slash_commands.rs.
 - Workflow mode survives initial session attachment and stale settings notifications: codex-rs/tui/src/chatwidget/tests/app_server.rs:pre_session_collaboration_mode_selection_binds_to_configured_thread,stale_thread_settings_do_not_clobber_a_user_selected_workflow_mode
 - TUI schema/hook request shaping is covered: codex-rs/tui/src/bottom_pane/chat_composer/workflow_completion_tests.rs:completion_request_tracks_partial_input_and_active_value,field_and_value_results_become_popup_hints
+- TUI option completion reaches the app-server host using the active project cwd: codex-rs/tui/src/workflow_completion_rpc_tests.rs:completion_uses_app_server_project_workflow
 - Workflow completion popup rendering is covered: codex-rs/tui/src/bottom_pane/command_popup.rs:workflow_exact_command_shows_schema_field_hints,workflow_option_value_completion_uses_value_hint_enums
 - Pending user-input prompts replay while unresolved and are removed after an answer: codex-rs/tui/src/app/pending_interactive_replay.rs:thread_event_snapshot_keeps_pending_request_user_input,thread_event_snapshot_drops_resolved_request_user_input_after_user_answer,thread_event_snapshot_keeps_newer_request_user_input_pending_when_same_turn_has_queue
 

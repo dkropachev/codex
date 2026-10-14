@@ -533,3 +533,41 @@ and out-of-scope item IDs return invalid params (`-32602`) with
 Omitted or null cursors preserve normal first-page behavior. Continue anchored
 pages with the returned opaque string `nextCursor`; response fields and
 `backwardsCursor` semantics are unchanged.
+
+# Managed workflows (experimental v2)
+
+Connected clients opt in with `experimentalApi: true`. Workflow discovery, management,
+and completion run on the app-server host for both local and remote clients. A `cwd` in a
+workflow request names a directory on that host; the server uses its configured cwd when
+the field is omitted. A relative local Git source in `workflow/resolveSource` or
+`workflow/install` is resolved against the supplied host cwd. A remote TUI should label
+paths accordingly.
+
+| Method | Purpose |
+| --- | --- |
+| `workflow/list` | Discover project and global commands with `cursor` and `limit`; a project command can override a global command with the same ID. |
+| `workflow/managedList` | List managed receipts independently of project overrides, including source, installed release, policy, and dismissed release. |
+| `workflow/updatesRead` | Read a retained, generation-numbered update snapshot with per-workflow status and errors. |
+| `workflow/checkUpdates` | Start a new read-only source scan, or join one already running; returns its `scanId` and `started`. |
+| `workflow/resolveSource` | Select an exact stable tag or verified HEAD from a Git source before installation. |
+| `workflow/install` | Install the selected release with `expectedRelease` and a Prompt, Automatic, or Manual policy. |
+| `workflow/update` | Install a release using `expectedInstalled` and `expectedAvailable` identities. |
+| `workflow/setPolicy` | Change policy if `expectedInstalled` still matches. |
+| `workflow/dismiss` | Suppress one exact release for Prompt and Automatic actions. |
+| `workflow/uninstall` | Remove an unchanged managed payload if `expectedInstalled` still matches. |
+| `workflow/complete` | Compute bounded field or value completions from the selected workflow on the host, including exact insertion text for typed schema values. |
+
+The release identity contains `tag`, `version`, and `commit`; clients should pass the
+identities they just read rather than reconstructing them. An explicit update may install
+a dismissed release. A moved tag, downgrade, dirty payload, stale receipt, or stale
+client action fails without replacing or removing the installed release. A local source
+is recorded as a canonical credential-free `file://` URL; moving the repository surfaces
+an update-check error.
+
+At startup, the app-server completes managed transaction and interrupted dependency
+recovery before scanning sources. At most four source checks run concurrently. The server
+retains a bounded snapshot and sends `workflow/updatesChanged` with its new `generation`;
+clients reread `workflow/updatesRead` when attaching, reconnecting, or receiving that
+notification. `Automatic` policy applies eligible releases through the same managed
+service, `Prompt` leaves the decision to the client, and `Manual` only reports state.
+The existing `thread/workflowCommand` execution lifecycle remains the same.
