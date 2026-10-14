@@ -330,6 +330,7 @@ switches and disappear after they are answered or resolved.
 - Management loading, available releases, source errors, exact action results, uninstall confirmation, and combined prompt decisions have TUI snapshots in codex-rs/tui/src/chatwidget/tests/workflows__slash_commands.rs.
 - Workflow mode survives initial session attachment and stale settings notifications: codex-rs/tui/src/chatwidget/tests/app_server.rs:pre_session_collaboration_mode_selection_binds_to_configured_thread,stale_thread_settings_do_not_clobber_a_user_selected_workflow_mode
 - TUI schema/hook request shaping is covered: codex-rs/tui/src/bottom_pane/chat_composer/workflow_completion_tests.rs:completion_request_tracks_partial_input_and_active_value,field_and_value_results_become_popup_hints
+- TUI option completion reaches the app-server host using the active project cwd: codex-rs/tui/src/workflow_completion_rpc_tests.rs:completion_uses_app_server_project_workflow
 - Workflow completion popup rendering is covered: codex-rs/tui/src/bottom_pane/command_popup.rs:workflow_exact_command_shows_schema_field_hints,workflow_option_value_completion_uses_value_hint_enums
 - Pending user-input prompts replay while unresolved and are removed after an answer: codex-rs/tui/src/app/pending_interactive_replay.rs:thread_event_snapshot_keeps_pending_request_user_input,thread_event_snapshot_drops_resolved_request_user_input_after_user_answer,thread_event_snapshot_keeps_newer_request_user_input_pending_when_same_turn_has_queue
 
