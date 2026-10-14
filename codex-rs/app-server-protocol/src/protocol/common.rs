@@ -800,6 +800,12 @@ client_request_definitions! {
         serialization: None,
         response: v2::WorkflowInstallResponse,
     },
+    #[experimental("workflow/complete")]
+    WorkflowComplete => "workflow/complete" {
+        params: v2::WorkflowCompleteParams,
+        serialization: None,
+        response: v2::WorkflowCompleteResponse,
+    },
     ThreadApproveGuardianDeniedAction => "thread/approveGuardianDeniedAction" {
         params: v2::ThreadApproveGuardianDeniedActionParams,
         serialization: thread_id(params.thread_id),

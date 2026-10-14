@@ -173,6 +173,8 @@ mod turn_steer;
 mod view_image;
 mod web_search;
 mod windows_sandbox_setup;
+#[path = "workflow_complete_tests.rs"]
+mod workflow_complete;
 #[path = "workflow_install_tests.rs"]
 mod workflow_install;
 #[path = "workflow_list_tests.rs"]

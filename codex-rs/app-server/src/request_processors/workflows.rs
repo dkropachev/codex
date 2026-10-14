@@ -27,6 +27,8 @@ use crate::error_code::invalid_params;
 use crate::error_code::method_not_found;
 use crate::outgoing_message::OutgoingMessageSender;
 
+#[path = "workflows/completion.rs"]
+mod completion;
 #[path = "workflows/dependency_runtime.rs"]
 mod dependency_runtime;
 #[path = "workflows/mutations.rs"]
@@ -44,6 +46,7 @@ pub(crate) struct WorkflowListProcessor {
     config: Arc<Config>,
     updates: Option<WorkflowUpdates>,
     source_requests: Arc<Semaphore>,
+    completion_requests: Arc<Semaphore>,
 }
 
 impl WorkflowListProcessor {
@@ -56,6 +59,7 @@ impl WorkflowListProcessor {
             config,
             updates,
             source_requests,
+            completion_requests: Arc::new(Semaphore::new(2)),
         }
     }
 
