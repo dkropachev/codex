@@ -21,6 +21,22 @@ fn install_arguments_preserve_windows_and_quoted_host_paths() {
             WorkflowUpdatePolicy::Manual,
         )
     );
+    assert_eq!(
+        install_arguments(r#"install ./my\ workflows/review --policy "manual""#)
+            .expect("escaped Unix path and quoted policy"),
+        (
+            "./my workflows/review".to_string(),
+            WorkflowUpdatePolicy::Manual,
+        )
+    );
+    assert_eq!(
+        install_arguments(r#"install C:\workflows\review --policy "automatic""#)
+            .expect("Windows path and quoted policy"),
+        (
+            r"C:\workflows\review".to_string(),
+            WorkflowUpdatePolicy::Automatic,
+        )
+    );
 }
 
 #[tokio::test]

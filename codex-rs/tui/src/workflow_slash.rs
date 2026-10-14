@@ -41,9 +41,24 @@ fn install_arguments(args: &str) -> anyhow::Result<(String, WorkflowUpdatePolicy
     if raw.is_empty() {
         anyhow::bail!("usage: /workflow install <source> [--policy prompt|automatic|manual]");
     }
+    let unquoted = raw
+        .strip_prefix('"')
+        .or_else(|| raw.strip_prefix('\''))
+        .unwrap_or(raw);
+    let windows_path = matches!(unquoted.as_bytes(), [drive, b':', b'\\' | b'/', ..] if drive.is_ascii_alphabetic());
+    if !windows_path {
+        let words = shlex::split(raw).context("invalid workflow source quoting")?;
+        return match words.as_slice() {
+            [source] => Ok((source.clone(), WorkflowUpdatePolicy::Prompt)),
+            [source, flag, value] if flag == "--policy" => Ok((source.clone(), policy(value)?)),
+            _ => anyhow::bail!(
+                "usage: /workflow install <source> [--policy prompt|automatic|manual]"
+            ),
+        };
+    }
     let (raw_source, policy) = match raw.rsplit_once(" --policy ") {
         Some((source, value)) if !value.contains(char::is_whitespace) => {
-            (source.trim(), policy(value)?)
+            (source.trim(), policy(value.trim_matches(['"', '\'']))?)
         }
         _ => (raw, WorkflowUpdatePolicy::Prompt),
     };
