@@ -24,7 +24,7 @@ pub struct WorkflowCommandOptionHint {
 }
 
 pub fn discover_workflow_commands(codex_home: &Path, cwd: &Path) -> Vec<WorkflowCommand> {
-    match discover_workflow_commands_with_budget(codex_home, cwd, None) {
+    match discover_workflow_commands_with_budget(codex_home, cwd, /*budget*/ None) {
         Ok(commands) => commands,
         Err(error) => unreachable!("unbounded workflow discovery failed: {error}"),
     }
