@@ -1,5 +1,6 @@
 use crate::context_handoff::Stage;
 use codex_protocol::protocol::TokenUsage;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,12 +32,12 @@ enum AutoCompactWindowPrefill {
     Estimated(i64),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(super) struct AutoCompactWindow {
     window_number: u64,
     ids: AutoCompactWindowIds,
     new_context_window_requested: bool,
-    handoff_summary_requested: Option<String>,
+    handoff_summary_requested: Option<(String, String, CancellationToken)>,
     handoff_soft_delivered: bool,
     handoff_mid_delivered: bool,
     /// Absolute input-token baseline for the current compaction window.
@@ -112,12 +113,22 @@ impl AutoCompactWindow {
         requested
     }
 
-    pub(super) fn request_handoff_summary(&mut self, summary: String) {
-        self.handoff_summary_requested = Some(summary);
+    pub(super) fn request_handoff_summary(
+        &mut self,
+        turn_id: &str,
+        summary: String,
+        cancellation_token: CancellationToken,
+    ) {
+        self.handoff_summary_requested = Some((turn_id.to_string(), summary, cancellation_token));
     }
 
-    pub(super) fn take_handoff_summary_request(&mut self) -> Option<String> {
-        self.handoff_summary_requested.take()
+    pub(super) fn take_handoff_summary_request(&mut self, turn_id: &str) -> Option<String> {
+        self.handoff_summary_requested
+            .take()
+            .filter(|(owner, _, cancellation_token)| {
+                owner == turn_id && !cancellation_token.is_cancelled()
+            })
+            .map(|(_, summary, _)| summary)
     }
 
     pub(super) fn claim_handoff_guidance(&mut self, stage: Stage) -> bool {

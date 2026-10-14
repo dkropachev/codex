@@ -63,8 +63,8 @@ pub(crate) struct HandoffTurnState {
     pub(crate) last_sampled_model: Option<String>,
 }
 
-/// Measures the context already assembled for the next request and appends one
-/// guidance fragment for a newly reached soft or mid stage.
+/// Measures the complete next request, rechecking thresholds after appending
+/// guidance for each newly reached soft or mid stage.
 pub(crate) async fn stage_before_request(
     sess: &Session,
     step: &StepContext,
@@ -75,11 +75,6 @@ pub(crate) async fn stage_before_request(
         return Stage::None;
     };
     let base_instructions = sess.get_prompt_base_instructions().await;
-    let history_tokens = sess
-        .clone_history()
-        .await
-        .estimate_token_count_with_base_instructions(&base_instructions)
-        .unwrap_or(0);
     let tool_tokens = step
         .tool_router
         .model_visible_specs()
@@ -87,61 +82,68 @@ pub(crate) async fn stage_before_request(
         .filter_map(|tool| serde_json::to_string(tool).ok())
         .map(|tool| codex_utils_output_truncation::approx_token_count(&tool) as i64)
         .sum::<i64>();
-    let tokens = history_tokens.saturating_add(tool_tokens);
-    let switched_model = if let Some(model) = state.last_sampled_model.as_deref() {
-        model != step.settings.model_info.slug
-    } else {
-        sess.previous_turn_settings()
-            .await
-            .is_some_and(|settings| settings.model != step.settings.model_info.slug)
-    };
-    let cached = if state.uncached_after_reset || switched_model {
-        0
-    } else {
-        sess.token_usage_info().await.map_or(0, |usage| {
-            let last = usage.last_token_usage;
-            if last.input_tokens > 0 {
-                tokens.saturating_mul(last.cached_input_tokens.max(0)) / last.input_tokens
-            } else {
-                0
-            }
-        })
-    };
+    let switched_model = state
+        .last_sampled_model
+        .as_deref()
+        .is_some_and(|model| model != step.settings.model_info.slug);
+    let usage = sess.token_usage_info().await;
     let api_billed = turn
         .auth_manager
         .as_deref()
         .and_then(codex_login::AuthManager::auth_cached)
         .is_none_or(|auth| !auth.uses_codex_backend());
-    let price = api_billed
-        .then(|| {
-            policy.price(
-                &turn.config.model_provider_id,
-                &step.settings.model_info.slug,
-                step.settings.service_tier.as_deref().unwrap_or("default"),
-                tokens,
-                cached,
-            )
-        })
-        .flatten();
-    let stage = policy.stage(tokens, price);
-    if matches!(stage, Stage::Soft | Stage::Mid) && sess.claim_handoff_guidance(stage).await {
-        let guidance = if stage == Stage::Mid {
-            &policy.mid_guidance
+    loop {
+        let history_tokens = sess
+            .clone_history()
+            .await
+            .estimate_token_count_with_base_instructions(&base_instructions)
+            .unwrap_or(0);
+        let tokens = history_tokens.saturating_add(tool_tokens);
+        let cached = if state.uncached_after_reset || switched_model {
+            0
         } else {
-            &policy.soft_guidance
+            usage.as_ref().map_or(0, |usage| {
+                let last = &usage.last_token_usage;
+                if last.input_tokens > 0 {
+                    tokens.saturating_mul(last.cached_input_tokens.max(0)) / last.input_tokens
+                } else {
+                    0
+                }
+            })
         };
-        let message = ContextualUserFragment::into(HandoffGuidance(format!(
-            "{guidance}\n{}",
-            policy.summary_instructions
-        )));
-        sess.record_conversation_items(
-            turn,
-            &step.settings.model_info,
-            std::slice::from_ref(&message),
-        )
-        .await;
+        let price = api_billed
+            .then(|| {
+                policy.price(
+                    &turn.config.model_provider_id,
+                    &step.settings.model_info.slug,
+                    step.settings.service_tier.as_deref().unwrap_or("default"),
+                    tokens,
+                    cached,
+                )
+            })
+            .flatten();
+        let stage = policy.stage(tokens, price);
+        if matches!(stage, Stage::Soft | Stage::Mid) && sess.claim_handoff_guidance(stage).await {
+            let (label, guidance) = if stage == Stage::Mid {
+                ("mid", &policy.mid_guidance)
+            } else {
+                ("soft", &policy.soft_guidance)
+            };
+            let (_, _, window_id) = sess.current_window().await;
+            let message = ContextualUserFragment::into(HandoffGuidance(format!(
+                "<handoff_stage>{label}</handoff_stage><handoff_window>{window_id}</handoff_window>\n{guidance}\n{}",
+                policy.summary_instructions
+            )));
+            sess.record_conversation_items(
+                turn,
+                &step.settings.model_info,
+                std::slice::from_ref(&message),
+            )
+            .await;
+        } else {
+            return stage;
+        }
     }
-    stage
 }
 
 impl ContextHandoffConfig {

@@ -1864,6 +1864,47 @@ impl Session {
                     window_id,
                 },
             );
+            let mut delivered_stages = Vec::new();
+            for item in state.history.raw_items() {
+                if let ResponseItem::Message { role, content, .. } = item
+                    && role == "developer"
+                {
+                    for content in content {
+                        if let ContentItem::InputText { text } = content
+                            && crate::context::HandoffGuidance::matches_text(text)
+                        {
+                            for (label, stage) in [
+                                ("soft", crate::context_handoff::Stage::Soft),
+                                ("mid", crate::context_handoff::Stage::Mid),
+                            ] {
+                                let marked = text.starts_with(&format!("<context_handoff><handoff_stage>{label}</handoff_stage><handoff_window>{window_id}</handoff_window>"));
+                                let legacy =
+                                    turn_context.config.context_handoff.as_ref().is_some_and(
+                                        |policy| {
+                                            let guidance =
+                                                if stage == crate::context_handoff::Stage::Soft {
+                                                    &policy.soft_guidance
+                                                } else {
+                                                    &policy.mid_guidance
+                                                };
+                                            text == &crate::context::HandoffGuidance(format!(
+                                                "{guidance}\n{}",
+                                                policy.summary_instructions
+                                            ))
+                                            .render()
+                                        },
+                                    );
+                                if marked || legacy {
+                                    delivered_stages.push(stage);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for stage in delivered_stages {
+                state.claim_handoff_guidance(stage);
+            }
             state.set_previous_turn_settings(previous_turn_settings.clone());
         }
         let prefix_tokens = if matches!(
@@ -4580,12 +4621,23 @@ impl Session {
         state.take_new_context_window_request()
     }
 
-    pub(crate) async fn request_handoff_summary(&self, summary: String) {
-        self.state.lock().await.request_handoff_summary(summary);
+    pub(crate) async fn request_handoff_summary(
+        &self,
+        turn_id: &str,
+        summary: String,
+        cancellation_token: CancellationToken,
+    ) {
+        self.state
+            .lock()
+            .await
+            .request_handoff_summary(turn_id, summary, cancellation_token);
     }
 
-    pub(crate) async fn take_handoff_summary_request(&self) -> Option<String> {
-        self.state.lock().await.take_handoff_summary_request()
+    pub(crate) async fn take_handoff_summary_request(&self, turn_id: &str) -> Option<String> {
+        self.state
+            .lock()
+            .await
+            .take_handoff_summary_request(turn_id)
     }
 
     pub(crate) async fn claim_handoff_guidance(

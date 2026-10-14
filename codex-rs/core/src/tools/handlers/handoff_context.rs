@@ -1,3 +1,4 @@
+use crate::compact::SUMMARY_PREFIX;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -56,12 +57,21 @@ impl ToolExecutor<ToolInvocation> for HandoffContextHandler {
                 ));
             };
             let Args { summary } = parse_arguments(&arguments)?;
-            if summary.trim().is_empty() || approx_token_count(&summary) > MAX_SUMMARY_TOKENS {
+            if summary.trim().is_empty()
+                || approx_token_count(&format!("{SUMMARY_PREFIX}\n{summary}")) > MAX_SUMMARY_TOKENS
+            {
                 return Err(FunctionCallError::RespondToModel(format!(
-                    "handoff summary must contain 1 to {MAX_SUMMARY_TOKENS} estimated tokens"
+                    "handoff summary must be nonempty and fit within {MAX_SUMMARY_TOKENS} estimated tokens including the checkpoint prefix"
                 )));
             }
-            invocation.session.request_handoff_summary(summary).await;
+            invocation
+                .session
+                .request_handoff_summary(
+                    &invocation.turn.sub_id,
+                    summary,
+                    invocation.cancellation_token,
+                )
+                .await;
             Ok(boxed_tool_output(FunctionToolOutput::from_text(
                 "Context handoff queued.".to_string(),
                 Some(true),

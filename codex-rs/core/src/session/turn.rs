@@ -178,6 +178,15 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<Option<String>> {
+    let mut handoff_state = HandoffTurnState {
+        last_sampled_model: sess
+            .previous_turn_settings()
+            .await
+            .map(|settings| settings.model),
+        ..Default::default()
+    };
+    sess.take_handoff_summary_request(&turn_context.sub_id)
+        .await;
     if crate::guardian::is_basic_session_source(&turn_context.session_source) {
         crate::guardian::check_pending_guardian_input(&sess, &turn_context).await?;
     }
@@ -437,7 +446,6 @@ pub(crate) async fn run_turn(
 
     let mut next_step_context = Some(first_step_context);
     let mut guardian_budget_compacted = false;
-    let mut handoff_state = HandoffTurnState::default();
     loop {
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
@@ -652,7 +660,9 @@ pub(crate) async fn run_turn(
                     );
                 }
 
-                let handoff_summary = sess.take_handoff_summary_request().await;
+                let handoff_summary = sess
+                    .take_handoff_summary_request(&turn_context.sub_id)
+                    .await;
                 let should_roll_over = needs_follow_up
                     && (handoff_summary.is_some()
                         || sess.take_new_context_window_request().await

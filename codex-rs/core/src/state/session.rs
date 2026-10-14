@@ -335,12 +335,19 @@ impl SessionState {
         self.auto_compact_window.take_new_context_window_request()
     }
 
-    pub(crate) fn request_handoff_summary(&mut self, summary: String) {
-        self.auto_compact_window.request_handoff_summary(summary);
+    pub(crate) fn request_handoff_summary(
+        &mut self,
+        turn_id: &str,
+        summary: String,
+        cancellation_token: CancellationToken,
+    ) {
+        self.auto_compact_window
+            .request_handoff_summary(turn_id, summary, cancellation_token);
     }
 
-    pub(crate) fn take_handoff_summary_request(&mut self) -> Option<String> {
-        self.auto_compact_window.take_handoff_summary_request()
+    pub(crate) fn take_handoff_summary_request(&mut self, turn_id: &str) -> Option<String> {
+        self.auto_compact_window
+            .take_handoff_summary_request(turn_id)
     }
 
     pub(crate) fn claim_handoff_guidance(&mut self, stage: crate::context_handoff::Stage) -> bool {

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_config::config_toml::ContextHandoffToml;
 use codex_core::TurnInputRequest;
+use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::ContextHandoffConfig;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::user_input::UserInput;
@@ -134,5 +135,82 @@ async fn hard_stage_stops_when_compaction_cannot_lower_threshold() -> Result<()>
     })
     .await;
     assert_eq!(compact.requests().len(), 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn context_handoff_caps_complete_checkpoint_summary() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let oversized_summary = "x".repeat(40_000);
+    let accepted_summary = "y".repeat(40_000 - SUMMARY_PREFIX.len() - 1);
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    "oversized",
+                    "handoff_context",
+                    &json!({"summary": oversized_summary}).to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_function_call(
+                    "bounded",
+                    "handoff_context",
+                    &json!({"summary": accepted_summary}).to_string(),
+                ),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-3", "done"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.context_handoff = Some(
+                ContextHandoffConfig::parse(&ContextHandoffToml {
+                    soft_when: "context.size.tokens > 1000000000".to_string(),
+                    mid_when: "context.size.tokens > 1000000000".to_string(),
+                    hard_when: "context.size.tokens > 1000000000".to_string(),
+                    ..Default::default()
+                })
+                .unwrap(),
+            );
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn("Preserve this task until a bounded checkpoint is accepted.")
+        .await?;
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[1].body_contains_text("Preserve this task"));
+    assert!(
+        requests[1].function_call_output("oversized")["output"]
+            .as_str()
+            .unwrap()
+            .contains("including the checkpoint prefix")
+    );
+    let summaries = requests[2]
+        .message_input_texts("user")
+        .into_iter()
+        .filter(|text| text.starts_with(SUMMARY_PREFIX))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        summaries,
+        vec![format!("{SUMMARY_PREFIX}\n{accepted_summary}")]
+    );
+    assert_eq!(
+        codex_utils_output_truncation::approx_token_count(&summaries[0]),
+        10_000
+    );
+    assert!(!requests[2].body_contains_text("Preserve this task"));
     Ok(())
 }
