@@ -555,7 +555,7 @@ paths accordingly.
 | `workflow/setPolicy` | Change policy if `expectedInstalled` still matches. |
 | `workflow/dismiss` | Suppress one exact release for Prompt and Automatic actions. |
 | `workflow/uninstall` | Remove an unchanged managed payload if `expectedInstalled` still matches. |
-| `workflow/complete` | Compute bounded field or value completions from the selected workflow on the host. |
+| `workflow/complete` | Compute bounded field or value completions from the selected workflow on the host, including exact insertion text for typed schema values. |
 
 The release identity contains `tag`, `version`, and `commit`; clients should pass the
 identities they just read rather than reconstructing them. An explicit update may install
