@@ -2,6 +2,9 @@ use crate::compact::CompactedHistoryMetadata;
 use crate::compact::SUMMARY_PREFIX;
 use crate::compact::build_compacted_history;
 use crate::compact::build_compaction_replacement_history;
+use crate::compact_remote_v2::RETAINED_MESSAGE_TOKEN_BUDGET;
+use crate::compact_remote_v2::is_client_authored_developer_message;
+use crate::compact_remote_v2::truncate_retained_messages_for_remote_compaction;
 use crate::context::ContextualUserFragment;
 use crate::context::HandoffInventory;
 use crate::context::UserGoalUpdate;
@@ -13,6 +16,7 @@ use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use codex_analytics::CompactionTrigger;
+use codex_features::Feature;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -44,8 +48,19 @@ pub(crate) async fn install_checkpoint(
     let world_state = sess
         .build_world_state_for_step(step_context, /*new_window*/ true)
         .await?;
-    let (new_history, world_state_baseline) =
+    let (mut new_history, world_state_baseline) =
         build_compaction_replacement_history(sess, step_context, &world_state, new_history).await;
+    if sess.enabled(Feature::RetainClientDeveloperMessages) {
+        new_history.extend(truncate_retained_messages_for_remote_compaction(
+            old_history
+                .annotated_items()
+                .iter()
+                .filter(|item| is_client_authored_developer_message(item))
+                .cloned()
+                .collect(),
+            RETAINED_MESSAGE_TOKEN_BUDGET,
+        ));
+    }
     let (window_number, window_ids) = sess.advance_auto_compact_window().await;
     sess.replace_compacted_history(
         new_history,
