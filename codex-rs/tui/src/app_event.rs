@@ -793,6 +793,12 @@ pub(crate) enum AppEvent {
         cwd: PathBuf,
     },
 
+    ConfirmWorkflowUninstall {
+        id: String,
+        installed: codex_app_server_protocol::WorkflowReleaseIdentity,
+        cwd: PathBuf,
+    },
+
     WorkflowManagementActionFinished {
         cwd: PathBuf,
         result: Result<String, String>,

@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests/workflows__slash_commands.rs
+assertion_line: 449
+expression: "render_bottom_popup(&chat, 80)"
+---
+      Uninstall team/review?
+› As  The managed workflow will be removed from the app-server host
+
+  GP
+    › 1. Keep workflow
+      2. Uninstall workflow
+
+      enter select · esc back
