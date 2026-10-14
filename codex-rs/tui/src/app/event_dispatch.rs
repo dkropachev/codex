@@ -1844,6 +1844,22 @@ impl App {
                 self.chat_widget
                     .apply_workflow_commands_result(generation, cwd, result);
             }
+            AppEvent::OpenWorkflowManagement { request_id, cwd } => {
+                crate::workflow_remote::spawn_management(
+                    app_server.request_handle(),
+                    request_id,
+                    cwd,
+                    self.app_event_tx.clone(),
+                );
+            }
+            AppEvent::WorkflowManagementLoaded {
+                request_id,
+                cwd,
+                result,
+            } => {
+                self.chat_widget
+                    .on_workflow_management_loaded(request_id, cwd, result);
+            }
             AppEvent::StartWorkflowCompletion {
                 generation,
                 workflow_dir,

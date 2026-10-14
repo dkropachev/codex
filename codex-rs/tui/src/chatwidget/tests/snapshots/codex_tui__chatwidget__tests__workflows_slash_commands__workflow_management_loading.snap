@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/workflows__slash_commands.rs
+assertion_line: 265
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Workflows
+  Loading from the app-server host…
+
+
+›    Loading workflow state
+
+  enter select · esc back
