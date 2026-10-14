@@ -82,7 +82,7 @@ async fn model_handoff_installs_summary_in_same_turn() -> Result<()> {
 async fn context_handoff_caps_complete_checkpoint_summary() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
-    let oversized_summary = "x".repeat(40_000);
+    let oversized_summary = "x".repeat(/*n*/ 40_000);
     let accepted_summary = "y".repeat(40_000 - SUMMARY_PREFIX.len() - 1);
     let responses = mount_sse_sequence(
         &server,

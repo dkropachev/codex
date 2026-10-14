@@ -62,8 +62,8 @@ pub(crate) async fn install_checkpoint(
         },
     )
     .await;
-    sess.recompute_token_usage(&step_context.turn).await;
     record_live_handles(sess, turn_context).await;
+    sess.recompute_token_usage(&step_context.turn).await;
     sess.emit_turn_item_completed(turn_context, item).await;
     if let PostCompactHookOutcome::Stopped =
         run_post_compact_hooks(sess, turn_context, CompactionTrigger::Auto).await
