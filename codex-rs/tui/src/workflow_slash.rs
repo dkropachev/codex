@@ -11,6 +11,8 @@ use codex_app_server_protocol::WorkflowCheckUpdatesParams;
 use codex_app_server_protocol::WorkflowCheckUpdatesResponse;
 use codex_app_server_protocol::WorkflowInstallParams;
 use codex_app_server_protocol::WorkflowInstallResponse;
+use codex_app_server_protocol::WorkflowManagedListParams;
+use codex_app_server_protocol::WorkflowManagedListResponse;
 use codex_app_server_protocol::WorkflowReleaseIdentity;
 use codex_app_server_protocol::WorkflowResolveSourceParams;
 use codex_app_server_protocol::WorkflowResolveSourceResponse;
@@ -24,7 +26,6 @@ use uuid::Uuid;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::workflow_actions::WorkflowAction;
-use crate::workflow_remote::fetch_workflows;
 
 fn policy(value: &str) -> anyhow::Result<WorkflowUpdatePolicy> {
     match value {
@@ -65,6 +66,33 @@ async fn available_release(
         }
     }
     anyhow::bail!("workflow update state exceeded its page limit")
+}
+
+async fn installed_release(
+    handle: &AppServerRequestHandle,
+    id: &str,
+    nonce: Uuid,
+) -> anyhow::Result<WorkflowReleaseIdentity> {
+    let mut cursor = None;
+    for page in 0..42 {
+        let response: WorkflowManagedListResponse = handle
+            .request_typed(ClientRequest::WorkflowManagedList {
+                request_id: RequestId::String(format!("workflow-slash-managed-{nonce}-{page}")),
+                params: WorkflowManagedListParams {
+                    cursor,
+                    limit: Some(100),
+                },
+            })
+            .await?;
+        if let Some(record) = response.data.into_iter().find(|record| record.id == id) {
+            return Ok(record.managed.installed);
+        }
+        match response.next_cursor {
+            Some(next_cursor) => cursor = Some(next_cursor),
+            None => anyhow::bail!("managed workflow {id} is not installed"),
+        }
+    }
+    anyhow::bail!("managed workflow list exceeded its page limit")
 }
 
 pub(crate) fn spawn_command(
@@ -138,13 +166,7 @@ pub(crate) fn spawn_command(
                 }
                 "update" | "set-policy" | "uninstall" | "dismiss" => {
                     let id = rest.first().context("workflow ID is required")?;
-                    let workflows = fetch_workflows(&handle, &cwd, nonce).await?;
-                    let installed = workflows
-                        .iter()
-                        .find(|workflow| workflow.id == *id)
-                        .and_then(|workflow| workflow.managed.as_ref())
-                        .map(|managed| managed.installed.clone())
-                        .with_context(|| format!("managed workflow {id} is not installed"))?;
+                    let installed = installed_release(&handle, id, nonce).await?;
                     match command.as_str() {
                         "update" if rest.len() == 1 => {
                             let available = available_release(&handle, id, nonce).await?;

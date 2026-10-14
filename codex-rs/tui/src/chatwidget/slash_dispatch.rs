@@ -1169,6 +1169,21 @@ impl ChatWidget {
                     self.open_workflow_management();
                     return;
                 }
+                let words = shlex::split(trimmed).unwrap_or_default();
+                let use_management_rpc = match words.as_slice() {
+                    [command, rest @ ..] if command == "install" => !rest.is_empty(),
+                    [command] if command == "check-updates" => true,
+                    [command, id] if command == "update" => id != "--all",
+                    [command, _, _] if command == "set-policy" => true,
+                    [command, _] if matches!(command.as_str(), "uninstall" | "dismiss") => true,
+                    _ => false,
+                };
+                if !use_management_rpc {
+                    self.submit_op(AppCommand::run_user_shell_command(format!(
+                        "codex workflow {trimmed}"
+                    )));
+                    return;
+                }
                 self.app_event_tx.send(AppEvent::WorkflowSlashCommand {
                     args: trimmed.to_string(),
                     cwd: self.workflow_invocation_cwd(),

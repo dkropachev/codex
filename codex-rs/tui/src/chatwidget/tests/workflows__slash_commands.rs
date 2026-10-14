@@ -520,6 +520,33 @@ async fn workflow_slash_with_args_dispatches_management_rpc() {
 }
 
 #[tokio::test]
+async fn workflow_slash_update_uses_rpc_and_legacy_flags_use_host_cli() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    chat.dispatch_command_with_args(
+        SlashCommand::Workflow,
+        "update team/review".to_string(),
+        Vec::new(),
+    );
+    let request = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
+        AppEvent::WorkflowSlashCommand { args, .. } => Some(args),
+        _ => None,
+    });
+    assert_eq!(request, Some("update team/review".to_string()));
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Workflow,
+        "update --all".to_string(),
+        Vec::new(),
+    );
+    let command = std::iter::from_fn(|| op_rx.try_recv().ok()).find_map(|op| match op {
+        Op::RunUserShellCommand { command } => Some(command),
+        _ => None,
+    });
+    assert_eq!(command, Some("codex workflow update --all".to_string()));
+}
+
+#[tokio::test]
 async fn bare_workflow_command_dispatches_structured_workflow_op() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
