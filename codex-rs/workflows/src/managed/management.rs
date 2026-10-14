@@ -22,10 +22,14 @@ use super::store::ensure_fresh_target;
 
 #[cfg(any(unix, windows))]
 mod policy;
+#[cfg(any(unix, windows))]
+mod uninstall;
 mod update;
 #[cfg(any(unix, windows))]
 mod update_install;
 
+#[cfg(any(unix, windows))]
+pub use uninstall::ManagedWorkflowUninstallation;
 pub use update::ManagedWorkflowRecord;
 pub use update::ManagedWorkflowUpdate;
 pub use update::ManagedWorkflowUpdateCheck;
@@ -84,6 +88,15 @@ impl ManagedWorkflowService {
         &self,
         request: ManagedWorkflowInstallRequest<'_>,
     ) -> anyhow::Result<ManagedWorkflowInstallation> {
+        self.install_with_policy(request, WorkflowUpdatePolicy::Prompt)
+    }
+
+    /// Installs the selected release with the requested update policy.
+    pub fn install_with_policy(
+        &self,
+        request: ManagedWorkflowInstallRequest<'_>,
+        policy: WorkflowUpdatePolicy,
+    ) -> anyhow::Result<ManagedWorkflowInstallation> {
         let ManagedWorkflowInstallRequest {
             source,
             dependency_runtime,
@@ -118,7 +131,7 @@ impl ManagedWorkflowService {
                 version: release.version.as_ref().map(ToString::to_string),
                 commit: release.advertised_object_id.clone(),
             },
-            WorkflowUpdatePolicy::Prompt,
+            policy,
         )?;
         let prepared = self.store.prepare_release(
             &locked,
