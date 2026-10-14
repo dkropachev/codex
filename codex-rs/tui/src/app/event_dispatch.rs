@@ -1868,6 +1868,10 @@ impl App {
                     self.app_event_tx.clone(),
                 );
             }
+            AppEvent::ConfirmWorkflowUninstall { id, installed, cwd } => {
+                self.chat_widget
+                    .confirm_workflow_uninstall(id, installed, cwd);
+            }
             AppEvent::WorkflowManagementActionFinished { cwd, result } => {
                 self.chat_widget.on_workflow_action_finished(cwd, result);
             }

@@ -433,6 +433,47 @@ async fn workflow_action_results_are_visible_and_success_refreshes() {
 }
 
 #[tokio::test]
+async fn workflow_uninstall_requires_explicit_confirmation() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    let installed = codex_app_server_protocol::WorkflowReleaseIdentity {
+        tag: Some("v1.0.0".to_string()),
+        version: Some("1.0.0".to_string()),
+        commit: "a".repeat(40),
+    };
+    chat.confirm_workflow_uninstall(
+        "team/review".to_string(),
+        installed.clone(),
+        chat.workflow_invocation_cwd(),
+    );
+    insta::assert_snapshot!(render_bottom_popup(&chat, /*width*/ 80));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        !std::iter::from_fn(|| rx.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::WorkflowManagementAction { .. }))
+    );
+
+    chat.confirm_workflow_uninstall(
+        "team/review".to_string(),
+        installed.clone(),
+        chat.workflow_invocation_cwd(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let action = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
+        AppEvent::WorkflowManagementAction { action, .. } => Some(action),
+        _ => None,
+    });
+    assert_matches!(
+        action,
+        Some(crate::workflow_actions::WorkflowAction::Uninstall {
+            id,
+            installed: selected,
+        }) if id == "team/review" && selected == installed
+    );
+}
+
+#[tokio::test]
 async fn bare_workflow_slash_reports_disabled_when_feature_off() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

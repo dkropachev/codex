@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use codex_app_server_protocol::WorkflowReleaseIdentity;
 use codex_app_server_protocol::WorkflowUpdatePolicy;
 use codex_app_server_protocol::WorkflowUpdateStatus;
 
@@ -12,6 +13,44 @@ use crate::workflow_remote::WorkflowManagementData;
 pub(super) const VIEW_ID: &str = "workflow-management";
 
 impl ChatWidget {
+    pub(crate) fn confirm_workflow_uninstall(
+        &mut self,
+        id: String,
+        installed: WorkflowReleaseIdentity,
+        cwd: PathBuf,
+    ) {
+        if cwd != self.workflow_invocation_cwd() {
+            return;
+        }
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(format!("Uninstall {id}?")),
+            subtitle: Some("The managed workflow will be removed from the app-server host".into()),
+            items: vec![
+                SelectionItem {
+                    name: "Keep workflow".into(),
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Uninstall workflow".into(),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::WorkflowManagementAction {
+                            action: WorkflowAction::Uninstall {
+                                id: id.clone(),
+                                installed: installed.clone(),
+                            },
+                            cwd: cwd.clone(),
+                        });
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+            ],
+            ..SelectionViewParams::confirmation()
+        });
+        self.request_redraw();
+    }
+
     pub(crate) fn on_workflow_action_finished(
         &mut self,
         cwd: PathBuf,
@@ -177,6 +216,19 @@ impl ChatWidget {
                     );
                 }
             }
+            let uninstall_id = id;
+            items.push(SelectionItem {
+                name: "Uninstall…".into(),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::ConfirmWorkflowUninstall {
+                        id: uninstall_id.clone(),
+                        installed: installed.clone(),
+                        cwd: cwd.clone(),
+                    });
+                })],
+                dismiss_on_select: false,
+                ..Default::default()
+            });
         }
         if items.is_empty() {
             items.push(SelectionItem {

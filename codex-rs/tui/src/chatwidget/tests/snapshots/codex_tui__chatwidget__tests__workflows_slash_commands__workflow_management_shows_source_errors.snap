@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/workflows__slash_commands.rs
-assertion_line: 357
+assertion_line: 366
 expression: "render_bottom_popup(&chat, 80)"
 ---
   Workflows
@@ -11,5 +11,6 @@ expression: "render_bottom_popup(&chat, 80)"
   team/review · 1.0.0   Review changes · manual · error: repository moved
 › Set prompt policy
   Set automatic policy
+  Uninstall…
 
   Esc to close
