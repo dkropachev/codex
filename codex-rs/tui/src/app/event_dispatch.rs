@@ -1860,6 +1860,28 @@ impl App {
                 self.chat_widget
                     .on_workflow_management_loaded(request_id, cwd, result);
             }
+            AppEvent::WorkflowManagementAction { action, cwd } => {
+                crate::workflow_actions::spawn_action(
+                    app_server.request_handle(),
+                    action,
+                    cwd,
+                    self.app_event_tx.clone(),
+                );
+            }
+            AppEvent::WorkflowManagementActionFinished { cwd, result } => {
+                if cwd == self.chat_widget.workflow_invocation_cwd() {
+                    match result {
+                        Ok(message) => {
+                            self.chat_widget.add_info_message(message, /*hint*/ None);
+                            self.chat_widget.sync_workflow_commands();
+                            self.chat_widget.open_workflow_management();
+                        }
+                        Err(error) => self
+                            .chat_widget
+                            .add_error_message(format!("Workflow action failed: {error}")),
+                    }
+                }
+            }
             AppEvent::StartWorkflowCompletion {
                 generation,
                 workflow_dir,

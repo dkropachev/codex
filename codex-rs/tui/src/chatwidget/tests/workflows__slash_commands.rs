@@ -256,7 +256,7 @@ async fn bare_workflow_slash_enters_workflow_mode() {
 
 #[tokio::test]
 async fn workflow_management_shows_managed_release_and_update_state() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
     chat.dispatch_command(SlashCommand::Workflow);
     let request_id = chat
@@ -309,6 +309,15 @@ async fn workflow_management_shows_managed_release_and_update_state() {
     insta::assert_snapshot!(
         "workflow_management_loaded",
         render_bottom_popup(&chat, /*width*/ 80)
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let action = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
+        AppEvent::WorkflowManagementAction { action, .. } => Some(action),
+        _ => None,
+    });
+    assert_matches!(
+        action,
+        Some(crate::workflow_actions::WorkflowAction::Update { id, .. }) if id == "team/review"
     );
 }
 

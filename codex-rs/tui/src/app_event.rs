@@ -787,6 +787,17 @@ pub(crate) enum AppEvent {
         result: Result<crate::workflow_remote::WorkflowManagementData, String>,
     },
 
+    /// Apply a workflow action to the exact release shown in the management view.
+    WorkflowManagementAction {
+        action: crate::workflow_actions::WorkflowAction,
+        cwd: PathBuf,
+    },
+
+    WorkflowManagementActionFinished {
+        cwd: PathBuf,
+        result: Result<String, String>,
+    },
+
     /// Load schema and hook completion for only the workflow active in the composer.
     StartWorkflowCompletion {
         generation: u64,
