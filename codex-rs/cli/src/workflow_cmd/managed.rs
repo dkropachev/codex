@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
 use anyhow::Context;
@@ -14,7 +16,10 @@ use codex_workflows::ManagedWorkflowRecord;
 use codex_workflows::ManagedWorkflowService;
 use codex_workflows::ManagedWorkflowUpdate;
 use codex_workflows::ManagedWorkflowUpdateRequest;
+use codex_workflows::WorkflowCommand;
 use codex_workflows::WorkflowUpdatePolicy;
+use serde_json::Value;
+use serde_json::json;
 
 struct DependencyRuntimePaths {
     bun: Option<AbsolutePathBuf>,
@@ -226,6 +231,68 @@ fn policy_name(policy: WorkflowUpdatePolicy) -> &'static str {
         WorkflowUpdatePolicy::Automatic => "automatic",
         WorkflowUpdatePolicy::Manual => "manual",
     }
+}
+
+pub(super) fn records(config: &Config) -> anyhow::Result<Vec<ManagedWorkflowRecord>> {
+    let management = config.codex_home.join(".workflow-management");
+    let has_entries = |root: &AbsolutePathBuf| -> anyhow::Result<bool> {
+        Ok(root.as_path().is_dir() && fs::read_dir(root.as_path())?.next().is_some())
+    };
+    if !has_entries(&management.join("receipts"))? && !has_entries(&management.join("journals"))? {
+        return Ok(Vec::new());
+    }
+    ManagedWorkflowService::new(&config.codex_home, &config.codex_home.join("workflows"))?
+        .list_installed()
+}
+
+pub(super) fn record_for_command<'a>(
+    config: &Config,
+    command: &WorkflowCommand,
+    records: &'a [ManagedWorkflowRecord],
+) -> Option<&'a ManagedWorkflowRecord> {
+    let global_root = config.codex_home.join("workflows");
+    records
+        .iter()
+        .find(|record| command.workflow_dir == global_root.join(&record.id).as_path())
+}
+
+pub(super) fn reject_managed_edit(config: &Config, id: &str, path: &Path) -> anyhow::Result<()> {
+    let global_root = config.codex_home.join("workflows");
+    if path.starts_with(global_root.as_path())
+        && records(config)?
+            .iter()
+            .any(|record| path == global_root.join(&record.id).as_path())
+    {
+        bail!("{id} is a managed workflow; update or uninstall it instead");
+    }
+    Ok(())
+}
+
+pub(super) fn release_summary(record: &ManagedWorkflowRecord) -> String {
+    let label = record
+        .installed
+        .tag
+        .as_deref()
+        .or(record.installed.version.as_deref())
+        .unwrap_or(&record.installed.commit);
+    format!("managed {label}; policy {}", policy_name(record.policy))
+}
+
+pub(super) fn release_json(record: &ManagedWorkflowRecord) -> Value {
+    json!({
+        "source": record.source,
+        "installed": {
+            "tag": record.installed.tag,
+            "version": record.installed.version,
+            "commit": record.installed.commit,
+        },
+        "policy": policy_name(record.policy),
+        "dismissedRelease": record.dismissed_release.as_ref().map(|release| json!({
+            "tag": release.tag,
+            "version": release.version,
+            "commit": release.commit,
+        })),
+    })
 }
 
 fn record<'a>(

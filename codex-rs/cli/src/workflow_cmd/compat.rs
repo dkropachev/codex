@@ -141,7 +141,7 @@ pub async fn run(cli: WorkflowCli, config: &Config) -> anyhow::Result<()> {
     let command = parse_workflow_command(&cli.args, &commands)?;
     match command {
         ParsedWorkflowCommand::Mode => show_mode(&commands),
-        ParsedWorkflowCommand::List { json } => list_workflows(&commands, json),
+        ParsedWorkflowCommand::List { json } => list_workflows(&commands, json, config),
         ParsedWorkflowCommand::Run { target, args } => {
             run_workflow(target, args, WorkflowAction::Run, config, &commands).await
         }
@@ -151,23 +151,27 @@ pub async fn run(cli: WorkflowCli, config: &Config) -> anyhow::Result<()> {
         }
         ParsedWorkflowCommand::Validate { target } => validate_workflow(&target, config, &commands),
         ParsedWorkflowCommand::Impact { target } => impact_workflow(&target, &commands),
-        ParsedWorkflowCommand::Status { target } => status_workflows(target.as_deref(), &commands),
-        ParsedWorkflowCommand::Show { target, json } => show_workflow(&target, &commands, json),
+        ParsedWorkflowCommand::Status { target } => {
+            status_workflows(target.as_deref(), &commands, config)
+        }
+        ParsedWorkflowCommand::Show { target, json } => {
+            show_workflow(&target, &commands, json, config)
+        }
         ParsedWorkflowCommand::Where { target } => where_workflow(&target, &commands),
         ParsedWorkflowCommand::Config(command) => run_config_command(command),
         ParsedWorkflowCommand::Develop(request) => develop_workflow(request, config),
         ParsedWorkflowCommand::Describe {
             target,
             description,
-        } => update_workflow_description(&target, &description, &commands),
+        } => update_workflow_description(&target, &description, &commands, config),
         ParsedWorkflowCommand::Docs {
             target,
             instruction,
-        } => append_workflow_note(&target, "Documentation", &instruction, &commands),
+        } => append_workflow_note(&target, "Documentation", &instruction, &commands, config),
         ParsedWorkflowCommand::Edit {
             target,
             instruction,
-        } => append_workflow_note(&target, "Edit request", &instruction, &commands),
+        } => append_workflow_note(&target, "Edit request", &instruction, &commands, config),
         ParsedWorkflowCommand::Publish => publish_workflows(cli.stage_session_id.as_deref()),
         ParsedWorkflowCommand::Discard => discard_workflows(cli.stage_session_id.as_deref()),
         ParsedWorkflowCommand::Done => done_workflow_mode(cli.stage_session_id.as_deref()),
@@ -436,12 +440,20 @@ fn show_mode(commands: &[WorkflowCommand]) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn list_workflows(commands: &[WorkflowCommand], json: bool) -> anyhow::Result<()> {
+fn list_workflows(commands: &[WorkflowCommand], json: bool, config: &Config) -> anyhow::Result<()> {
+    let managed = super::managed::records(config)?;
     if json {
         let output = commands
             .iter()
-            .map(JsonWorkflowCommand::from)
-            .collect::<Vec<_>>();
+            .map(|command| {
+                let mut value = serde_json::to_value(JsonWorkflowCommand::from(command))?;
+                if let Some(record) = super::managed::record_for_command(config, command, &managed)
+                {
+                    value["managed"] = super::managed::release_json(record);
+                }
+                Ok::<_, anyhow::Error>(value)
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
         println!("{}", serde_json::to_string_pretty(&output)?);
         return Ok(());
     }
@@ -457,12 +469,16 @@ fn list_workflows(commands: &[WorkflowCommand], json: bool) -> anyhow::Result<()
         .max()
         .unwrap_or(0);
     for command in commands {
+        let annotation = super::managed::record_for_command(config, command, &managed)
+            .map(|record| format!("  [{}]", super::managed::release_summary(record)))
+            .unwrap_or_default();
         println!(
-            "{:<id_width$}  /{}  {}  {}",
+            "{:<id_width$}  /{}  {}  {}{}",
             command.id,
             command.command,
             command.description,
-            command.workflow_dir.display()
+            command.workflow_dir.display(),
+            annotation,
         );
     }
 
@@ -577,6 +593,7 @@ fn repair_workflow(
     commands: &[WorkflowCommand],
 ) -> anyhow::Result<()> {
     let target = resolve_management_workflow_target(target, config, commands)?;
+    super::managed::reject_managed_edit(config, &target.id, &target.workflow_dir)?;
     println!("Repairing workflow {} with compatibility mode.", target.id);
 
     let repairs = apply_compatibility_repairs(&target)?;
@@ -744,7 +761,12 @@ fn impact_workflow(target: &str, commands: &[WorkflowCommand]) -> anyhow::Result
     Ok(())
 }
 
-fn status_workflows(target: Option<&str>, commands: &[WorkflowCommand]) -> anyhow::Result<()> {
+fn status_workflows(
+    target: Option<&str>,
+    commands: &[WorkflowCommand],
+    config: &Config,
+) -> anyhow::Result<()> {
+    let managed = super::managed::records(config)?;
     if let Some(target) = target {
         let command = find_workflow_command(commands, target)?;
         let git_status = workflow_git_status(&command.workflow_dir).unwrap_or_default();
@@ -753,27 +775,55 @@ fn status_workflows(target: Option<&str>, commands: &[WorkflowCommand]) -> anyho
         } else {
             println!("{}", git_status.join("\n"));
         }
+        if let Some(record) = super::managed::record_for_command(config, command, &managed) {
+            println!(
+                "{}: {}",
+                command.id,
+                super::managed::release_summary(record)
+            );
+        }
         return Ok(());
     }
 
     println!("{} workflow(s) discovered", commands.len());
+    if !managed.is_empty() {
+        println!("{} managed workflow(s) installed", managed.len());
+    }
     Ok(())
 }
 
-fn show_workflow(target: &str, commands: &[WorkflowCommand], json: bool) -> anyhow::Result<()> {
+fn show_workflow(
+    target: &str,
+    commands: &[WorkflowCommand],
+    json: bool,
+    config: &Config,
+) -> anyhow::Result<()> {
     let command = find_workflow_command(commands, target)?;
+    let managed = super::managed::records(config)?;
+    let managed = super::managed::record_for_command(config, command, &managed);
     let workflow_yaml = command.workflow_dir.join("workflow.yaml");
     let contents = fs::read_to_string(&workflow_yaml)
         .with_context(|| format!("failed to read {}", workflow_yaml.display()))?;
     if json {
+        let mut workflow = serde_json::to_value(JsonWorkflowCommand::from(command))?;
+        if let Some(record) = managed {
+            workflow["managed"] = super::managed::release_json(record);
+        }
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
-                "workflow": JsonWorkflowCommand::from(command),
+                "workflow": workflow,
                 "workflowYaml": contents,
             }))?
         );
     } else {
+        if let Some(record) = managed {
+            println!(
+                "{}: {}",
+                command.id,
+                super::managed::release_summary(record)
+            );
+        }
         print!("{contents}");
         if !contents.ends_with('\n') {
             println!();
@@ -845,8 +895,10 @@ fn update_workflow_description(
     target: &str,
     description: &str,
     commands: &[WorkflowCommand],
+    config: &Config,
 ) -> anyhow::Result<()> {
     let command = find_workflow_command(commands, target)?;
+    super::managed::reject_managed_edit(config, &command.id, &command.workflow_dir)?;
     let workflow_yaml = command.workflow_dir.join("workflow.yaml");
     let contents = fs::read_to_string(&workflow_yaml)
         .with_context(|| format!("failed to read {}", workflow_yaml.display()))?;
@@ -868,8 +920,10 @@ fn append_workflow_note(
     heading: &str,
     instruction: &str,
     commands: &[WorkflowCommand],
+    config: &Config,
 ) -> anyhow::Result<()> {
     let command = find_workflow_command(commands, target)?;
+    super::managed::reject_managed_edit(config, &command.id, &command.workflow_dir)?;
     let readme = command.workflow_dir.join("README.md");
     let mut contents = fs::read_to_string(&readme).unwrap_or_default();
     if !contents.is_empty() && !contents.ends_with('\n') {
