@@ -256,7 +256,7 @@ async fn bare_workflow_slash_enters_workflow_mode() {
 
 #[tokio::test]
 async fn workflow_management_shows_managed_release_and_update_state() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
     chat.dispatch_command(SlashCommand::Workflow);
     let request_id = chat
@@ -309,6 +309,15 @@ async fn workflow_management_shows_managed_release_and_update_state() {
     insta::assert_snapshot!(
         "workflow_management_loaded",
         render_bottom_popup(&chat, /*width*/ 80)
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let action = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
+        AppEvent::WorkflowManagementAction { action, .. } => Some(action),
+        _ => None,
+    });
+    assert_matches!(
+        action,
+        Some(crate::workflow_actions::WorkflowAction::Update { id, .. }) if id == "team/review"
     );
 }
 
@@ -402,6 +411,25 @@ async fn workflow_management_discards_response_after_cwd_refresh() {
 
     assert_eq!(chat.workflow_management_request_id, None);
     assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("No workflows found"));
+}
+
+#[tokio::test]
+async fn workflow_action_results_are_visible_and_success_refreshes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    let cwd = chat.workflow_invocation_cwd();
+    chat.on_workflow_action_finished(cwd.clone(), Err("stale release".to_string()));
+    chat.on_workflow_action_finished(cwd, Ok("Workflow policy updated".to_string()));
+
+    let cells = drain_insert_history_normalized(&mut rx);
+    insta::assert_snapshot!(
+        cells
+            .iter()
+            .map(|cell| lines_to_single_string(cell).trim().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    assert!(chat.workflow_management_request_id.is_some());
 }
 
 #[tokio::test]

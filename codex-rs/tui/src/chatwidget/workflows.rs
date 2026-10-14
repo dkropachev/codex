@@ -56,7 +56,7 @@ impl ChatWidget {
         }
     }
 
-    pub(super) fn workflow_invocation_cwd(&self) -> PathBuf {
+    pub(crate) fn workflow_invocation_cwd(&self) -> PathBuf {
         self.current_cwd
             .clone()
             .unwrap_or_else(|| self.config.cwd.to_path_buf())

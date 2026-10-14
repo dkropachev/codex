@@ -1860,6 +1860,17 @@ impl App {
                 self.chat_widget
                     .on_workflow_management_loaded(request_id, cwd, result);
             }
+            AppEvent::WorkflowManagementAction { action, cwd } => {
+                crate::workflow_actions::spawn_action(
+                    app_server.request_handle(),
+                    action,
+                    cwd,
+                    self.app_event_tx.clone(),
+                );
+            }
+            AppEvent::WorkflowManagementActionFinished { cwd, result } => {
+                self.chat_widget.on_workflow_action_finished(cwd, result);
+            }
             AppEvent::StartWorkflowCompletion {
                 generation,
                 workflow_dir,
