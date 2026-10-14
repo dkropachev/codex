@@ -199,3 +199,35 @@ pub struct WorkflowUninstallParams {
 pub struct WorkflowUninstallResponse {
     pub cleanup_pending: bool,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS, ExperimentalApi)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowResolveSourceParams {
+    pub source: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowResolveSourceResponse {
+    pub release: WorkflowReleaseIdentity,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS, ExperimentalApi)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowInstallParams {
+    pub source: String,
+    pub expected_release: WorkflowReleaseIdentity,
+    pub policy: WorkflowUpdatePolicy,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowInstallResponse {
+    pub id: String,
+    pub installed: WorkflowReleaseIdentity,
+    pub cleanup_pending: bool,
+}

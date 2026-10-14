@@ -107,6 +107,63 @@ fn installs_tagged_and_untagged_local_releases_with_prompt_policy() {
 }
 
 #[test]
+fn selected_install_rejects_a_changed_release_before_publication() {
+    let root = tempfile::tempdir().expect("root");
+    let repository = root.path().join("source");
+    source(&repository, "team/build", /*tagged*/ false);
+    let service = ManagedWorkflowService::new(
+        &absolute(root.path()),
+        &absolute(&root.path().join("workflows")),
+    )
+    .expect("service");
+    let source = repository.to_str().expect("UTF-8 source");
+    let selected = WorkflowReleaseIdentity::from(
+        crate::managed::resolve_workflow_git_release(
+            &WorkflowGitSource::parse(source).expect("source"),
+        )
+        .expect("selected release"),
+    );
+    fs::write(
+        repository.join("src/workflow.ts"),
+        "export default { newer: true };\n",
+    )
+    .expect("changed release");
+    git(&repository, &["add", "--all"]);
+    git(
+        &repository,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "newer",
+        ],
+    );
+    let cancelled = AtomicBool::new(false);
+    let error = service
+        .install_with_policy_expected(
+            ManagedWorkflowInstallRequest {
+                source,
+                dependency_runtime: None,
+                cancelled: &cancelled,
+            },
+            WorkflowUpdatePolicy::Prompt,
+            &selected,
+        )
+        .expect_err("stale selection");
+    assert!(error.to_string().contains("release changed before install"));
+    assert_eq!(
+        service.list_installed().expect("installed records"),
+        Vec::new()
+    );
+    assert!(!root.path().join("workflows/team/build").exists());
+}
+
+#[test]
 fn refuses_install_inside_an_existing_managed_release() {
     let root = tempfile::tempdir().expect("root");
     let ancestor_source = root.path().join("ancestor-source");

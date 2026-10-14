@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::OwnedSemaphorePermit;
+use tokio::sync::Semaphore;
 
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -19,6 +21,7 @@ use codex_workflows::ManagedWorkflowRecord;
 use codex_workflows::ManagedWorkflowService;
 use codex_workflows::discover_workflow_commands_bounded;
 
+use crate::error_code::OVERLOADED_ERROR_CODE;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_params;
 use crate::error_code::method_not_found;
@@ -40,15 +43,30 @@ const MAX_CURSOR_BYTES: usize = 512;
 pub(crate) struct WorkflowListProcessor {
     config: Arc<Config>,
     updates: Option<WorkflowUpdates>,
+    source_requests: Arc<Semaphore>,
 }
 
 impl WorkflowListProcessor {
     pub(crate) fn new(config: Arc<Config>, outgoing: Arc<OutgoingMessageSender>) -> Self {
-        let updates = config
-            .features
-            .enabled(Feature::Workflows)
-            .then(|| WorkflowUpdates::start(Arc::clone(&config), outgoing));
-        Self { config, updates }
+        let source_requests = Arc::new(Semaphore::new(4));
+        let updates = config.features.enabled(Feature::Workflows).then(|| {
+            WorkflowUpdates::start(Arc::clone(&config), outgoing, Arc::clone(&source_requests))
+        });
+        Self {
+            config,
+            updates,
+            source_requests,
+        }
+    }
+
+    fn acquire_source_slot(&self) -> Result<OwnedSemaphorePermit, JSONRPCErrorError> {
+        Arc::clone(&self.source_requests)
+            .try_acquire_owned()
+            .map_err(|_| JSONRPCErrorError {
+                code: OVERLOADED_ERROR_CODE,
+                message: "workflow source request limit reached; retry shortly".into(),
+                data: None,
+            })
     }
 
     async fn ready_for_mutation(&self) -> Result<&WorkflowUpdates, JSONRPCErrorError> {
