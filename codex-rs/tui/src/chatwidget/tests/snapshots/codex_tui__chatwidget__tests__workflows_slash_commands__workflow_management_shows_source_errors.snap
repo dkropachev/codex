@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests/workflows__slash_commands.rs
+assertion_line: 357
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Workflows
+  App-server host · update check error: another source is unavailable
+
+
+
+› team/review · 1.0.0  Review changes · manual · error: repository moved
+
+  Esc to close

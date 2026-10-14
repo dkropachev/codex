@@ -1,8 +1,12 @@
+use super::workflow_management::VIEW_ID as WORKFLOW_MANAGEMENT_VIEW_ID;
 use super::*;
 use crate::workflow_commands::WorkflowCommand;
 
 impl ChatWidget {
     pub(crate) fn sync_workflow_commands(&mut self) {
+        self.workflow_management_request_id = None;
+        self.bottom_pane
+            .dismiss_view_by_id(WORKFLOW_MANAGEMENT_VIEW_ID);
         let workflows_enabled = self.config.features.enabled(Feature::Workflows);
         self.workflow_commands_generation = self.workflow_commands_generation.wrapping_add(1);
         self.workflow_commands.clear();

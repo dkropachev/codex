@@ -83,6 +83,24 @@ async fn workflow_slash_enters_mode_and_submits_mocked_ai_turn() -> Result<()> {
         contents.contains("Workflow mode") && !contents.contains("› /workflow")
     })
     .await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "workflow management",
+        |contents| contents.contains("Workflows") && contents.contains("App-server host ·"),
+    )
+    .await?;
+    writer.send(b"\x1b".to_vec()).await?;
+    wait_for_screen(
+        &mut output_rx,
+        &mut screen,
+        "workflow composer",
+        |contents| {
+            contents.contains("› Ask Codex to do anything")
+                && !contents.contains("App-server host ·")
+        },
+    )
+    .await?;
 
     writer
         .send(b"TUI workflow mode e2e prompt".to_vec())

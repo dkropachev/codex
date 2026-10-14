@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests/workflows__slash_commands.rs
+assertion_line: 309
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Workflows
+  App-server host · update snapshot 3
+
+
+
+› team/review · 1.0.0  Review changes · prompt · update available
+
+  Esc to close

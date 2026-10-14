@@ -517,7 +517,14 @@ impl ChatWidget {
                 self.apply_plan_slash_command();
             }
             SlashCommand::Workflow => {
-                self.apply_workflow_slash_command();
+                if self.config.features.enabled(Feature::Workflows) {
+                    if self.collaboration_modes_enabled() {
+                        self.apply_workflow_slash_command();
+                    }
+                    self.open_workflow_management();
+                } else {
+                    self.apply_workflow_slash_command();
+                }
             }
             SlashCommand::Config => {
                 self.apply_config_slash_command();

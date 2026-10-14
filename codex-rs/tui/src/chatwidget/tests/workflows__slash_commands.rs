@@ -255,6 +255,156 @@ async fn bare_workflow_slash_enters_workflow_mode() {
 }
 
 #[tokio::test]
+async fn workflow_management_shows_managed_release_and_update_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    chat.dispatch_command(SlashCommand::Workflow);
+    let request_id = chat
+        .workflow_management_request_id
+        .expect("management request");
+    insta::assert_snapshot!(
+        "workflow_management_loading",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+
+    let installed = codex_app_server_protocol::WorkflowReleaseIdentity {
+        tag: Some("v1.0.0".to_string()),
+        version: Some("1.0.0".to_string()),
+        commit: "a".repeat(40),
+    };
+    let available = codex_app_server_protocol::WorkflowReleaseIdentity {
+        tag: Some("v1.1.0".to_string()),
+        version: Some("1.1.0".to_string()),
+        commit: "b".repeat(40),
+    };
+    let cwd = chat.workflow_invocation_cwd();
+    chat.on_workflow_management_loaded(
+        request_id,
+        cwd,
+        Ok(crate::workflow_remote::WorkflowManagementData {
+            workflows: vec![codex_app_server_protocol::WorkflowSummary {
+                id: "team/review".to_string(),
+                command: "team-review".to_string(),
+                description: "Review changes".to_string(),
+                path: "/app-server/workflows/team/review".to_string(),
+                managed: Some(codex_app_server_protocol::ManagedWorkflowInfo {
+                    source: "file:///app-server/sources/review".to_string(),
+                    installed,
+                    policy: codex_app_server_protocol::WorkflowUpdatePolicy::Prompt,
+                    dismissed_release: None,
+                }),
+            }],
+            updates: vec![codex_app_server_protocol::WorkflowUpdateEntry {
+                id: "team/review".to_string(),
+                status: codex_app_server_protocol::WorkflowUpdateStatus::Available,
+                release: Some(available),
+                dismissed: false,
+                error: None,
+            }],
+            generation: Some(3),
+            scanning: false,
+            error: None,
+        }),
+    );
+    insta::assert_snapshot!(
+        "workflow_management_loaded",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+}
+
+#[tokio::test]
+async fn workflow_management_shows_source_errors() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    chat.dispatch_command(SlashCommand::Workflow);
+    let request_id = chat
+        .workflow_management_request_id
+        .expect("management request");
+    let cwd = chat.workflow_invocation_cwd();
+    chat.on_workflow_management_loaded(
+        request_id,
+        cwd,
+        Ok(crate::workflow_remote::WorkflowManagementData {
+            workflows: vec![codex_app_server_protocol::WorkflowSummary {
+                id: "team/review".to_string(),
+                command: "team-review".to_string(),
+                description: "Review changes".to_string(),
+                path: "/app-server/workflows/team/review".to_string(),
+                managed: Some(codex_app_server_protocol::ManagedWorkflowInfo {
+                    source: "file:///app-server/sources/review".to_string(),
+                    installed: codex_app_server_protocol::WorkflowReleaseIdentity {
+                        tag: Some("v1.0.0".to_string()),
+                        version: Some("1.0.0".to_string()),
+                        commit: "a".repeat(40),
+                    },
+                    policy: codex_app_server_protocol::WorkflowUpdatePolicy::Manual,
+                    dismissed_release: None,
+                }),
+            }],
+            updates: vec![codex_app_server_protocol::WorkflowUpdateEntry {
+                id: "team/review".to_string(),
+                status: codex_app_server_protocol::WorkflowUpdateStatus::Error,
+                release: None,
+                dismissed: false,
+                error: Some("repository moved".to_string()),
+            }],
+            generation: Some(4),
+            scanning: false,
+            error: Some("another source is unavailable".to_string()),
+        }),
+    );
+
+    insta::assert_snapshot!(render_bottom_popup(&chat, /*width*/ 80));
+}
+
+#[tokio::test]
+async fn workflow_management_request_failure_is_visible() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    chat.dispatch_command(SlashCommand::Workflow);
+    let request_id = chat
+        .workflow_management_request_id
+        .expect("management request");
+    let cwd = chat.workflow_invocation_cwd();
+    chat.on_workflow_management_loaded(request_id, cwd, Err("connection lost".to_string()));
+
+    let cells = drain_insert_history_normalized(&mut rx);
+    insta::assert_snapshot!(
+        cells
+            .iter()
+            .map(|cell| lines_to_single_string(cell).trim().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+#[tokio::test]
+async fn workflow_management_discards_response_after_cwd_refresh() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    chat.dispatch_command(SlashCommand::Workflow);
+    let request_id = chat
+        .workflow_management_request_id
+        .expect("management request");
+    let cwd = chat.workflow_invocation_cwd();
+    chat.sync_workflow_commands();
+    chat.on_workflow_management_loaded(
+        request_id,
+        cwd,
+        Ok(crate::workflow_remote::WorkflowManagementData {
+            workflows: Vec::new(),
+            updates: Vec::new(),
+            generation: Some(1),
+            scanning: false,
+            error: None,
+        }),
+    );
+
+    assert_eq!(chat.workflow_management_request_id, None);
+    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("No workflows found"));
+}
+
+#[tokio::test]
 async fn bare_workflow_slash_reports_disabled_when_feature_off() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

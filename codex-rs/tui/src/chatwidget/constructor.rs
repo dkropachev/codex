@@ -122,6 +122,7 @@ impl ChatWidget {
             skills_initial_state: None,
             workflow_commands: Vec::new(),
             workflow_commands_generation: 0,
+            workflow_management_request_id: None,
             current_collaboration_mode,
             active_collaboration_mask,
             pending_user_collaboration_mode: None,

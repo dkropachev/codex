@@ -775,6 +775,18 @@ pub(crate) enum AppEvent {
         result: Result<Vec<crate::workflow_commands::WorkflowCommand>, String>,
     },
 
+    /// Read the retained workflow state on the app-server host for the management view.
+    OpenWorkflowManagement {
+        request_id: Uuid,
+        cwd: PathBuf,
+    },
+
+    WorkflowManagementLoaded {
+        request_id: Uuid,
+        cwd: PathBuf,
+        result: Result<crate::workflow_remote::WorkflowManagementData, String>,
+    },
+
     /// Load schema and hook completion for only the workflow active in the composer.
     StartWorkflowCompletion {
         generation: u64,
