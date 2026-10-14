@@ -37,7 +37,7 @@ impl ChatWidget {
             Err(error) => self.add_error_message(format!("Workflow discovery failed: {error}")),
         }
         self.bottom_pane.set_workflow_commands_context(
-            /*workflows_enabled*/ true,
+            /*enabled*/ true,
             cwd,
             self.workflow_commands.clone(),
         );
