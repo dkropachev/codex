@@ -3,38 +3,57 @@ use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use codex_app_server_client::AppServerClient;
 use pretty_assertions::assert_eq;
+use std::path::Path;
 
 #[test]
 fn install_arguments_preserve_windows_and_quoted_host_paths() {
     assert_eq!(
-        install_arguments(r"install C:\workflows\review").expect("Windows path"),
+        install_arguments(r"install C:\workflows\review", Path::new("/project"))
+            .expect("Windows path"),
         (
             r"C:\workflows\review".to_string(),
             WorkflowUpdatePolicy::Prompt
         )
     );
     assert_eq!(
-        install_arguments(r#"install "./my workflows/review" --policy manual"#)
-            .expect("quoted path"),
+        install_arguments(
+            r#"install "./my workflows/review" --policy manual"#,
+            Path::new("/project")
+        )
+        .expect("quoted path"),
         (
             "./my workflows/review".to_string(),
             WorkflowUpdatePolicy::Manual,
         )
     );
     assert_eq!(
-        install_arguments(r#"install ./my\ workflows/review --policy "manual""#)
-            .expect("escaped Unix path and quoted policy"),
+        install_arguments(
+            r#"install ./my\ workflows/review --policy "manual""#,
+            Path::new("/project")
+        )
+        .expect("escaped Unix path and quoted policy"),
         (
             "./my workflows/review".to_string(),
             WorkflowUpdatePolicy::Manual,
         )
     );
     assert_eq!(
-        install_arguments(r#"install C:\workflows\review --policy "automatic""#)
-            .expect("Windows path and quoted policy"),
+        install_arguments(
+            r#"install C:\workflows\review --policy "automatic""#,
+            Path::new("C:\\project")
+        )
+        .expect("Windows path and quoted policy"),
         (
             r"C:\workflows\review".to_string(),
             WorkflowUpdatePolicy::Automatic,
+        )
+    );
+    assert_eq!(
+        install_arguments(r"install .\sources\review", Path::new("C:\\project"))
+            .expect("relative Windows path"),
+        (
+            r".\sources\review".to_string(),
+            WorkflowUpdatePolicy::Prompt
         )
     );
 }

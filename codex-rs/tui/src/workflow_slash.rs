@@ -1,5 +1,6 @@
 //! Typed `/workflow` command dispatch against the app-server host.
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -36,7 +37,10 @@ fn policy(value: &str) -> anyhow::Result<WorkflowUpdatePolicy> {
     }
 }
 
-fn install_arguments(args: &str) -> anyhow::Result<(String, WorkflowUpdatePolicy)> {
+fn install_arguments(
+    args: &str,
+    host_cwd: &Path,
+) -> anyhow::Result<(String, WorkflowUpdatePolicy)> {
     let raw = args.trim().trim_start_matches("install").trim();
     if raw.is_empty() {
         anyhow::bail!("usage: /workflow install <source> [--policy prompt|automatic|manual]");
@@ -45,7 +49,11 @@ fn install_arguments(args: &str) -> anyhow::Result<(String, WorkflowUpdatePolicy
         .strip_prefix('"')
         .or_else(|| raw.strip_prefix('\''))
         .unwrap_or(raw);
-    let windows_path = matches!(unquoted.as_bytes(), [drive, b':', b'\\' | b'/', ..] if drive.is_ascii_alphabetic());
+    let host_cwd = host_cwd.to_string_lossy();
+    let windows_host = matches!(host_cwd.as_bytes(), [drive, b':', b'\\' | b'/', ..] if drive.is_ascii_alphabetic())
+        || host_cwd.starts_with("\\\\");
+    let windows_path = windows_host
+        || matches!(unquoted.as_bytes(), [drive, b':', b'\\' | b'/', ..] if drive.is_ascii_alphabetic());
     if !windows_path {
         let words = shlex::split(raw).context("invalid workflow source quoting")?;
         return match words.as_slice() {
@@ -160,7 +168,7 @@ pub(crate) fn spawn_command(
             };
             match command.as_str() {
                 "install" => {
-                    let (source, policy) = install_arguments(&args)?;
+                    let (source, policy) = install_arguments(&args, &cwd)?;
                     let resolved: WorkflowResolveSourceResponse = handle
                         .request_typed(ClientRequest::WorkflowResolveSource {
                             request_id: RequestId::String(format!("workflow-resolve-{nonce}")),
