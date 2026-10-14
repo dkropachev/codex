@@ -199,7 +199,8 @@ pub(super) fn server_notification_thread_target(
                 None => return ServerNotificationThreadTarget::AppScoped,
             }
         }
-        ServerNotification::ProjectChanged(_)
+        ServerNotification::WorkflowUpdatesChanged(_)
+        | ServerNotification::ProjectChanged(_)
         | ServerNotification::SkillsChanged(_)
         | ServerNotification::AccountUpdated(_)
         | ServerNotification::GatewayOAuthChanged(_)

@@ -6778,6 +6778,20 @@ class WorkflowUpdatePolicy(Enum):
     manual = "manual"
 
 
+class WorkflowUpdateStatus(Enum):
+    pending = "pending"
+    current = "current"
+    available = "available"
+    error = "error"
+
+
+class WorkflowUpdatesChangedNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    generation: Annotated[int, Field(ge=0)]
+
+
 class WorkspaceMessageType(Enum):
     headline = "headline"
     announcement = "announcement"
@@ -9229,6 +9243,23 @@ class ScheduledTaskSummary(BaseModel):
     schedule: ScheduledTaskSchedule
 
 
+class WorkflowUpdatesChangedServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    emitted_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="emittedAtMs",
+            description="Unix timestamp (in milliseconds) when app-server emitted this notification.",
+        ),
+    ] = None
+    method: Annotated[
+        Literal["workflow/updatesChanged"], Field(title="Workflow/updatesChangedNotificationMethod")
+    ]
+    params: WorkflowUpdatesChangedNotification
+
+
 class ThreadStatusChangedServerNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -10623,6 +10654,17 @@ class WorkflowSummary(BaseModel):
     id: str
     managed: ManagedWorkflowInfo | None = None
     path: Annotated[str, Field(description="A local path on the app-server host.")]
+
+
+class WorkflowUpdateEntry(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    dismissed: bool
+    error: str | None = None
+    id: str
+    release: WorkflowReleaseIdentity | None = None
+    status: WorkflowUpdateStatus
 
 
 class WorkspaceMessage(BaseModel):
@@ -13195,6 +13237,7 @@ class ItemAutoApprovalReviewCompletedServerNotification(BaseModel):
 class ServerNotification(
     RootModel[
         ErrorServerNotification
+        | WorkflowUpdatesChangedServerNotification
         | ThreadStartedServerNotification
         | ThreadStatusChangedServerNotification
         | ThreadArchivedServerNotification
@@ -13285,6 +13328,7 @@ class ServerNotification(
     )
     root: Annotated[
         ErrorServerNotification
+        | WorkflowUpdatesChangedServerNotification
         | ThreadStartedServerNotification
         | ThreadStatusChangedServerNotification
         | ThreadArchivedServerNotification
