@@ -211,7 +211,7 @@ async fn refresh_snapshot(
         config,
         notification_tx,
         snapshot,
-        None,
+        /*recovered_tx*/ None,
         ScanMode::Explicit,
     ));
     WorkflowCheckUpdatesResponse {
