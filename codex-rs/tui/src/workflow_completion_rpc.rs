@@ -72,17 +72,20 @@ pub(crate) fn spawn_completion(handle: AppServerRequestHandle, task: WorkflowCom
                 )
                 .await;
                 match response {
-                    Ok(Ok(response)) => CompletionResult::new(
-                        response
-                            .items
-                            .into_iter()
-                            .map(|item| CompletionItem {
+                    Ok(Ok(response)) => {
+                        let mut items = Vec::with_capacity(response.items.len());
+                        let mut insertions = Vec::new();
+                        for item in response.items {
+                            if let Some(insertion) = item.insertion {
+                                insertions.push((item.value.clone(), insertion));
+                            }
+                            items.push(CompletionItem {
                                 value: item.value,
                                 description: item.description,
-                            })
-                            .collect(),
-                        response.error,
-                    ),
+                            });
+                        }
+                        CompletionResult::new(items, response.error).with_insertions(insertions)
+                    }
                     Ok(Err(error)) => CompletionResult::new(Vec::new(), Some(error.to_string())),
                     Err(_) => CompletionResult::new(
                         Vec::new(),

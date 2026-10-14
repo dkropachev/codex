@@ -6768,6 +6768,10 @@ class WorkflowCompletionItem(BaseModel):
         populate_by_name=True,
     )
     description: str | None = None
+    insertion: Annotated[
+        str | None,
+        Field(description="Exact argument text to insert; absent in responses from older servers."),
+    ] = None
     value: str
 
 

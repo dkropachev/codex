@@ -293,6 +293,9 @@ pub struct WorkflowCompleteParams {
 pub struct WorkflowCompletionItem {
     pub value: String,
     pub description: Option<String>,
+    /// Exact argument text to insert; absent in responses from older servers.
+    #[serde(default)]
+    pub insertion: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

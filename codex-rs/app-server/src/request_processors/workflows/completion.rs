@@ -139,10 +139,11 @@ fn complete(
     Ok(Some(WorkflowCompleteResponse {
         items: result
             .items
-            .into_iter()
+            .iter()
             .map(|item| WorkflowCompletionItem {
-                value: item.value,
-                description: item.description,
+                value: item.value.clone(),
+                description: item.description.clone(),
+                insertion: Some(result.insertion_for(&item.value).to_string()),
             })
             .collect(),
         error: result

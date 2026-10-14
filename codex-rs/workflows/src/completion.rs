@@ -12,6 +12,7 @@ use crate::WorkflowPackage;
 
 const MAX_COMPLETION_ITEMS: usize = 128;
 const MAX_COMPLETION_VALUE_BYTES: usize = 1_024;
+const MAX_COMPLETION_INSERTION_BYTES: usize = 8 * 1_024;
 const MAX_COMPLETION_DESCRIPTION_BYTES: usize = 2_048;
 const MAX_COMPLETION_TOTAL_BYTES: usize = 64 * 1024;
 
@@ -59,6 +60,21 @@ impl CompletionResult {
 
     pub fn insertion_for<'a>(&'a self, value: &'a str) -> &'a str {
         self.insertions.get(value).map_or(value, String::as_str)
+    }
+
+    /// Applies exact argument text supplied by host-side completion to retained items.
+    pub fn with_insertions(
+        mut self,
+        insertions: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        for (value, insertion) in insertions {
+            if insertion.len() <= MAX_COMPLETION_INSERTION_BYTES
+                && let Some(current) = self.insertions.get_mut(&value)
+            {
+                *current = insertion;
+            }
+        }
+        self
     }
 }
 
