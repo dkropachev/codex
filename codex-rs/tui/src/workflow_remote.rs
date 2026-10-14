@@ -146,11 +146,28 @@ pub(crate) fn spawn_management(
     tokio::spawn(async move {
         let result = tokio::time::timeout(Duration::from_secs(/*secs*/ 15), async {
             let workflows = fetch_workflows(&handle, &cwd, request_id).await?;
-            let managed = fetch_managed(&handle, request_id).await?;
+            let (managed, managed_error) = match fetch_managed(&handle, request_id).await {
+                Ok(managed) => (managed, None),
+                Err(read_error) => (
+                    workflows
+                        .iter()
+                        .filter_map(|workflow| {
+                            workflow
+                                .managed
+                                .clone()
+                                .map(|managed| ManagedWorkflowEntry {
+                                    id: workflow.id.clone(),
+                                    managed,
+                                })
+                        })
+                        .collect(),
+                    Some(format!("managed workflow list unavailable: {read_error}")),
+                ),
+            };
             let mut updates = Vec::new();
             let mut generation = None;
             let mut scanning = false;
-            let mut error = None;
+            let mut error = managed_error;
             let mut cursor = None;
             let mut seen_cursors = HashSet::new();
             let mut complete = false;
@@ -169,7 +186,10 @@ pub(crate) fn spawn_management(
                 {
                     Ok(response) => response,
                     Err(read_error) => {
-                        error = Some(read_error.to_string());
+                        error = Some(match error {
+                            Some(previous) => format!("{previous}; update state: {read_error}"),
+                            None => read_error.to_string(),
+                        });
                         complete = true;
                         break;
                     }
@@ -179,7 +199,12 @@ pub(crate) fn spawn_management(
                 }
                 generation = Some(response.generation);
                 scanning = response.scanning;
-                error = response.error;
+                if let Some(read_error) = response.error {
+                    error = Some(match error {
+                        Some(previous) => format!("{previous}; update state: {read_error}"),
+                        None => read_error,
+                    });
+                }
                 if updates.len() + response.data.len() > MAX_COMMANDS {
                     anyhow::bail!("workflow update snapshot exceeded its result limit");
                 }
