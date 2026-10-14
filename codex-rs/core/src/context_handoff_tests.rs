@@ -21,9 +21,9 @@ fn expression_precedence_and_missing_price() {
     .unwrap();
     assert_eq!(policy.stage(/*tokens*/ 4, Some(2.0)), Stage::None);
     assert_eq!(policy.stage(/*tokens*/ 5, Some(2.0)), Stage::Soft);
-    assert_eq!(policy.stage(/*tokens*/ 10, None), Stage::Soft);
-    assert_eq!(policy.stage(/*tokens*/ 20, None), Stage::Mid);
-    assert_eq!(policy.stage(/*tokens*/ 30, None), Stage::Hard);
+    assert_eq!(policy.stage(/*tokens*/ 10, /*price*/ None), Stage::Soft);
+    assert_eq!(policy.stage(/*tokens*/ 20, /*price*/ None), Stage::Mid);
+    assert_eq!(policy.stage(/*tokens*/ 30, /*price*/ None), Stage::Hard);
 }
 
 #[test]
