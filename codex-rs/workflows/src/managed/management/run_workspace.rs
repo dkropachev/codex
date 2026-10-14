@@ -24,6 +24,19 @@ impl ManagedWorkflowRunWorkspace {
     pub fn root(&self) -> &Path {
         self.root.as_path()
     }
+
+    /// Loads the published package after the private copy has passed evidence checks.
+    pub fn load_executable(
+        &self,
+        cancelled: &AtomicBool,
+    ) -> anyhow::Result<crate::WorkflowPackage> {
+        let package =
+            crate::WorkflowPackage::load_published_executable_cancellable(self.root(), cancelled)?;
+        if package.manifest.id != self.id {
+            bail!("workflow executable changed identity while locked");
+        }
+        Ok(package)
+    }
 }
 
 impl ManagedWorkflowService {

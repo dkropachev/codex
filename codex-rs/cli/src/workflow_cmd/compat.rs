@@ -11,6 +11,7 @@ use anyhow::bail;
 use clap::Parser;
 use codex_core::config::Config;
 use codex_features::Feature;
+use codex_workflows::ManagedWorkflowRunWorkspace;
 use codex_workflows::ScaffoldRequest;
 use codex_workflows::WorkflowCommand;
 use codex_workflows::WorkflowPackage;
@@ -493,6 +494,35 @@ async fn run_workflow(
     commands: &[WorkflowCommand],
 ) -> anyhow::Result<()> {
     let command = find_workflow_command(commands, &target)?;
+    let global_root = config.codex_home.join("workflows");
+    let managed_id = command
+        .workflow_dir
+        .strip_prefix(global_root.as_path())
+        .ok()
+        .and_then(|relative| {
+            relative
+                .components()
+                .map(|component| component.as_os_str().to_str())
+                .collect::<Option<Vec<_>>>()
+                .map(|components| components.join("/"))
+        })
+        .filter(|id| normalize_workflow_id(id).ok().as_deref() == Some(id.as_str()))
+        .filter(|id| {
+            config
+                .codex_home
+                .join(".workflow-management")
+                .join("receipts")
+                .join(id)
+                .join("receipt.json")
+                .is_file()
+        });
+    let workspace = if let Some(id) = managed_id {
+        let service =
+            codex_workflows::ManagedWorkflowService::new(&config.codex_home, &global_root)?;
+        Some(service.prepare_run_workspace(&id, &command.workflow_dir, &AtomicBool::new(false))?)
+    } else {
+        None
+    };
     let mut input = workflow_invocation_input_from_args(config.cwd.as_path(), &args)
         .map_err(|err| anyhow::anyhow!("{}", err.message()))?;
     if matches!(action, WorkflowAction::Recover) {
@@ -505,26 +535,39 @@ async fn run_workflow(
         input.insert("action".to_string(), Value::String("resume".to_string()));
     }
     let run_config = WorkflowRunConfig::new(config.workflow_output_max_bytes)?;
-    run_workflow_process(command, input, run_config).await
+    run_workflow_process(command, input, run_config, workspace).await
 }
 
 async fn run_workflow_process(
     command: &WorkflowCommand,
     input: Value,
     run_config: WorkflowRunConfig,
+    workspace: Option<ManagedWorkflowRunWorkspace>,
 ) -> anyhow::Result<()> {
     let workflow_dir = command.workflow_dir.clone();
     let command_name = command.command.clone();
     let cancelled = Arc::new(AtomicBool::new(false));
     let worker_cancelled = Arc::clone(&cancelled);
     let mut worker = tokio::task::spawn_blocking(move || {
-        let package =
-            WorkflowPackage::load_executable_cancellable(&workflow_dir, worker_cancelled.as_ref())
-                .with_context(|| {
-                    format!("workflow command `{command_name}` is not a canonical package")
-                })?;
+        let (run_root, package) = if let Some(workspace) = workspace.as_ref() {
+            (
+                workspace.root().to_path_buf(),
+                workspace.load_executable(worker_cancelled.as_ref()),
+            )
+        } else {
+            (
+                workflow_dir.clone(),
+                WorkflowPackage::load_executable_cancellable(
+                    &workflow_dir,
+                    worker_cancelled.as_ref(),
+                ),
+            )
+        };
+        let package = package.with_context(|| {
+            format!("workflow command `{command_name}` is not a canonical package")
+        })?;
         run_cli_workflow_cancellable(
-            &workflow_dir,
+            &run_root,
             &package.manifest,
             &input,
             run_config,
