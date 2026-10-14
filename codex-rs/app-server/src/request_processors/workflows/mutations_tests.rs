@@ -5,8 +5,8 @@ use super::source_for_host;
 #[test]
 fn omitted_cwd_uses_configured_host_directory() {
     let configured_cwd = tempfile::tempdir().expect("configured cwd");
-    let source =
-        source_for_host("./sources/review", None, configured_cwd.path()).expect("relative source");
+    let source = source_for_host("./sources/review", /*cwd*/ None, configured_cwd.path())
+        .expect("relative source");
     assert_eq!(
         source,
         configured_cwd
@@ -18,7 +18,7 @@ fn omitted_cwd_uses_configured_host_directory() {
     assert_eq!(
         source_for_host(
             "https://example.com/review.git",
-            None,
+            /*cwd*/ None,
             configured_cwd.path(),
         )
         .expect("remote source"),
