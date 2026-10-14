@@ -100,8 +100,12 @@ pub struct WorkflowUpdatesReadParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct WorkflowUpdatesReadResponse {
+    /// Advances whenever the retained snapshot changes; notifications may coalesce generations.
     #[ts(type = "number")]
     pub generation: u64,
+    /// Identifies the source check that produced this snapshot.
+    #[ts(type = "number")]
+    pub scan_id: u64,
     pub scanning: bool,
     pub data: Vec<WorkflowUpdateEntry>,
     pub next_cursor: Option<String>,
@@ -114,4 +118,20 @@ pub struct WorkflowUpdatesReadResponse {
 pub struct WorkflowUpdatesChangedNotification {
     #[ts(type = "number")]
     pub generation: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS, ExperimentalApi)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowCheckUpdatesParams {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WorkflowCheckUpdatesResponse {
+    /// Identifies the newly started scan, or the scan already in progress.
+    #[ts(type = "number")]
+    pub scan_id: u64,
+    /// False means this request joined an active scan and scheduled no new check.
+    pub started: bool,
 }
