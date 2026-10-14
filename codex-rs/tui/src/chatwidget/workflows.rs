@@ -21,6 +21,8 @@ impl ChatWidget {
                 generation: self.workflow_commands_generation,
                 cwd: completion_cwd,
             });
+            self.app_event_tx
+                .send(AppEvent::RefreshWorkflowUpdateDecisions);
         }
     }
 

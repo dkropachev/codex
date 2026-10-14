@@ -1860,6 +1860,28 @@ impl App {
                 self.chat_widget
                     .on_workflow_management_loaded(request_id, cwd, result);
             }
+            AppEvent::RefreshWorkflowUpdateDecisions => {
+                if let Some((request_id, cwd)) = self.chat_widget.begin_workflow_update_decisions() {
+                    crate::workflow_remote::spawn_management(
+                        app_server.request_handle(),
+                        request_id,
+                        cwd,
+                        self.app_event_tx.clone(),
+                    );
+                }
+            }
+            AppEvent::OpenWorkflowUpdateDecision {
+                id,
+                installed,
+                available,
+                cwd,
+            } => self
+                .chat_widget
+                .open_workflow_update_decision(id, installed, available, cwd),
+            AppEvent::WorkflowUpdateLater { id, release } => {
+                self.chat_widget.later_workflow_update(id, release);
+                self.app_event_tx.send(AppEvent::RefreshWorkflowUpdateDecisions);
+            }
             AppEvent::WorkflowManagementAction { action, cwd } => {
                 crate::workflow_actions::spawn_action(
                     app_server.request_handle(),

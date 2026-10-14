@@ -130,6 +130,11 @@ impl App {
         app_server_client: &AppServerSession,
         notification: ServerNotification,
     ) {
+        if matches!(&notification, ServerNotification::WorkflowUpdatesChanged(_)) {
+            self.app_event_tx
+                .send(AppEvent::RefreshWorkflowUpdateDecisions);
+            return;
+        }
         // A picker can leave an old runtime's close notification queued while the same thread
         // is resumed. Thread IDs survive reloads, so confirm that the displayed thread is still
         // unloaded before routing a close that would exit the TUI or switch away from it.

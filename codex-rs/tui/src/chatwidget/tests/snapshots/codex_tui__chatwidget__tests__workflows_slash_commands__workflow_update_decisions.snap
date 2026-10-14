@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests/workflows__slash_commands.rs
+assertion_line: 449
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Workflow updates
+  Select a release to decide · app-server host
+
+
+
+› team/review · 1.1.0  New managed release
+  team/build · 1.1.0   New managed release
+
+  enter select · esc back

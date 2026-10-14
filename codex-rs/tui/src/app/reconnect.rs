@@ -535,6 +535,9 @@ impl App {
                 self.chat_widget.add_server_version_warning(notice);
             }
         }
+        self.chat_widget.reset_workflow_update_decisions();
+        self.app_event_tx
+            .send(AppEvent::RefreshWorkflowUpdateDecisions);
         Ok(())
     }
 }

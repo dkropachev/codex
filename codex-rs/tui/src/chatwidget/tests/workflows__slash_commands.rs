@@ -269,6 +269,7 @@ async fn workflow_management_shows_managed_release_and_update_state() {
         request_id,
         cwd,
         Ok(crate::workflow_remote::WorkflowManagementData {
+            managed: Vec::new(),
             workflows: vec![codex_app_server_protocol::WorkflowSummary {
                 id: "team/review".to_string(),
                 command: "team-review".to_string(),
@@ -321,6 +322,7 @@ async fn workflow_management_shows_source_errors() {
         request_id,
         cwd,
         Ok(crate::workflow_remote::WorkflowManagementData {
+            managed: Vec::new(),
             workflows: vec![codex_app_server_protocol::WorkflowSummary {
                 id: "team/review".to_string(),
                 command: "team-review".to_string(),
@@ -388,6 +390,7 @@ async fn workflow_management_discards_response_after_cwd_refresh() {
         request_id,
         cwd,
         Ok(crate::workflow_remote::WorkflowManagementData {
+            managed: Vec::new(),
             workflows: Vec::new(),
             updates: Vec::new(),
             generation: Some(1),
@@ -398,6 +401,87 @@ async fn workflow_management_discards_response_after_cwd_refresh() {
 
     assert_eq!(chat.workflow_management_request_id, None);
     assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("No workflows found"));
+}
+
+#[tokio::test]
+async fn prompt_updates_share_one_decision_view_with_per_release_choices() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
+    let installed = codex_app_server_protocol::WorkflowReleaseIdentity {
+        tag: Some("v1.0.0".into()),
+        version: Some("1.0.0".into()),
+        commit: "a".repeat(40),
+    };
+    let available = codex_app_server_protocol::WorkflowReleaseIdentity {
+        tag: Some("v1.1.0".into()),
+        version: Some("1.1.0".into()),
+        commit: "b".repeat(40),
+    };
+    let data = crate::workflow_remote::WorkflowManagementData {
+        workflows: Vec::new(),
+        managed: ["team/review", "team/build"]
+            .into_iter()
+            .map(|id| codex_app_server_protocol::ManagedWorkflowEntry {
+                id: id.to_string(),
+                managed: codex_app_server_protocol::ManagedWorkflowInfo {
+                    source: format!("file:///sources/{id}"),
+                    installed: installed.clone(),
+                    policy: codex_app_server_protocol::WorkflowUpdatePolicy::Prompt,
+                    dismissed_release: None,
+                },
+            })
+            .collect(),
+        updates: ["team/review", "team/build"]
+            .into_iter()
+            .map(|id| codex_app_server_protocol::WorkflowUpdateEntry {
+                id: id.to_string(),
+                status: codex_app_server_protocol::WorkflowUpdateStatus::Available,
+                release: Some(available.clone()),
+                dismissed: false,
+                error: None,
+            })
+            .collect(),
+        generation: Some(7),
+        scanning: false,
+        error: None,
+    };
+    chat.show_workflow_update_decisions(data.clone());
+    insta::assert_snapshot!(
+        "workflow_update_decisions",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let choice = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
+        AppEvent::OpenWorkflowUpdateDecision {
+            id,
+            installed,
+            available,
+            cwd,
+        } => Some((id, installed, available, cwd)),
+        _ => None,
+    });
+    let (id, selected_installed, selected_available, cwd) = choice.expect("choice event");
+    chat.open_workflow_update_decision(id.clone(), selected_installed, selected_available, cwd);
+    insta::assert_snapshot!(
+        "workflow_update_choice",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let later = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
+        AppEvent::WorkflowUpdateLater { id, release } => Some((id, release)),
+        _ => None,
+    });
+    let (later_id, later_release) = later.expect("later event");
+    assert_eq!(later_id, id);
+    chat.later_workflow_update(later_id, later_release);
+    chat.show_workflow_update_decisions(data);
+    insta::assert_snapshot!(
+        "workflow_update_after_later",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
 }
 
 #[tokio::test]

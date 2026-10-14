@@ -7,9 +7,12 @@ use std::time::Duration;
 
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ManagedWorkflowEntry;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::WorkflowListParams;
 use codex_app_server_protocol::WorkflowListResponse;
+use codex_app_server_protocol::WorkflowManagedListParams;
+use codex_app_server_protocol::WorkflowManagedListResponse;
 use codex_app_server_protocol::WorkflowSummary;
 use codex_app_server_protocol::WorkflowUpdateEntry;
 use codex_app_server_protocol::WorkflowUpdatesReadParams;
@@ -24,13 +27,46 @@ const PAGE_SIZE: u32 = 100;
 const MAX_COMMANDS: usize = 4_096;
 const MAX_PAGES: usize = 42;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct WorkflowManagementData {
     pub(crate) workflows: Vec<WorkflowSummary>,
+    pub(crate) managed: Vec<ManagedWorkflowEntry>,
     pub(crate) updates: Vec<WorkflowUpdateEntry>,
     pub(crate) generation: Option<u64>,
     pub(crate) scanning: bool,
     pub(crate) error: Option<String>,
+}
+
+async fn fetch_managed(
+    handle: &AppServerRequestHandle,
+    nonce: Uuid,
+) -> anyhow::Result<Vec<ManagedWorkflowEntry>> {
+    let mut managed = Vec::new();
+    let mut cursor = None;
+    let mut seen_cursors = HashSet::new();
+    for page in 0..MAX_PAGES {
+        let response: WorkflowManagedListResponse = handle
+            .request_typed(ClientRequest::WorkflowManagedList {
+                request_id: RequestId::String(format!("workflow-managed-{nonce}-{page}")),
+                params: WorkflowManagedListParams {
+                    cursor,
+                    limit: Some(PAGE_SIZE),
+                },
+            })
+            .await?;
+        if managed.len() + response.data.len() > MAX_COMMANDS {
+            anyhow::bail!("managed workflow list exceeded its result limit");
+        }
+        managed.extend(response.data);
+        match response.next_cursor {
+            Some(next_cursor) if seen_cursors.insert(next_cursor.clone()) => {
+                cursor = Some(next_cursor);
+            }
+            Some(_) => anyhow::bail!("managed workflow list returned a repeated cursor"),
+            None => return Ok(managed),
+        }
+    }
+    anyhow::bail!("managed workflow list exceeded its page limit")
 }
 
 pub(crate) async fn fetch_workflows(
@@ -110,10 +146,28 @@ pub(crate) fn spawn_management(
     tokio::spawn(async move {
         let result = tokio::time::timeout(Duration::from_secs(/*secs*/ 15), async {
             let workflows = fetch_workflows(&handle, &cwd, request_id).await?;
+            let (managed, managed_error) = match fetch_managed(&handle, request_id).await {
+                Ok(managed) => (managed, None),
+                Err(read_error) => (
+                    workflows
+                        .iter()
+                        .filter_map(|workflow| {
+                            workflow
+                                .managed
+                                .clone()
+                                .map(|managed| ManagedWorkflowEntry {
+                                    id: workflow.id.clone(),
+                                    managed,
+                                })
+                        })
+                        .collect(),
+                    Some(format!("managed workflow list unavailable: {read_error}")),
+                ),
+            };
             let mut updates = Vec::new();
             let mut generation = None;
             let mut scanning = false;
-            let mut error = None;
+            let mut error = managed_error;
             let mut cursor = None;
             let mut seen_cursors = HashSet::new();
             let mut complete = false;
@@ -132,7 +186,10 @@ pub(crate) fn spawn_management(
                 {
                     Ok(response) => response,
                     Err(read_error) => {
-                        error = Some(read_error.to_string());
+                        error = Some(match error {
+                            Some(previous) => format!("{previous}; update state: {read_error}"),
+                            None => read_error.to_string(),
+                        });
                         complete = true;
                         break;
                     }
@@ -142,7 +199,12 @@ pub(crate) fn spawn_management(
                 }
                 generation = Some(response.generation);
                 scanning = response.scanning;
-                error = response.error;
+                if let Some(read_error) = response.error {
+                    error = Some(match error {
+                        Some(previous) => format!("{previous}; update state: {read_error}"),
+                        None => read_error,
+                    });
+                }
                 if updates.len() + response.data.len() > MAX_COMMANDS {
                     anyhow::bail!("workflow update snapshot exceeded its result limit");
                 }
@@ -163,6 +225,7 @@ pub(crate) fn spawn_management(
             }
             Ok::<_, anyhow::Error>(WorkflowManagementData {
                 workflows,
+                managed,
                 updates,
                 generation,
                 scanning,

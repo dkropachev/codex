@@ -787,6 +787,20 @@ pub(crate) enum AppEvent {
         result: Result<crate::workflow_remote::WorkflowManagementData, String>,
     },
 
+    RefreshWorkflowUpdateDecisions,
+
+    OpenWorkflowUpdateDecision {
+        id: String,
+        installed: codex_app_server_protocol::WorkflowReleaseIdentity,
+        available: codex_app_server_protocol::WorkflowReleaseIdentity,
+        cwd: PathBuf,
+    },
+
+    WorkflowUpdateLater {
+        id: String,
+        release: codex_app_server_protocol::WorkflowReleaseIdentity,
+    },
+
     /// Apply a workflow action to the exact release shown in the management view.
     WorkflowManagementAction {
         action: crate::workflow_actions::WorkflowAction,

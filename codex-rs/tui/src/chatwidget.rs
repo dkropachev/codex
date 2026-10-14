@@ -380,6 +380,7 @@ use self::safety_buffering::SafetyBufferingState;
 mod status_state;
 mod windows_sandbox_prompts;
 mod workflow_management;
+mod workflow_update_decisions;
 mod workflows;
 use self::status_state::StatusIndicatorState;
 use self::status_state::StatusState;
@@ -613,6 +614,9 @@ pub(crate) struct ChatWidget {
     workflow_commands: Vec<crate::workflow_commands::WorkflowCommand>,
     workflow_commands_generation: u64,
     workflow_management_request_id: Option<uuid::Uuid>,
+    workflow_decision_request_id: Option<uuid::Uuid>,
+    workflow_prompt_seen_generation: Option<u64>,
+    workflow_prompt_later: HashSet<(String, Option<String>, Option<String>, String)>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     turn_lifecycle: TurnLifecycleState,
