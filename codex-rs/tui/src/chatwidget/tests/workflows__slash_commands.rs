@@ -76,19 +76,6 @@ async fn workflow_discovery_error_is_visible() {
     );
 }
 
-fn next_shell_command(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> String {
-    loop {
-        match op_rx.try_recv() {
-            Ok(Op::RunUserShellCommand { command }) => return command,
-            Ok(_) => continue,
-            Err(TryRecvError::Empty) => panic!("expected shell command op but queue was empty"),
-            Err(TryRecvError::Disconnected) => {
-                panic!("expected shell command op but channel closed")
-            }
-        }
-    }
-}
-
 fn next_workflow_command(
     op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>,
 ) -> (PathBuf, serde_json::Value) {
@@ -521,13 +508,14 @@ async fn workflow_done_slash_exits_to_default_mode() {
 }
 
 #[tokio::test]
-async fn workflow_slash_with_args_dispatches_workflow_cli_command() {
+async fn workflow_slash_with_args_dispatches_management_rpc() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Workflows, /*enabled*/ true);
 
     chat.dispatch_command_with_args(SlashCommand::Workflow, "list".to_string(), Vec::new());
 
-    assert_eq!(next_shell_command(&mut op_rx), "codex workflow list");
+    assert!(chat.workflow_management_request_id.is_some());
+    assert_no_shell_or_user_turn(&mut op_rx);
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
 }
 

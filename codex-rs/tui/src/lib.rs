@@ -244,6 +244,7 @@ mod unarchive_prompt;
 pub(crate) mod update_action;
 mod workflow_actions;
 mod workflow_remote;
+mod workflow_slash;
 mod worktree_startup;
 pub use update_action::DaemonUpdateSource;
 pub use update_action::UpdateAction;

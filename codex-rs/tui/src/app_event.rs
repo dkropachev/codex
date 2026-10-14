@@ -799,6 +799,11 @@ pub(crate) enum AppEvent {
         cwd: PathBuf,
     },
 
+    WorkflowSlashCommand {
+        args: String,
+        cwd: PathBuf,
+    },
+
     WorkflowManagementActionFinished {
         cwd: PathBuf,
         result: Result<String, String>,

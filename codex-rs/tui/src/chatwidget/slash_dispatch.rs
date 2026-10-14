@@ -1165,9 +1165,14 @@ impl ChatWidget {
                     );
                     return;
                 }
-                self.submit_op(AppCommand::run_user_shell_command(format!(
-                    "codex workflow {trimmed}"
-                )));
+                if trimmed.eq_ignore_ascii_case("list") {
+                    self.open_workflow_management();
+                    return;
+                }
+                self.app_event_tx.send(AppEvent::WorkflowSlashCommand {
+                    args: trimmed.to_string(),
+                    cwd: self.workflow_invocation_cwd(),
+                });
             }
             SlashCommand::Goal if !trimmed.is_empty() => {
                 if !self.config.features.enabled(Feature::Goals) {
