@@ -2196,6 +2196,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "which 8.0.0",
  "wiremock",
 ]
 
