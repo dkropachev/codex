@@ -352,6 +352,7 @@ async fn open_enforces_the_per_connection_limit_and_close_releases_capacity() ->
 
 /// Rejected replacement opens must neither truncate existing files nor create missing files.
 #[test_case::test_case(1, "0", "file handle `0` already exists"; "duplicate_id")]
+#[test_case::test_case(OPEN_FILE_LIMIT, "0", "file handle `0` already exists"; "duplicate_at_capacity")]
 #[test_case::test_case(OPEN_FILE_LIMIT, "overflow", "at most 128 file handles may be open per connection"; "capacity")]
 #[tokio::test]
 async fn replace_open_rejects_unavailable_handles_before_touching_files(

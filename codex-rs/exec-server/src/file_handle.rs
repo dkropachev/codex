@@ -44,30 +44,46 @@ impl FileHandleManager {
         handle_id: String,
         open_file: impl Future<Output = io::Result<tokio::fs::File>>,
     ) -> io::Result<String> {
-        if self.lock_handles().contains_key(&handle_id) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("file handle `{handle_id}` already exists"),
-            ));
-        }
-        let permit = Arc::clone(&self.slots).try_acquire_owned().map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("at most {MAX_OPEN_FILES} file handles may be open per connection"),
-            )
-        })?;
+        let reservation = Arc::new(());
+        // Keep capacity until this future stops, even if close removes its reservation.
+        let permit = {
+            let mut handles = self.lock_handles();
+            let Entry::Vacant(entry) = handles.entry(handle_id.clone()) else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("file handle `{handle_id}` already exists"),
+                ));
+            };
+            let permit = Arc::clone(&self.slots).try_acquire_owned().map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("at most {MAX_OPEN_FILES} file handles may be open per connection"),
+                )
+            })?;
+            entry.insert(FileHandleEntry::Pending(Arc::clone(&reservation)));
+            permit
+        };
+        let pending = PendingOpen {
+            manager: self,
+            handle_id: &handle_id,
+            reservation,
+        };
         let file = Arc::new(open_file.await?.into_std().await);
         let mut handles = self.lock_handles();
-        let Entry::Vacant(entry) = handles.entry(handle_id.clone()) else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("file handle `{handle_id}` already exists"),
-            ));
-        };
-        entry.insert(FileHandleEntry {
-            file,
-            _permit: permit,
-        });
+        if !matches!(handles.get(&handle_id), Some(FileHandleEntry::Pending(token))
+            if Arc::ptr_eq(token, &pending.reservation))
+        {
+            return Err(unknown_handle_error(&handle_id));
+        }
+        handles.insert(
+            handle_id.clone(),
+            FileHandleEntry::Open {
+                file,
+                _permit: permit,
+            },
+        );
+        drop(handles);
+        drop(pending);
         Ok(handle_id)
     }
 
@@ -154,7 +170,10 @@ impl FileHandleManager {
     fn get(&self, handle_id: &str) -> io::Result<Arc<File>> {
         self.lock_handles()
             .get(handle_id)
-            .map(|entry| Arc::clone(&entry.file))
+            .and_then(|entry| match entry {
+                FileHandleEntry::Pending(_) => None,
+                FileHandleEntry::Open { file, .. } => Some(Arc::clone(file)),
+            })
             .ok_or_else(|| unknown_handle_error(handle_id))
     }
 
@@ -173,10 +192,30 @@ impl FileHandleManager {
     }
 }
 
-struct FileHandleEntry {
-    file: Arc<File>,
-    // Closing an entry releases capacity even if a read or write still holds the file.
-    _permit: OwnedSemaphorePermit,
+enum FileHandleEntry {
+    Pending(Arc<()>),
+    Open {
+        file: Arc<File>,
+        // Closing an entry releases capacity even if a read or write still holds the file.
+        _permit: OwnedSemaphorePermit,
+    },
+}
+
+struct PendingOpen<'a> {
+    manager: &'a FileHandleManager,
+    handle_id: &'a str,
+    reservation: Arc<()>,
+}
+
+impl Drop for PendingOpen<'_> {
+    fn drop(&mut self) {
+        let mut handles = self.manager.lock_handles();
+        if matches!(handles.get(self.handle_id), Some(FileHandleEntry::Pending(token))
+            if Arc::ptr_eq(token, &self.reservation))
+        {
+            handles.remove(self.handle_id);
+        }
+    }
 }
 
 fn read_block_at(file: &File, offset: u64, len: usize) -> io::Result<FileReadBlock> {
