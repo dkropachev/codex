@@ -232,3 +232,85 @@ async fn remote_compact_v2_trim_estimate_uses_session_base_instructions(
     }
     Ok(())
 }
+
+#[test_case(false; "declarations_without_instructions")]
+#[test_case(true; "declarations_with_instructions")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_v2_injected_tools_preserve_base_instructions(
+    recorded_instructions: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let instructions = "Preserve these configured instructions during compaction.";
+    let harness = TestCodexHarness::with_auto_env_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_model_info_override("gpt-5.4", |model| {
+                model.use_responses_lite = true;
+            })
+            .with_config(move |config| {
+                config.base_instructions = Some(instructions.to_string());
+                config
+                    .features
+                    .disable(Feature::IncrementalTools)
+                    .expect("disable incremental tools");
+            }),
+    )
+    .await?;
+    let codex = &harness.test().codex;
+    let tools = json!({
+        "type": "additional_tools", "role": "developer",
+        "id": "at_00000000-0000-7000-8000-000000000001",
+        "tools": [{
+            "type": "function", "name": "injected_tool", "description": "Injected tool.",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": false},
+            "strict": false,
+        }],
+    });
+    let mut history = vec![
+        json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "compact this history"}]}),
+        tools.clone(),
+    ];
+    if recorded_instructions {
+        history.push(json!({
+            "type": "message", "role": "developer",
+            "content": [{"type": "input_text", "text": instructions}],
+            "internal_chat_message_metadata_passthrough": {
+                "content_item_kinds": ["model.base_instructions"],
+            },
+        }));
+    }
+    codex
+        .inject_response_items(
+            history
+                .into_iter()
+                .map(serde_json::from_value)
+                .collect::<serde_json::Result<Vec<ResponseItem>>>()?,
+        )
+        .await?;
+    let mock = mount_sse_once(harness.server(), compact_response()).await;
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(codex).await;
+
+    let request = mock.single_request();
+    let base_instructions = request
+        .inputs_of_type("message")
+        .into_iter()
+        .filter(|item| {
+            item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                .as_array()
+                .is_some_and(|kinds| kinds.contains(&json!("model.base_instructions")))
+        })
+        .map(|item| item["content"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        base_instructions,
+        vec![json!([{"type": "input_text", "text": instructions}])]
+    );
+    assert_eq!(request.inputs_of_type("additional_tools"), vec![tools]);
+    assert_eq!(
+        request.inputs_of_type("compaction_trigger"),
+        vec![json!({"type": "compaction_trigger"})]
+    );
+    Ok(())
+}

@@ -1,3 +1,4 @@
+use crate::context::BaseInstructionsFragment;
 use crate::context::UserGoalUpdate;
 use codex_protocol::ResponseItemId;
 use std::collections::HashSet;
@@ -47,7 +48,10 @@ pub(super) async fn run_remote_compact_v2_attempt(
         && history
             .raw_items()
             .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }));
-    let base_instructions = if tools_in_history {
+    let base_instructions = if history
+        .raw_items()
+        .any(BaseInstructionsFragment::matches_item)
+    {
         BaseInstructions {
             text: String::new(),
             provenance: None,
