@@ -176,7 +176,12 @@ fn long_url_tokens_remain_visible_in_a_narrow_verification_prompt() {
         if waiting {
             view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         }
-        let area = Rect::new(0, 0, 30, view.desired_height(/*width*/ 30));
+        let area = Rect::new(
+            /*x*/ 0,
+            /*y*/ 0,
+            /*width*/ 30,
+            view.desired_height(/*width*/ 30),
+        );
         let mut buf = Buffer::empty(area);
         view.render(area, &mut buf);
         let linked = buf
