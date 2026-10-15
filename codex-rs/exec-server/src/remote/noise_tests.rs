@@ -210,7 +210,7 @@ async fn reconnect_reuses_registration_until_url_is_rejected() -> Result<()> {
 
     // Keep the stalled socket open until the executor starts its next attempt.
     let (mut rejected_socket, _peer_addr) =
-        timeout(Duration::from_secs(5), listener.accept()).await??;
+        timeout(Duration::from_secs(/*secs*/ 5), listener.accept()).await??;
     drop(stalled_socket);
     let _ = rejected_socket.read(&mut request).await?;
     rejected_socket

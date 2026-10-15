@@ -578,7 +578,7 @@ openai_base_url = "{redirected_base_url}"
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-    tokio::time::timeout(Duration::from_secs(10), analytics_client.flush()).await?;
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 10), analytics_client.flush()).await?;
     let mut worker_initializations = Vec::new();
     for request in server.received_requests().await.unwrap_or_default() {
         if request.url.path() != "/codex/analytics-events/events" {

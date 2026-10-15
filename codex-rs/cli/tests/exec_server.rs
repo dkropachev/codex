@@ -120,7 +120,7 @@ async fn local_exec_server_projects_global_mxc_preference() -> Result<()> {
         .spawn()?;
     let mut stdin = child.stdin.take().context("exec-server stdin")?;
     let mut stdout = BufReader::new(child.stdout.take().context("exec-server stdout")?);
-    let result = tokio::time::timeout(Duration::from_secs(30), async {
+    let result = tokio::time::timeout(Duration::from_secs(/*secs*/ 30), async {
         send_json_line(
             &mut stdin,
             &serde_json::json!({"id": 1, "method": "initialize",
@@ -159,7 +159,7 @@ async fn local_exec_server_projects_global_mxc_preference() -> Result<()> {
     );
     drop(stdin);
     assert!(
-        tokio::time::timeout(Duration::from_secs(30), child.wait())
+        tokio::time::timeout(Duration::from_secs(/*secs*/ 30), child.wait())
             .await??
             .success()
     );

@@ -109,7 +109,7 @@ async fn stalled_handshake_does_not_delay_other_warm_sockets() -> Result<()> {
     .await?;
     let sampler = LunaSampler::new(sampler_config(url));
     let opener = sampler.connections.replenish().unwrap();
-    tokio::time::timeout(Duration::from_secs(2), async {
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 2), async {
         while sampler
             .connections
             .idle_connections
@@ -162,7 +162,9 @@ async fn replenishes_before_last_idle_socket_is_leased() -> Result<()> {
     let held = sampler.connections.lease().await?;
     assert!(matches!(held.connection, Connection::Websocket(_)));
     // A healthy socket remains available, but the next burst needs the reserve restored.
-    sampler.wait_for_prewarm(Duration::from_secs(2)).await?;
+    sampler
+        .wait_for_prewarm(Duration::from_secs(/*secs*/ 2))
+        .await?;
     let mut burst = Vec::new();
     for _ in 0..INITIAL_WEBSOCKET_CONNECTIONS {
         let lease = sampler.connections.lease().await?;

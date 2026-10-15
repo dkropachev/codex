@@ -69,7 +69,7 @@ const RESTART_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 // Manual update responses are capped after JSON serialization. This leaves room for the status,
 // envelope, and the worst-case six-byte JSON escape for every captured byte.
 const INSTALLER_STDERR_TAIL_BYTES: usize = 2 * 1024;
-const INSTALLER_STDERR_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
+const INSTALLER_STDERR_DRAIN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 1);
 #[cfg(unix)]
 const INSTALL_URL: &str = "https://github.com/dkropachev/codex/releases/latest/download/install.sh";
 #[cfg(windows)]

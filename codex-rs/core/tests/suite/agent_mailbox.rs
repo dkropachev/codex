@@ -191,7 +191,7 @@ async fn idle_mail_survives_eviction_and_preserves_followup_order() -> Result<()
     assert_eq!(test.thread_manager.list_thread_ids().await.len(), 2);
 
     test.thread_manager
-        .shutdown_all_threads_bounded(Duration::from_secs(5))
+        .shutdown_all_threads_bounded(Duration::from_secs(/*secs*/ 5))
         .await;
     Ok(())
 }

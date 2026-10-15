@@ -23,7 +23,7 @@ async fn publishing_release_retries_transient_access_denied() {
         .open(&stage)
         .unwrap();
     let holder = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        tokio::time::sleep(Duration::from_millis(/*millis*/ 150)).await;
         drop(directory);
     });
 

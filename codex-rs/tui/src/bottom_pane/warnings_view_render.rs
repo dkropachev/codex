@@ -49,15 +49,17 @@ impl Renderable for WarningsView {
             .flat_map(|text| {
                 let source =
                     crate::terminal_hyperlinks::annotate_web_urls_in_line(text.to_owned().into());
-                let wrapped =
-                    crate::wrapping::wrap_ranges_trim(text, usize::from(body.width.max(1)))
-                        .into_iter()
-                        .map(|range| crate::wrapping::WrappedLine {
-                            line: (&text[range.clone()]).into(),
-                            range,
-                            prefix_bytes: 0,
-                        })
-                        .collect();
+                let wrapped = crate::wrapping::wrap_ranges_trim(
+                    text,
+                    usize::from(body.width.max(/*other*/ 1)),
+                )
+                .into_iter()
+                .map(|range| crate::wrapping::WrappedLine {
+                    line: (&text[range.clone()]).into(),
+                    range,
+                    prefix_bytes: 0,
+                })
+                .collect();
                 crate::terminal_hyperlinks::remap_source_wrapped_line(&source, wrapped)
             })
             .collect();

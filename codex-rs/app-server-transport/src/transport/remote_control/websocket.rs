@@ -76,9 +76,9 @@ const REMOTE_CONTROL_WEBSOCKET_PONG_TIMEOUT: std::time::Duration =
 const REMOTE_CONTROL_ACCOUNT_ID_RETRY_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(1);
 const REMOTE_CONTROL_RECONNECT_BACKOFF_INITIAL: std::time::Duration =
-    std::time::Duration::from_secs(5);
+    std::time::Duration::from_secs(/*secs*/ 5);
 const REMOTE_CONTROL_RECONNECT_BACKOFF_RESET_AFTER: std::time::Duration =
-    std::time::Duration::from_secs(60);
+    std::time::Duration::from_secs(/*secs*/ 60);
 const REMOTE_CONTROL_RECONNECT_BACKOFF_CAP: std::time::Duration =
     std::time::Duration::from_secs(30);
 const REMOTE_CONTROL_WEBSOCKET_CONNECT_TIMEOUT: std::time::Duration =

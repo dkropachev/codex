@@ -1769,7 +1769,7 @@ async fn websocket_failed_event_uses_header_over_plaintext_retry_after() -> Resu
     submit_user_input(&test, "retry the rate-limited websocket stream").await?;
 
     let retry = telemetry.next_retry().await;
-    assert!(retry.delay <= Duration::from_secs(1));
+    assert!(retry.delay <= Duration::from_secs(/*secs*/ 1));
     assert_eq!(
         retry,
         RetryTelemetryEvent {
@@ -1779,7 +1779,7 @@ async fn websocket_failed_event_uses_header_over_plaintext_retry_after() -> Resu
             operation: "sampling".into(),
         }
     );
-    assert!(wait_for_retry(&mut telemetry, &retry).await >= Duration::from_secs(1));
+    assert!(wait_for_retry(&mut telemetry, &retry).await >= Duration::from_secs(/*secs*/ 1));
     wait_for_turn_completion(&test).await;
 
     let connections = server.connections();
@@ -1908,7 +1908,7 @@ async fn websocket_error_uses_nested_retry_after() -> Result<()> {
     assert_eq!(warmup.body_json()["generate"].as_bool(), Some(false));
     submit_user_input(&test, "recover from the websocket error").await?;
     let retry = telemetry.next_retry().await;
-    assert!(retry.delay <= Duration::from_secs(1));
+    assert!(retry.delay <= Duration::from_secs(/*secs*/ 1));
     assert_eq!(
         (
             retry.attempt,
@@ -1917,7 +1917,7 @@ async fn websocket_error_uses_nested_retry_after() -> Result<()> {
         ),
         (1, "stream", "sampling")
     );
-    assert!(wait_for_retry(&mut telemetry, &retry).await >= Duration::from_secs(1));
+    assert!(wait_for_retry(&mut telemetry, &retry).await >= Duration::from_secs(/*secs*/ 1));
     wait_for_turn_completion(&test).await;
     assert_eq!(
         server
@@ -2071,8 +2071,8 @@ async fn websocket_overload_retries_only_while_it_has_retry_after() -> Result<()
     for attempt in 1..=3 {
         let retry = telemetry.next_retry().await;
         assert_eq!(retry.attempt, attempt);
-        assert!(retry.delay <= Duration::from_secs(1));
-        assert!(wait_for_retry(&mut telemetry, &retry).await >= Duration::from_secs(1));
+        assert!(retry.delay <= Duration::from_secs(/*secs*/ 1));
+        assert!(wait_for_retry(&mut telemetry, &retry).await >= Duration::from_secs(/*secs*/ 1));
     }
 
     let mut error_events = 0;

@@ -248,7 +248,7 @@ async fn cancelling_a_decisions_request_releases_thread_capacity() {
     Mock::given(method("POST"))
         .respond_with(move |_: &wiremock::Request| {
             observed.notify_one();
-            ResponseTemplate::new(/*s*/ 200).set_delay(Duration::from_secs(60))
+            ResponseTemplate::new(/*s*/ 200).set_delay(Duration::from_secs(/*secs*/ 60))
         })
         .expect(/*r*/ 1)
         .mount(&server)
@@ -263,7 +263,7 @@ async fn cancelling_a_decisions_request_releases_thread_capacity() {
     );
     let request = super::super::sampler::tests::sample_request("turn");
     let task = sampler.spawn(&request, /*max_input_tokens*/ 128_000);
-    tokio::time::timeout(Duration::from_secs(5), received.notified())
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 5), received.notified())
         .await
         .unwrap();
     {
@@ -277,7 +277,7 @@ async fn cancelling_a_decisions_request_releases_thread_capacity() {
         // Dropping the caller while it awaits the join must abort the HTTP task.
     }
     let permit = tokio::time::timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(/*secs*/ 5),
         sampler.slots.acquire_many(MAX_CONCURRENT_REQUESTS as u32),
     )
     .await

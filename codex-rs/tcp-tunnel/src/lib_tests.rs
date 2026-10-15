@@ -338,7 +338,7 @@ async fn transport_reconnect_keeps_listener_and_does_not_replay_old_tcp_streams(
     updates.send_replace("Bearer rejected-test".parse()?);
     let mut rejected = TcpStream::connect(address).await?;
     assert_eq!(
-        timeout(Duration::from_secs(5), rejected.read(&mut data)).await??,
+        timeout(Duration::from_secs(/*secs*/ 5), rejected.read(&mut data)).await??,
         0
     );
     assert_eq!(

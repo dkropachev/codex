@@ -5,7 +5,7 @@ use std::time::Duration;
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 // Longer than the first keepalive interval plus its pong timeout (30s + 60s).
-const STABLE_CONNECTION_DURATION: Duration = Duration::from_secs(120);
+const STABLE_CONNECTION_DURATION: Duration = Duration::from_secs(/*secs*/ 120);
 
 pub(super) struct ReconnectBackoff {
     delay: Duration,

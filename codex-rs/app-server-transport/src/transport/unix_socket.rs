@@ -355,7 +355,7 @@ pub(super) async fn acquire_removable_app_server_startup_lock(
         match attempt {
             Ok(lock) => return Ok(lock),
             Err(err) if err.kind() == ErrorKind::WouldBlock => {
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
             }
             Err(err) => return Err(err),
         }

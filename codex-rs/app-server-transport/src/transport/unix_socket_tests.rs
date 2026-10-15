@@ -322,7 +322,7 @@ async fn removable_startup_lock_attempt_is_nonblocking() {
     let _lock = try_acquire_removable_app_server_startup_lock(lock_path.clone())
         .expect("first lock should succeed");
     let error = timeout(
-        Duration::from_secs(1),
+        Duration::from_secs(/*secs*/ 1),
         tokio::task::spawn_blocking(move || {
             try_acquire_removable_app_server_startup_lock(lock_path)
         }),

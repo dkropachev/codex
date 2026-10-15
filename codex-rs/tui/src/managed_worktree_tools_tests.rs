@@ -145,7 +145,7 @@ async fn creation_attaches_to_original_task_and_survives_service_restart() -> co
             },
         })
         .await?;
-    tokio::time::timeout(Duration::from_secs(20), async {
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 20), async {
         loop {
             if matches!(server.next_event().await, Some(codex_app_server_client::AppServerEvent::ServerNotification(notification)) if matches!(notification.as_ref(), codex_app_server_protocol::ServerNotification::TurnCompleted(_))) { break; }
         }
@@ -201,7 +201,7 @@ async fn creation_attaches_to_original_task_and_survives_service_restart() -> co
     }
     let pending = value(call("create_worktree", json!({"async":true})).await);
     let operation_id = pending["operationId"].as_str().unwrap();
-    let created = tokio::time::timeout(Duration::from_secs(20), async {
+    let created = tokio::time::timeout(Duration::from_secs(/*secs*/ 20), async {
         loop {
             let result = value(
                 call(
@@ -213,7 +213,7 @@ async fn creation_attaches_to_original_task_and_survives_service_restart() -> co
             if result["type"] != "pending" {
                 break result;
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            tokio::time::sleep(Duration::from_millis(/*millis*/ 20)).await;
         }
     })
     .await?;

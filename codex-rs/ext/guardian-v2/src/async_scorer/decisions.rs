@@ -33,7 +33,7 @@ const MODEL: &str = "gpt-6-luna";
 // Provisional local rollout budgets, not Decisions API limits or model context limits.
 // Guardian owns the text/context budget; bound HTTP lifetime, image bytes and response buffering here.
 // Oversized images skip the complete request; transport failures never affect approvals.
-const DEADLINE: Duration = Duration::from_secs(6);
+const DEADLINE: Duration = Duration::from_secs(/*secs*/ 6);
 const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024;
 

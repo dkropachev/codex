@@ -75,7 +75,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for RetryObserved {
 #[test_case::test_case(502, CONFLICT_BODY, Duration::ZERO; "gateway_error")]
 #[test_case::test_case(502, AUTH_UNAVAILABLE_BODY, Duration::ZERO; "auth_outage_backoff_is_cancellable")]
 #[test_case::test_case(502, ERROR_WITH_AUTH_DETAIL_BODY, Duration::ZERO; "canonical_error_overrides_auth_detail")]
-#[test_case::test_case(502, AUTH_UNAVAILABLE_BODY, Duration::from_secs(60); "auth_outage_code_not_received")]
+#[test_case::test_case(502, AUTH_UNAVAILABLE_BODY, Duration::from_secs(/*secs*/ 60); "auth_outage_code_not_received")]
 #[test_case::test_case(502, "not JSON", Duration::ZERO; "unconfirmed_gateway_error")]
 #[test_case::test_case(502, r#"{"detail":"Authentication service unavailable"}"#, Duration::ZERO; "legacy_auth_outage")]
 #[test_case::test_case(503, AUTH_UNAVAILABLE_BODY, Duration::ZERO; "auth_outage_wrong_status")]
