@@ -214,8 +214,9 @@ fn namespace_description_change_does_not_repeat_unchanged_tools() {
     let (snapshot, updates) = current.render_diff(PreviousSectionState::Known(&snapshot));
     assert_eq!(
         merge_world_state_updates(updates),
-        vec![ContextualUserFragment::into(DeveloperInstructions::new(
+        vec![ContextualUserFragment::into(ToolInstructions::new(
             "Updated instructions for the functions namespace:\nUpdated namespace guidance."
+                .to_string()
         ))]
     );
     assert!(

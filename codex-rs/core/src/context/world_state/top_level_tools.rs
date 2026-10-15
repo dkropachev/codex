@@ -8,8 +8,10 @@ use super::SectionTransition;
 use super::WorldStateHash;
 use super::WorldStateSection;
 use super::WorldStateUpdate;
+use super::tool_instructions::MAX_ITEM_BYTES;
+use super::tool_instructions::ToolInstructions;
 use crate::context::ContextualUserFragment;
-use crate::context::DeveloperInstructions;
+use codex_protocol::ResponseItemId;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
 use codex_protocol::models::ContentItemKind;
@@ -93,6 +95,7 @@ impl WorldStateSection for TopLevelToolsState {
         let changed =
             |name: &str| previous.and_then(|previous| previous.get(name)) != self.hashes.get(name);
         let mut namespace_updates = Vec::new();
+        let mut decorated_namespaces = Vec::new();
         let mut tools = Vec::new();
         for definition in &self.definitions {
             let name = definition_name(definition);
@@ -112,6 +115,7 @@ impl WorldStateSection for TopLevelToolsState {
                 namespace["tools"] = Value::Array(members);
                 if previous.is_some_and(|previous| previous.contains_key(name)) {
                     let description = definition["description"].as_str().unwrap_or_default();
+                    decorated_namespaces.push((tools.len(), name, description));
                     namespace["description"] = Value::String(if description.is_empty() {
                         NAMESPACE_UPDATE_HINT.to_string()
                     } else {
@@ -129,11 +133,27 @@ impl WorldStateSection for TopLevelToolsState {
                     format!("Updated instructions for the {name} namespace:\n{instructions}")
                 };
                 namespace_updates
-                    .push(WorldStateUpdate::fragment(DeveloperInstructions::new(text)));
+                    .push(WorldStateUpdate::fragment(ToolInstructions::new(text)).standalone());
             }
         }
         let mut updates = Vec::new();
         if !tools.is_empty() {
+            // AdditionalTools receives only an at_UUID ID at the history boundary, with no
+            // message metadata. Size that complete envelope, preserving the small wire path.
+            let prospective = ResponseItem::AdditionalTools {
+                id: Some(ResponseItemId::with_suffix("at", uuid::Uuid::nil())),
+                role: "developer".to_string(),
+                tools: tools.clone(),
+            };
+            let mut hints = Vec::new();
+            if serde_json::to_vec(&prospective).is_ok_and(|bytes| bytes.len() > MAX_ITEM_BYTES) {
+                for (index, name, description) in decorated_namespaces {
+                    tools[index]["description"] = Value::String(description.to_string());
+                    hints.push(WorldStateUpdate::fragment(ToolInstructions::new(format!(
+                        "For the incremental declaration of the {name} namespace:\n{NAMESPACE_UPDATE_HINT}"
+                    ))).standalone());
+                }
+            }
             updates.push(WorldStateUpdate::prefix_item(
                 ResponseItem::AdditionalTools {
                     id: None,
@@ -141,6 +161,7 @@ impl WorldStateSection for TopLevelToolsState {
                     tools,
                 },
             ));
+            updates.extend(hints);
         }
         updates.extend(namespace_updates);
         if let Some(previous) = previous {
