@@ -7,6 +7,7 @@
 use super::sampler::LunaSampler;
 use super::sampler::LunaSamplingRequest;
 use codex_context_fragments::RenderedFragment;
+use codex_core::context::guardian_model_context_item_is_bounded;
 use codex_guardian_context::TrustedTool;
 use codex_history::ResponseItemEnvelope;
 use codex_http_client::HttpClient;
@@ -129,7 +130,7 @@ impl DecisionsSampler {
         .and_then(|body| {
             // Reuse Guardian's complete budget without changing its sampling path.
             // The temporary copy is dropped before admission; Responses prepares again.
-            let (_, tokens) = LunaSampler::prepare_input(
+            let (input, tokens) = LunaSampler::prepare_input(
                 request,
                 /*history*/ None,
                 request
@@ -139,7 +140,11 @@ impl DecisionsSampler {
                     .map(ResponseItemEnvelope::new)
                     .collect(),
             );
-            if tokens > max_input_tokens.saturating_sub(/*rhs*/ 256) {
+            if tokens > max_input_tokens.saturating_sub(/*rhs*/ 256)
+                || input
+                    .iter()
+                    .any(|item| !guardian_model_context_item_is_bounded(item))
+            {
                 return Err(DecisionsError::InputTooLarge);
             }
             Ok(body)
