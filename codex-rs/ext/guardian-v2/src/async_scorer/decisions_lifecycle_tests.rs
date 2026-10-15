@@ -24,11 +24,10 @@ async fn decisions_disagreement_failures_and_disabled_flag_preserve_baseline() -
         let mut config = test.config.clone();
         config.features.enable(Feature::GuardianApproval)?;
         config.features.enable(Feature::GuardianV2)?;
-        if enabled {
-            config
-                .features
-                .enable(Feature::GuardianV2DecisionsComparison)?;
-        }
+        // Keep startup independent of ambient credentials; inject the local sampler below.
+        config
+            .features
+            .disable(Feature::GuardianV2DecisionsComparison)?;
         config.model_provider =
             ModelProviderInfo::create_openai_provider(Some(format!("{}/v1", server.uri())));
         config.model_provider.supports_websockets = false;
@@ -236,7 +235,7 @@ async fn assert_guardian_budget_rejects_both_backends(
     config.features.enable(Feature::GuardianV2)?;
     config
         .features
-        .enable(Feature::GuardianV2DecisionsComparison)?;
+        .disable(Feature::GuardianV2DecisionsComparison)?;
     let metrics = Arc::new(RecordingMetrics::default());
     fixture.registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
