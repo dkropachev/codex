@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_protocol::ThreadId;
 use codex_utils_pty::TerminalSize;
 use codex_utils_pty::combine_output_receivers;
 use codex_utils_pty::spawn_pty_process;
@@ -65,8 +66,10 @@ async fn workflow_slash_enters_mode_and_submits_mocked_ai_turn() -> Result<()> {
     let mut output_rx = combine_output_receivers(spawned.stdout_rx, spawned.stderr_rx);
     let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
 
-    wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("GPT-5.6-Terra default")
+    wait_for_screen(&mut output_rx, &mut screen, "active thread", |contents| {
+        contents
+            .split_whitespace()
+            .any(|candidate| ThreadId::from_string(candidate).is_ok())
     })
     .await?;
 
@@ -155,6 +158,9 @@ fn write_config(
 model_provider = "mock_provider"
 suppress_unstable_features_warning = true
 notice.model_migrations."gpt-5.6-terra" = "gpt-6-sol"
+
+[tui]
+status_line = ["thread-id"]
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

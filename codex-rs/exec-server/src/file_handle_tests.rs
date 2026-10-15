@@ -101,34 +101,231 @@ async fn close_releases_capacity_while_the_file_is_still_in_use() -> Result<()> 
     Ok(())
 }
 
-/// Concurrent opens of one ID must reject the loser without changing the winning file.
+/// A pending ID rejects replacement before its destructive opener is polled.
 #[tokio::test]
-async fn concurrent_opens_reject_duplicate_ids_without_replacing_the_file() -> Result<()> {
+async fn concurrent_opens_reject_duplicate_ids_without_touching_targets() -> Result<()> {
     let manager = FileHandleManager::default();
     let (send, receive) = oneshot::channel();
-    let mut late = Box::pin(manager.open("shared".to_string(), async {
+    let mut first = Box::pin(manager.open("shared".to_string(), async {
         receive.await.map_err(io::Error::other)
     }));
-    assert!(futures::poll!(late.as_mut()).is_pending());
+    assert!(futures::poll!(first.as_mut()).is_pending());
+    assert_eq!(
+        manager.get("shared").unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
+
+    let tmp = tempfile::tempdir()?;
+    let existing = tmp.path().join("existing");
+    let missing = tmp.path().join("missing");
+    std::fs::write(&existing, b"original")?;
+    for target in [&existing, &missing] {
+        let error = manager
+            .open("shared".to_string(), async {
+                tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(target)
+                    .await
+            })
+            .await
+            .expect_err("a pending ID must reject a duplicate");
+        assert_eq!(
+            (error.kind(), error.to_string()),
+            (
+                io::ErrorKind::InvalidInput,
+                "file handle `shared` already exists".to_string()
+            ),
+        );
+    }
+    assert_eq!(std::fs::read(existing)?, b"original");
+    assert!(!missing.exists());
 
     let mut file = tempfile::tempfile()?;
     file.write_all(b"first")?;
-    manager
-        .open("shared".to_string(), ready(Ok(File::from_std(file))))
-        .await?;
-    send.send(File::from_std(tempfile::tempfile()?))
+    send.send(File::from_std(file))
         .map_err(|_| anyhow::anyhow!("the pending open dropped its receiver"))?;
-
-    let error = late.await.expect_err("the duplicate open must fail");
-    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(first.await?, "shared");
     assert_eq!(
         manager
             .read_block("shared", /*offset*/ 0, /*len*/ 6)
             .await?,
         FileReadBlock {
             bytes: b"first".to_vec(),
-            eof: true,
-        }
+            eof: true
+        },
     );
     Ok(())
+}
+
+/// Closing pending entries does not return capacity until their futures stop.
+#[test_case::test_case(true; "close_all")]
+#[test_case::test_case(false; "close")]
+#[tokio::test]
+async fn closed_pending_opens_keep_capacity_until_cancelled(close_all: bool) -> Result<()> {
+    let manager = FileHandleManager::default();
+    let mut opens = Vec::new();
+    for index in 0..MAX_OPEN_FILES {
+        let mut open = Box::pin(manager.open(index.to_string(), pending()));
+        assert!(futures::poll!(open.as_mut()).is_pending());
+        opens.push(open);
+    }
+    let duplicate = manager.open("0".to_string(), pending()).await.unwrap_err();
+    assert_eq!(duplicate.to_string(), "file handle `0` already exists");
+    if close_all {
+        manager.close_all();
+    } else {
+        for index in 0..MAX_OPEN_FILES {
+            manager.close(&index.to_string());
+        }
+    }
+    let error = manager.open("0".to_string(), pending()).await.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "at most 128 file handles may be open per connection"
+    );
+    drop(opens.pop());
+    manager
+        .open(
+            "0".to_string(),
+            ready(Ok(File::from_std(tempfile::tempfile()?))),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Stale completions and cancellation cannot remove or overwrite a reused reservation.
+#[test_case::test_case(true, true; "close_all_cancel")]
+#[test_case::test_case(true, false; "close_all_complete")]
+#[test_case::test_case(false, true; "close_cancel")]
+#[test_case::test_case(false, false; "close_complete")]
+#[tokio::test]
+async fn closed_pending_open_does_not_disturb_reused_id(
+    close_all: bool,
+    cancel: bool,
+) -> Result<()> {
+    let manager = FileHandleManager::default();
+    let (old_send, old_receive) = oneshot::channel();
+    let mut old = Box::pin(manager.open("shared".to_string(), async {
+        old_receive.await.map_err(io::Error::other)
+    }));
+    assert!(futures::poll!(old.as_mut()).is_pending());
+    if close_all {
+        manager.close_all();
+    } else {
+        manager.close("shared");
+    }
+    let (new_send, new_receive) = oneshot::channel();
+    let mut new = Box::pin(manager.open("shared".to_string(), async {
+        new_receive.await.map_err(io::Error::other)
+    }));
+    assert!(futures::poll!(new.as_mut()).is_pending());
+    if cancel {
+        drop(old);
+    } else {
+        old_send
+            .send(File::from_std(tempfile::tempfile()?))
+            .map_err(|_| anyhow::anyhow!("old opener dropped its receiver"))?;
+        assert_eq!(old.await.unwrap_err().kind(), io::ErrorKind::NotFound);
+    }
+    let duplicate = manager
+        .open("shared".to_string(), pending())
+        .await
+        .unwrap_err();
+    assert_eq!(duplicate.to_string(), "file handle `shared` already exists");
+    let mut file = tempfile::tempfile()?;
+    file.write_all(b"new")?;
+    new_send
+        .send(File::from_std(file))
+        .map_err(|_| anyhow::anyhow!("new opener dropped its receiver"))?;
+    assert_eq!(new.await?, "shared");
+    assert_eq!(
+        manager
+            .read_block("shared", /*offset*/ 0, /*len*/ 4)
+            .await?,
+        FileReadBlock {
+            bytes: b"new".to_vec(),
+            eof: true
+        },
+    );
+    Ok(())
+}
+
+/// An old read failure must not close a pending or completed replacement of its ID.
+#[test_case::test_case(true; "pending_replacement")]
+#[test_case::test_case(false; "open_replacement")]
+fn stale_read_error_preserves_replacement(replacement_pending: bool) -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(/*val*/ 1)
+        .build()?;
+    runtime.block_on(async {
+        let manager = FileHandleManager::default();
+        let tmp = tempfile::tempdir()?;
+        let old_path = tmp.path().join("old");
+        let replacement_path = tmp.path().join("replacement");
+        std::fs::write(&old_path, b"old")?;
+        std::fs::write(&replacement_path, b"original")?;
+        let write_only = std::fs::OpenOptions::new().write(true).open(old_path)?;
+        manager
+            .open("shared".to_string(), ready(Ok(File::from_std(write_only))))
+            .await?;
+
+        // Occupy the only blocking worker so the old read cannot finish before reuse.
+        // Dropping release on any early return also unblocks the worker.
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let (started, running) = oneshot::channel();
+        let blocker = tokio::task::spawn_blocking(move || {
+            let _ = started.send(());
+            let _ = wait.recv();
+        });
+        running.await?;
+        let mut old_read = Box::pin(manager.read_block("shared", /*offset*/ 0, /*len*/ 1));
+        assert!(futures::poll!(old_read.as_mut()).is_pending());
+        manager.close("shared");
+
+        let (open, resume) = oneshot::channel();
+        let mut replacement = Box::pin(manager.open("shared".to_string(), async {
+            resume.await.map_err(io::Error::other)?;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&replacement_path)
+                .map(File::from_std)
+        }));
+        assert!(futures::poll!(replacement.as_mut()).is_pending());
+        if replacement_pending {
+            drop(release);
+            blocker.await?;
+            assert!(old_read.as_mut().await.is_err());
+            assert_eq!(std::fs::read(&replacement_path)?, b"original");
+            open.send(())
+                .map_err(|_| anyhow::anyhow!("replacement opener was dropped"))?;
+            assert_eq!(replacement.await?, "shared");
+        } else {
+            open.send(())
+                .map_err(|_| anyhow::anyhow!("replacement opener was dropped"))?;
+            assert_eq!(replacement.await?, "shared");
+            drop(release);
+            blocker.await?;
+            assert!(old_read.await.is_err());
+        }
+        manager
+            .write_block("shared", /*offset*/ 0, b"new".to_vec())
+            .await?;
+        assert_eq!(
+            manager
+                .read_block("shared", /*offset*/ 0, /*len*/ 4)
+                .await?,
+            FileReadBlock {
+                bytes: b"new".to_vec(),
+                eof: true
+            },
+        );
+        assert_eq!(std::fs::read(replacement_path)?, b"new");
+        Ok(())
+    })
 }
