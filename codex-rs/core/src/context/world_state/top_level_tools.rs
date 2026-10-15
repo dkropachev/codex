@@ -14,6 +14,7 @@ use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ResponseItem;
+use codex_utils_string::take_bytes_at_char_boundary;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -21,6 +22,8 @@ use std::collections::BTreeSet;
 const NAMESPACE_UPDATE_HINT: &str = "This is an incremental namespace update. Previously declared tools remain available for direct calls unless explicitly marked unavailable. If a tool is redefined here, its latest definition replaces the earlier one.";
 const REMOVED_TOOLS_HEADER: &str = "The following tools are no longer available. Do not call them:";
 const REMOVED_NAMESPACES_HEADER: &str = "The following namespaces are no longer available. Do not call tools in them unless those tools are declared in a later update:";
+const REMOVAL_NOTICE_BYTES: usize = 768;
+const REMOVED_NAME_PART_BYTES: usize = 512;
 
 /// The exact serialized Responses Lite declarations visible in one captured step.
 pub(crate) struct TopLevelToolsState {
@@ -162,12 +165,12 @@ impl WorldStateSection for TopLevelToolsState {
                 .cloned()
                 .collect::<Vec<_>>();
             if !namespaces.is_empty() || !tools.is_empty() {
-                updates.push(
-                    WorldStateUpdate::fragment(RemovedTools {
+                updates.extend(
+                    RemovedTools {
                         namespaces: namespaces.into_iter().map(str::to_string).collect(),
                         tools,
-                    })
-                    .standalone(),
+                    }
+                    .into_updates(),
                 );
             }
         }
@@ -180,6 +183,135 @@ impl WorldStateSection for TopLevelToolsState {
 struct RemovedTools {
     namespaces: Vec<String>,
     tools: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+enum RemovedIdentityKind {
+    Namespace,
+    Tool,
+}
+
+impl RemovedTools {
+    fn into_updates(self) -> Vec<WorldStateUpdate> {
+        let mut updates = Vec::new();
+        let mut notice = Self::default();
+        let mut notice_bytes = 0;
+        for (header, names, kind) in [
+            (
+                REMOVED_NAMESPACES_HEADER,
+                self.namespaces,
+                RemovedIdentityKind::Namespace,
+            ),
+            (REMOVED_TOOLS_HEADER, self.tools, RemovedIdentityKind::Tool),
+        ] {
+            for name in names {
+                if name.len() > REMOVAL_NOTICE_BYTES - header.len() - 3 {
+                    if notice_bytes != 0 {
+                        updates.push(
+                            WorldStateUpdate::fragment(std::mem::take(&mut notice)).standalone(),
+                        );
+                        notice_bytes = 0;
+                    }
+                    let mut remaining = name.as_str();
+                    let mut payloads = Vec::new();
+                    while !remaining.is_empty() {
+                        let payload =
+                            take_bytes_at_char_boundary(remaining, REMOVED_NAME_PART_BYTES);
+                        payloads.push(payload);
+                        remaining = &remaining[payload.len()..];
+                    }
+                    for (index, payload) in payloads.iter().enumerate() {
+                        updates.push(
+                            WorldStateUpdate::fragment(RemovedIdentityPart {
+                                kind,
+                                part: index + 1,
+                                parts: payloads.len(),
+                                payload: (*payload).to_string(),
+                            })
+                            .standalone(),
+                        );
+                    }
+                    continue;
+                }
+                let section_is_empty = match kind {
+                    RemovedIdentityKind::Namespace => notice.namespaces.is_empty(),
+                    RemovedIdentityKind::Tool => notice.tools.is_empty(),
+                };
+                let header_bytes = if section_is_empty {
+                    header.len() + usize::from(notice_bytes != 0) * 2
+                } else {
+                    0
+                };
+                let entry_bytes = 3 + name.len();
+                if notice_bytes != 0
+                    && notice_bytes + header_bytes + entry_bytes > REMOVAL_NOTICE_BYTES
+                {
+                    updates
+                        .push(WorldStateUpdate::fragment(std::mem::take(&mut notice)).standalone());
+                    notice_bytes = 0;
+                }
+                let section = match kind {
+                    RemovedIdentityKind::Namespace => &mut notice.namespaces,
+                    RemovedIdentityKind::Tool => &mut notice.tools,
+                };
+                if section.is_empty() {
+                    notice_bytes += header.len() + usize::from(notice_bytes != 0) * 2;
+                }
+                notice_bytes += entry_bytes;
+                section.push(name);
+            }
+        }
+        if notice_bytes != 0 {
+            updates.push(WorldStateUpdate::fragment(notice).standalone());
+        }
+        updates
+    }
+}
+
+/// One consecutive, lossless part of an identity that cannot fit a normal notice.
+struct RemovedIdentityPart {
+    kind: RemovedIdentityKind,
+    part: usize,
+    parts: usize,
+    payload: String,
+}
+
+impl ContextualUserFragment for RemovedIdentityPart {
+    fn role(&self) -> &'static str {
+        "developer"
+    }
+
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("tools.removed_definition".to_string())
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("", "")
+    }
+
+    fn body(&self) -> String {
+        let (kind, instruction) = match self.kind {
+            RemovedIdentityKind::Namespace => (
+                "namespace",
+                "Do not call tools in it unless later redeclared.",
+            ),
+            RemovedIdentityKind::Tool => ("tool", "Do not call it unless later redeclared."),
+        };
+        let Self {
+            part,
+            parts,
+            payload,
+            ..
+        } = self;
+        let bytes = payload.len();
+        format!(
+            "Removed {kind} name, part {part}/{parts}. Join these {parts} consecutive payloads without separators to obtain its exact name. {instruction}\nPayload ({bytes} UTF-8 bytes):\n{payload}"
+        )
+    }
 }
 
 impl ContextualUserFragment for RemovedTools {

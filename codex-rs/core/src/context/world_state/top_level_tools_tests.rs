@@ -314,3 +314,149 @@ fn namespace_replaced_by_builtin_keeps_the_replacement_available() {
         ],
     );
 }
+
+#[test]
+fn large_member_removal_preserves_each_name_in_separate_notices() {
+    let removed_names = (0..300)
+        .map(|index| format!("removed_{index:03}_é"))
+        .collect::<Vec<_>>();
+    let original = TopLevelToolsState::new(vec![namespace(
+        "functions",
+        std::iter::once(declaration("retained"))
+            .chain(removed_names.iter().map(|name| declaration(name)))
+            .collect(),
+    )])
+    .unwrap();
+    let snapshot = original
+        .render_diff(PreviousSectionState::Absent)
+        .0
+        .unwrap();
+    let current =
+        TopLevelToolsState::new(vec![namespace("functions", vec![declaration("retained")])])
+            .unwrap();
+    let (_, updates) = current.render_diff(PreviousSectionState::Known(&snapshot));
+    let messages = merge_world_state_updates(updates);
+    assert!(messages.len() > 1);
+    let mut actual_names = Vec::new();
+    for message in messages {
+        let ResponseItem::Message { role, content, .. } = message else {
+            panic!("removal notice must be a message");
+        };
+        assert_eq!(role, "developer");
+        let [codex_protocol::models::ContentItem::InputText { text }] = content.as_slice() else {
+            panic!("removal notices must remain standalone text fragments");
+        };
+        assert!(text.len() <= REMOVAL_NOTICE_BYTES);
+        assert!(text.starts_with(REMOVED_TOOLS_HEADER));
+        actual_names.extend(
+            text.lines()
+                .filter_map(|line| line.strip_prefix("- "))
+                .map(str::to_string),
+        );
+    }
+    assert_eq!(
+        actual_names,
+        removed_names
+            .into_iter()
+            .map(|name| format!("functions.{name}"))
+            .collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn oversized_removal_names_preserve_exact_payloads() {
+    let name = format!(" \nPayload (0 UTF-8 bytes):\n{}\n ", "🦀é".repeat(200));
+    for kind in [RemovedIdentityKind::Namespace, RemovedIdentityKind::Tool] {
+        let removals = match kind {
+            RemovedIdentityKind::Namespace => RemovedTools {
+                namespaces: vec!["before".to_string(), name.clone(), "after".to_string()],
+                ..Default::default()
+            },
+            RemovedIdentityKind::Tool => RemovedTools {
+                tools: vec!["before".to_string(), name.clone(), "after".to_string()],
+                ..Default::default()
+            },
+        };
+        let messages = merge_world_state_updates(removals.into_updates());
+        let mut reconstructed = String::new();
+        let mut next_part = 1;
+        let mut total_parts = None;
+        for (index, message) in messages.iter().enumerate() {
+            let ResponseItem::Message { role, content, .. } = message else {
+                panic!("removal must be a standalone message");
+            };
+            assert_eq!(role, "developer");
+            let [codex_protocol::models::ContentItem::InputText { text }] = content.as_slice()
+            else {
+                panic!("removal must be one text fragment");
+            };
+            assert!(text.len() <= REMOVAL_NOTICE_BYTES);
+            if index == 0 || index == messages.len() - 1 {
+                assert!(text.ends_with(if index == 0 { "- before" } else { "- after" }));
+                continue;
+            }
+            let (header, rest) = text.split_once("\nPayload (").unwrap();
+            let (bytes, payload) = rest.split_once(" UTF-8 bytes):\n").unwrap();
+            assert_eq!(bytes.parse::<usize>().unwrap(), payload.len());
+            let (part, parts) = header
+                .split_once("name, part ")
+                .unwrap()
+                .1
+                .split_once(". Join these ")
+                .unwrap()
+                .0
+                .split_once('/')
+                .unwrap();
+            assert_eq!(part.parse::<usize>().unwrap(), next_part);
+            let parts = parts.parse::<usize>().unwrap();
+            assert_eq!(*total_parts.get_or_insert(parts), parts);
+            assert!(header.starts_with(match kind {
+                RemovedIdentityKind::Namespace => "Removed namespace name,",
+                RemovedIdentityKind::Tool => "Removed tool name,",
+            }));
+            reconstructed.push_str(payload);
+            next_part += 1;
+        }
+        assert_eq!(reconstructed, name);
+        assert_eq!(Some(next_part - 1), total_parts);
+    }
+}
+
+#[test]
+fn continuation_headers_fit_with_maximum_indices() {
+    for kind in [RemovedIdentityKind::Namespace, RemovedIdentityKind::Tool] {
+        let text = RemovedIdentityPart {
+            kind,
+            part: usize::MAX,
+            parts: usize::MAX,
+            payload: "x".repeat(REMOVED_NAME_PART_BYTES),
+        }
+        .body();
+        assert!(text.len() <= REMOVAL_NOTICE_BYTES);
+    }
+}
+
+#[test]
+fn snapshots_oversized_removal_notice() {
+    let messages = merge_world_state_updates(
+        RemovedTools {
+            namespaces: vec!["é".repeat(350)],
+            tools: vec!["functions.short".to_string()],
+        }
+        .into_updates(),
+    );
+    let texts = messages
+        .into_iter()
+        .map(|message| {
+            let ResponseItem::Message { content, .. } = message else {
+                panic!("expected removal message");
+            };
+            let [codex_protocol::models::ContentItem::InputText { text }] = content.as_slice()
+            else {
+                panic!("expected standalone text");
+            };
+            text.clone()
+        })
+        .collect::<Vec<_>>();
+    insta::assert_snapshot!(texts.join("\n\n---\n\n"));
+}

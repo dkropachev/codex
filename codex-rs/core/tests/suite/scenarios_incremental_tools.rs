@@ -2,12 +2,20 @@
 
 use anyhow::Result;
 use codex_core::ConfigRefreshOutcome;
+use codex_core::StartThreadOptions;
 use codex_features::Feature;
+use codex_history::InitialHistory;
+use codex_history::ResumedHistory;
 use codex_history::RolloutItem;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
+use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::CodeModeToolMessages;
 use codex_protocol::openai_models::ToolMessage;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_thread_store::LoadThreadHistoryParams;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses;
@@ -17,10 +25,135 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::sync::Arc;
 use test_case::test_case;
 
 use super::super::rmcp_client::remote_aware_environment_id;
 use super::super::rmcp_client::remote_aware_stdio_server_bin;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resumed_large_catalog_removal_keeps_notices_separate() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let mut test = test_codex()
+        .with_model_info_override("gpt-5.4", |model| {
+            model.use_responses_lite = true;
+            model.tool_mode = Some(ToolMode::Direct);
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::IncrementalTools)
+                .expect("enable incremental tools");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.codex.shutdown_and_wait().await?;
+    let namespace = |names: Vec<String>| {
+        DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+            name: "service".to_string(),
+            description: "Service tools.".to_string(),
+            tools: names
+                .into_iter()
+                .map(|name| {
+                    DynamicToolNamespaceTool::Function(DynamicToolFunctionSpec {
+                        name,
+                        description: "Look up a value.".to_string(),
+                        input_schema: json!({"type": "object", "properties": {}}),
+                        defer_loading: false,
+                    })
+                })
+                .collect(),
+        })
+    };
+    let removed = (0..100)
+        .map(|index| format!("lookup_{index:03}"))
+        .collect::<Vec<_>>();
+    let initial = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![namespace(
+                std::iter::once("retained".to_string())
+                    .chain(removed.iter().cloned())
+                    .collect(),
+            )],
+            environments: Some(vec![test.executor_environment().request()]),
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?;
+    test.codex = initial.thread;
+    test.session_configured = initial.session_configured;
+    let first_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("initial")]),
+    )
+    .await;
+    test.submit_turn("Start with the full service catalog.")
+        .await?;
+    let original = first_mock.single_request().input();
+    test.codex.shutdown_and_wait().await?;
+    let history = test
+        .thread_store
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id: test.session_configured.thread_id,
+            include_archived: true,
+        })
+        .await?;
+    let resumed = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![namespace(vec!["retained".to_string()])],
+            initial_history: InitialHistory::Resumed(ResumedHistory {
+                history_revision: None,
+                conversation_id: history.thread_id,
+                history: Arc::new(history.items),
+                rollout_path: test.session_configured.rollout_path.clone(),
+            }),
+            environments: Some(vec![test.executor_environment().request()]),
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?;
+    test.codex = resumed.thread;
+    test.session_configured = resumed.session_configured;
+    let second_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("resumed")]),
+    )
+    .await;
+    test.submit_turn("Continue after the service catalog shrinks.")
+        .await?;
+    let input = second_mock.single_request().input();
+    assert_eq!(&input[..original.len()], original.as_slice());
+    let notices = input[original.len()..]
+        .iter()
+        .filter(|item| {
+            item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                == json!(["tools.removed_definition"])
+        })
+        .collect::<Vec<_>>();
+    assert!(notices.len() > 1);
+    let mut actual = Vec::new();
+    for notice in notices {
+        assert_eq!(notice["role"], "developer");
+        let content = notice["content"].as_array().expect("message content");
+        assert_eq!(content.len(), 1);
+        let text = content[0]["text"].as_str().expect("removal text");
+        assert!(text.len() <= 768);
+        actual.extend(
+            text.lines()
+                .filter_map(|line| line.strip_prefix("- "))
+                .map(str::to_string),
+        );
+    }
+    assert_eq!(
+        actual,
+        removed
+            .into_iter()
+            .map(|name| format!("service.{name}"))
+            .collect::<Vec<_>>()
+    );
+    Ok(())
+}
 
 #[test_case(true; "responses_lite")]
 #[test_case(false; "responses_api")]
