@@ -1,9 +1,12 @@
 # BuildBuddy resource profile pilot
 
-Status: opt-in support only. `auto` remains the default; no repository variable
-has been changed. Included account capacity and current per-action allocations
-must be verified before running the pilot. GitHub Actions holds the API key as a
-secret; the implementation environment cannot read it or account limits.
+Status: the repository variable `CODEX_BUILDBUDDY_RESOURCE_PROFILE` is set to
+`large` for the x86_64 pilot at the user's explicit request. ARM64 stays on `auto`.
+The helper still defaults to `auto` when no profile is specified. Included
+account capacity and current per-action allocations remain unverified; GitHub
+Actions holds the API key as a secret unavailable to the implementation
+environment. The pilot starts before the capacity check and paired benchmarks
+are complete; enabling it is not a measured acceptance result.
 
 ## Configuration
 
@@ -49,9 +52,9 @@ that increased CPU or memory will improve the job.
 
 ## Acceptance and observation
 
-Before enabling the pilot, confirm that 8 CPUs and 32 GB fit the current account's
-included capacity and do not reduce the current allocations. Stop if either
-condition fails. Do not change subscription tiers or provision executor pools.
+Confirm that 8 CPUs and 32 GB fit the current account's included capacity and do
+not reduce the current allocations. Roll back if either condition fails. Do not
+change subscription tiers or provision executor pools.
 
 Warm each profile separately, then collect at least three paired builds of the
 same revision and target set with comparable cache states. Exclude fully cached
@@ -60,7 +63,7 @@ critical path, queue times, allocated CPU/RAM, cache hits, full job duration, an
 account usage for every eligible run. No eligible pairs have been collected yet;
 there is no measured improvement or acceptance decision.
 
-Enable `large` only when median compilation critical-path time improves by at
+Keep `large` enabled only when median compilation critical-path time improves by at
 least 20%, total job duration regresses by no more than 5%, all existing tests
 pass, and included capacity is sufficient. Observe the first five successful
 x86_64 jobs for queueing, resource failures, duration, and usage. Validate ARM64
