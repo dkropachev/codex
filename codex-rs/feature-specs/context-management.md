@@ -6,6 +6,14 @@ Context management keeps long-running threads usable without allowing one client
 
 ## Behavior
 
+### Preparatory Compaction Infrastructure
+
+This stage only extracts replacement-history assembly and persistence metadata into the private Core `compaction_checkpoint` module. Existing local and remote-v2 compaction use the same builders, context placement, and session persistence as before; no model-visible context, wire format, lifecycle, or runtime behavior changes.
+
+No in-place checkpoint tool or feature flag is exposed. Checkpoint activation, live-handle inventory, sibling-result retention, and their end-to-end safety coverage are deferred to a follow-up stage.
+
+Existing assembly tests move with the implementation to `core/src/compaction_checkpoint_tests.rs`, preserving prefix-first, context-boundary, summary-last, and compaction-last coverage.
+
 `thread/compact/start` starts only after Core atomically reserves an idle thread. It returns Core's exact `turnId`; a busy thread returns an invalid-request error without interruption. Its optional `source` defaults to `manual`; `automaticContextManagement` selects the automatic trigger for hooks and metrics, while model-backed strategies also carry it in request metadata and compaction analytics.
 
 `turn/start` retains start-or-steer by default. With `startIfIdle: true`, it starts only on an idle thread and otherwise rejects without recording, queueing, or steering the input. Neither RPC retries a rejected or transport-uncertain submission.

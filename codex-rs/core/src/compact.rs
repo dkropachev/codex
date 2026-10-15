@@ -1,18 +1,16 @@
 use crate::context::UserGoalUpdate;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
 use crate::Prompt;
 use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
+use crate::compaction_checkpoint::CompactedHistoryMetadata;
+use crate::compaction_checkpoint::build_compaction_replacement_history;
 use crate::context::BaseInstructionsFragment;
 use crate::context::CompactionSummary;
 use crate::context::ContextualUserFragment;
 use crate::context::world_state::WorldState;
-use crate::context::world_state::WorldStateSnapshot;
-use crate::context::world_state::split_prefix_updates;
-use crate::context_manager::updates::merge_world_state_updates;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
@@ -24,7 +22,6 @@ use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
-use crate::state::AutoCompactWindowIds;
 use crate::util::backoff;
 use codex_analytics::CodexCompactionEvent;
 use codex_analytics::CompactionImplementation;
@@ -36,7 +33,6 @@ use codex_analytics::CompactionTrigger;
 use codex_analytics::now_unix_seconds;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
-use codex_protocol::ResponseItemId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
@@ -61,54 +57,6 @@ use tracing::error;
 pub use codex_prompts::SUMMARIZATION_PROMPT;
 pub use codex_prompts::SUMMARY_PREFIX;
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
-
-/// Metadata for a new compaction checkpoint, kept separate from its replacement history.
-///
-/// `Session::replace_compacted_history` assigns missing item IDs before constructing the persisted
-/// `CompactedItem`, ensuring the live and persisted histories remain identical.
-pub(crate) struct CompactedHistoryMetadata {
-    pub(crate) input_goal_ids: HashSet<ResponseItemId>,
-    pub(crate) message: String,
-    pub(crate) window_number: u64,
-    pub(crate) window_ids: AutoCompactWindowIds,
-    pub(crate) compaction_response_id: Option<String>,
-    pub(crate) compaction_model_hash: Option<String>,
-    pub(crate) reviewer_compaction_hash: Option<String>,
-}
-
-/// Renders the window prefix and ordinary context with their comparison baseline.
-pub(crate) async fn build_compaction_replacement_history(
-    sess: &Session,
-    step_context: &StepContext,
-    world_state: &WorldState,
-    compacted_history: Vec<ResponseItemEnvelope>,
-) -> (Vec<ResponseItemEnvelope>, WorldStateSnapshot) {
-    let (updates, snapshot) = sess
-        .build_initial_context_with_world_state(step_context, world_state)
-        .await;
-    let (prefix, context) = split_prefix_updates(updates);
-    let context = merge_world_state_updates(context);
-    (
-        assemble_compaction_history(compacted_history, prefix, context),
-        snapshot,
-    )
-}
-
-fn assemble_compaction_history(
-    compacted_history: Vec<ResponseItemEnvelope>,
-    prefix: Vec<ResponseItem>,
-    context: Vec<ResponseItem>,
-) -> Vec<ResponseItemEnvelope> {
-    let history = insert_initial_context_before_last_real_user_or_summary(
-        compacted_history,
-        context.into_iter().map(ResponseItemEnvelope::new).collect(),
-    );
-    prefix
-        .into_iter()
-        .map(ResponseItemEnvelope::new)
-        .chain(history)
-        .collect()
-}
 
 pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,

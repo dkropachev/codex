@@ -20,7 +20,7 @@ use crate::agent::status::is_final;
 use crate::agents_md_manager::SessionInstructions;
 use crate::attestation::AttestationProvider;
 use crate::compact;
-use crate::compact::CompactedHistoryMetadata;
+use crate::compaction_checkpoint::CompactedHistoryMetadata;
 use crate::config::ManagedFeatures;
 use crate::context::ContextualUserFragment;
 use crate::context::DeveloperInstructions;
