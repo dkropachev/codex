@@ -255,6 +255,7 @@ relay, or WebSocket service-boundary behavior.
 
 - [account-pool](account-pool.md)
 - [context-management](context-management.md)
+- [handoff](handoff.md)
 - [mcp](mcp.md)
 - [plugins](plugins.md)
 - [skills](skills.md)

@@ -4,6 +4,9 @@
 
 Context management keeps long-running threads usable without allowing one client to replace another client's active work. It defines atomic app-server contracts for standalone compaction and idle-only turn starts, plus a manual TUI handoff to a fresh thread and a passive context-pressure hint.
 
+Detailed handoff behavior and additional coverage are defined in [Handoff](handoff.md). Existing
+context-management-prefixed terminal tests retain their coverage declarations here.
+
 ## Behavior
 
 ### Preparatory Compaction Infrastructure
