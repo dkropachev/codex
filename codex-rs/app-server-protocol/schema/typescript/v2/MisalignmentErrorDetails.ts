@@ -19,4 +19,4 @@ steer: MisalignmentSteer | null,
 /**
  * Opaque server-issued block target. Presence alone does not enable target-based continuation.
  */
-reviewTarget?: string | null, };
+reviewTarget: string | null, };

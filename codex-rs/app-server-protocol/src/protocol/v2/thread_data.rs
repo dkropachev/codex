@@ -447,7 +447,6 @@ pub struct MisalignmentErrorDetails {
     /// Instruction to submit as the next turn's user input if continuation is confirmed.
     pub steer: Option<MisalignmentSteer>,
     /// Opaque server-issued block target. Presence alone does not enable target-based continuation.
-    #[ts(optional = nullable)]
     pub review_target: Option<String>,
 }
 
