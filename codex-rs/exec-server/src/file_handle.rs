@@ -95,15 +95,22 @@ impl FileHandleManager {
     ) -> io::Result<FileReadBlock> {
         validate_read_block_len(len)?;
         let file = self.get(handle_id)?;
+        let read_file = Arc::clone(&file);
         let result =
-            match tokio::task::spawn_blocking(move || read_block_at(&file, offset, len)).await {
+            match tokio::task::spawn_blocking(move || read_block_at(&read_file, offset, len)).await
+            {
                 Ok(result) => result,
                 Err(error) => Err(io::Error::other(format!(
                     "file read task stopped unexpectedly: {error}"
                 ))),
             };
         if result.is_err() {
-            self.close(handle_id);
+            let mut handles = self.lock_handles();
+            if matches!(handles.get(handle_id), Some(FileHandleEntry::Open { file: current, .. })
+                if Arc::ptr_eq(current, &file))
+            {
+                handles.remove(handle_id);
+            }
         }
         result
     }
