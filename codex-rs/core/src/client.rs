@@ -995,6 +995,12 @@ impl ModelClient {
         include_internal: bool,
     ) -> Result<ResponsesApiRequest> {
         let mut input = prompt.get_formatted_input_for_request(model_info);
+        if !model_info.use_responses_lite {
+            // Incremental Lite declarations may survive a model or provider switch.
+            // Standard Responses uses the current top-level catalog instead; retain
+            // the declarations in saved history for a later return to Lite.
+            input.retain(|item| !matches!(item, ResponseItem::AdditionalTools { .. }));
+        }
         if !self.reasoning_effort_override_enabled(model_info) {
             // Unsupported models and disabled overrides must also accept saved history.
             // Filter only the request copy; persisted history remains unchanged.
