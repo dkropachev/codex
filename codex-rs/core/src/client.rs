@@ -134,7 +134,6 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::context::BaseInstructionsFragment;
-use crate::context::ContextualUserFragment;
 use crate::cyber_access_program;
 use crate::feedback_tags;
 use crate::responses_metadata::CodexResponsesMetadata;
@@ -1031,14 +1030,10 @@ impl ModelClient {
             Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into())
         };
         if !prompt.base_instructions.text.is_empty() {
-            let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
-                prompt.base_instructions.text.clone(),
-            ));
-            instructions.set_id(Some(ResponseItemId::with_suffix(
-                "msg",
-                Uuid::new_v5(&prefix_namespace, prompt.base_instructions.text.as_bytes()),
-            )));
-            prefix.push(instructions);
+            prefix.extend(
+                BaseInstructionsFragment(prompt.base_instructions.text.clone())
+                    .into_bounded_items(prefix_namespace)?,
+            );
         }
         input.splice(0..0, prefix);
         if !is_openai {
