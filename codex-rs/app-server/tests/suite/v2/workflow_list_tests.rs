@@ -134,8 +134,7 @@ async fn workflow_list_paginates_and_respects_project_override() -> Result<()> {
                 id: "team/build".into(),
                 command: "team-build".into(),
                 description: "Build workflow".into(),
-                path: home
-                    .path()
+                path: AbsolutePathBuf::from_absolute_path(home.path().canonicalize()?)?
                     .join("workflows/team/build")
                     .display()
                     .to_string(),
