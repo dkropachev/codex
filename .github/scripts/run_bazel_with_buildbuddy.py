@@ -25,6 +25,13 @@ REMOTE_REPO_CONTENTS_CACHE_STARTUP_OPTIONS = {
 }
 
 
+def resource_profile(env: Mapping[str, str]) -> str:
+    profile = env.get("CODEX_BUILDBUDDY_RESOURCE_PROFILE", "auto")
+    if profile not in {"auto", "large"}:
+        raise ValueError("CODEX_BUILDBUDDY_RESOURCE_PROFILE must be auto or large")
+    return profile
+
+
 def startup_args(args: Sequence[str], env: Mapping[str, str]) -> list[str]:
     """Return shared startup options that are missing from a Bazel invocation.
 
@@ -99,6 +106,7 @@ def bazel_args_with_remote_config(
     if command_idx is None:
         raise ValueError("expected a Bazel command")
 
+    profile = resource_profile(env)
     config = remote_config(args, env)
     if config is None:
         configured_args = bazel_args_without_remote_execution(args)
@@ -109,6 +117,9 @@ def bazel_args_with_remote_config(
             f"--config={config}",
             f"--remote_header=x-buildbuddy-api-key={api_key}",
         ]
+
+        if uses_remote_execution(args):
+            remote_args.append(f"--repo_env=CODEX_RBE_RESOURCE_PROFILE={profile}")
 
         # Insert immediately after the Bazel command. This keeps wrapper-added
         # options out of positional payloads and lets later CI configs override
@@ -149,6 +160,12 @@ def bazel_command(*args: str, env: Mapping[str, str] | None = None) -> list[str]
 
 
 def main() -> None:
+    try:
+        command = bazel_command(*sys.argv[1:])
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        raise SystemExit(2) from error
+
     config = remote_config(sys.argv[1:], os.environ)
     if config is None:
         print(
@@ -161,7 +178,12 @@ def main() -> None:
             file=sys.stderr,
         )
 
-    command = bazel_command(*sys.argv[1:])
+    if config is not None and uses_remote_execution(sys.argv[1:]):
+        print(
+            f"BuildBuddy resource profile: {resource_profile(os.environ)}.",
+            file=sys.stderr,
+        )
+
     if os.name == "nt":
         # Windows CRT exec can split arguments containing spaces and lose the
         # eventual child exit status. Wait for Bazel and propagate its status.

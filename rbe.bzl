@@ -1,4 +1,11 @@
 def _rbe_platform_repo_impl(rctx):
+    profile = rctx.getenv("CODEX_RBE_RESOURCE_PROFILE", "auto")
+    if profile not in ["auto", "large"]:
+        fail("Unknown BuildBuddy resource profile: {} (expected auto or large)".format(profile))
+    resource_properties = ""
+    if profile == "large":
+        resource_properties = '\n        "EstimatedCPU": "8",\n        "EstimatedMemory": "32GB",'
+
     arch = rctx.os.arch
     if arch in ["x86_64", "amd64"]:
         cpu = "x86_64"
@@ -26,7 +33,7 @@ platform(
         # Verify at https://hub.docker.com/layers/mbolin491/codex-bazel/latest/images/sha256:{image_sha}
         "container-image": "docker://docker.io/mbolin491/codex-bazel@sha256:{image_sha}",
         "Arch": "{arch}",
-        "OSFamily": "Linux",
+        "OSFamily": "Linux",{resource_properties}
     }},
     visibility = ["//visibility:public"],
 )
@@ -34,6 +41,7 @@ platform(
         cpu = cpu,
         arch = exec_arch,
         image_sha = image_sha,
+        resource_properties = resource_properties,
     ))
 
 rbe_platform_repository = repository_rule(

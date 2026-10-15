@@ -10,6 +10,92 @@ import run_bazel_with_buildbuddy
 
 
 class RunBazelWithBuildBuddyTest(unittest.TestCase):
+    def test_resource_profiles_are_forwarded_only_for_authenticated_rbe(self) -> None:
+        for profile in (None, "auto", "large"):
+            for keyed in (False, True):
+                for remote_execution in (False, True):
+                    with self.subTest(
+                        profile=profile, keyed=keyed, remote_execution=remote_execution
+                    ):
+                        env = {}
+                        if profile is not None:
+                            env["CODEX_BUILDBUDDY_RESOURCE_PROFILE"] = profile
+                        if keyed:
+                            env["BUILDBUDDY_API_KEY"] = "test-key"
+                        args = ["--batch", "run"]
+                        if remote_execution:
+                            args.append("--config=ci-linux")
+                        args.extend(["//:binary", "--", "--config=ci-linux"])
+                        expected = ["--batch", "run"]
+                        if keyed:
+                            config = "buildbuddy-generic"
+                            if remote_execution:
+                                config += "-rbe"
+                            expected.extend(
+                                [
+                                    f"--config={config}",
+                                    "--remote_header=x-buildbuddy-api-key=test-key",
+                                ]
+                            )
+                            if remote_execution:
+                                expected.append(
+                                    f"--repo_env=CODEX_RBE_RESOURCE_PROFILE={profile or 'auto'}"
+                                )
+                                expected.append("--config=ci-linux")
+                        expected.extend(["//:binary", "--", "--config=ci-linux"])
+                        self.assertEqual(
+                            run_bazel_with_buildbuddy.bazel_args_with_remote_config(
+                                args, env
+                            ),
+                            expected,
+                        )
+
+    def test_invalid_profile_is_rejected_even_without_credentials(self) -> None:
+        for profile in ("", "Large", "unknown"):
+            for keyed in (False, True):
+                with self.subTest(profile=profile, keyed=keyed):
+                    env = {"CODEX_BUILDBUDDY_RESOURCE_PROFILE": profile}
+                    if keyed:
+                        env["BUILDBUDDY_API_KEY"] = "test-key"
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "CODEX_BUILDBUDDY_RESOURCE_PROFILE must be auto or large",
+                    ):
+                        run_bazel_with_buildbuddy.bazel_command(
+                            "build", "--config=ci-linux", "//...", env=env
+                        )
+
+    def test_main_logs_profile_without_credentials(self) -> None:
+        for keyed in (False, True):
+            with self.subTest(keyed=keyed):
+                env = {
+                    **os.environ,
+                    "CODEX_BAZEL_BIN": sys.executable,
+                    "CODEX_BUILDBUDDY_RESOURCE_PROFILE": "large",
+                }
+                env.pop("BUILDBUDDY_API_KEY", None)
+                if keyed:
+                    env["BUILDBUDDY_API_KEY"] = "secret-test-key"
+                # Intercept exec so the child receives no Bazel-only flags.
+                child_code = (
+                    "import os, run_bazel_with_buildbuddy as wrapper, sys, types; "
+                    "os.execvp = lambda *args: None; "
+                    "wrapper.subprocess.run = lambda *a, **k: types.SimpleNamespace(returncode=0); "
+                    "sys.argv = ['wrapper', 'build', '--config=ci-linux']; "
+                    "wrapper.main()"
+                )
+                result = subprocess.run(
+                    [sys.executable, "-c", child_code],
+                    cwd=Path(run_bazel_with_buildbuddy.__file__).parent,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("secret-test-key", result.stderr + result.stdout)
+                self.assertEqual("resource profile: large" in result.stderr, keyed)
+
     def test_keyless_invocation_drops_remote_ci_configuration(self) -> None:
         self.assertIsNone(
             run_bazel_with_buildbuddy.remote_config(
@@ -51,6 +137,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                 "build",
                 "--config=buildbuddy-generic-rbe",
                 "--remote_header=x-buildbuddy-api-key=fork-token",
+                "--repo_env=CODEX_RBE_RESOURCE_PROFILE=auto",
                 "--config=ci-windows-cross",
                 "//codex-rs/cli:codex",
             ],
@@ -76,6 +163,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                         command,
                         "--config=buildbuddy-generic-rbe",
                         "--remote_header=x-buildbuddy-api-key=fork-token",
+                        "--repo_env=CODEX_RBE_RESOURCE_PROFILE=auto",
                         "--config=ci-windows-cross",
                         "--output=label",
                         expression,
