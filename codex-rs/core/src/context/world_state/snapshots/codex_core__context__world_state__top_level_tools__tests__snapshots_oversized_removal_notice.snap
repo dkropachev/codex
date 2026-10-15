@@ -1,0 +1,18 @@
+---
+source: core/src/context/world_state/top_level_tools_tests.rs
+expression: "texts.join(\"\\n\\n---\\n\\n\")"
+---
+Removed namespace name, part 1/2. Join these 2 consecutive payloads without separators to obtain its exact name. Do not call tools in it unless later redeclared.
+Payload (512 UTF-8 bytes):
+éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé
+
+---
+
+Removed namespace name, part 2/2. Join these 2 consecutive payloads without separators to obtain its exact name. Do not call tools in it unless later redeclared.
+Payload (188 UTF-8 bytes):
+éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé
+
+---
+
+The following tools are no longer available. Do not call them:
+- functions.short
