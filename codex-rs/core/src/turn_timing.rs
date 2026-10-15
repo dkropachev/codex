@@ -159,7 +159,7 @@ impl TurnTimingState {
     pub(crate) fn record_tools_change(&self) {
         let mut profile = self.profile_state();
         if profile.completed_profile.is_none() && profile.started_at.is_some() {
-            profile.tools_change_count = profile.tools_change_count.saturating_add(1);
+            profile.tools_change_count = profile.tools_change_count.saturating_add(/*rhs*/ 1);
         }
     }
 

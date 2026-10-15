@@ -89,9 +89,9 @@ async fn missing_pong_times_out_during_a_blocked_write() {
 #[tokio::test(start_paused = true)]
 async fn queued_pong_wins_over_an_expired_deadline() {
     let (pong_tx, mut pong_rx) = mpsc::channel(1);
-    let mut watchdog = WebSocketPongWatchdog::new(Duration::from_secs(1));
+    let mut watchdog = WebSocketPongWatchdog::new(Duration::from_secs(/*secs*/ 1));
     watchdog.ping_sent(Instant::now());
-    tokio::time::advance(Duration::from_secs(1)).await;
+    tokio::time::advance(Duration::from_secs(/*secs*/ 1)).await;
     pong_tx.send(()).await.unwrap();
     assert_eq!(receive_pong(&mut watchdog, &mut pong_rx).await, Ok(()));
     assert_eq!(watchdog.deadline(), None);

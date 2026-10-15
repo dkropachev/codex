@@ -192,8 +192,9 @@ impl<S: ReviewerSession> ReviewerPool<S> {
         {
             Ok(mut state) => {
                 let context = request.context(state.as_ref().map(|trunk| trunk.session.as_ref()));
-                // Claim cached reviewers before validating them: retirement cancels
-                // the session before releasing its review permit.
+                // Reserve idle cached reviewers before validation so retirement holds
+                // the review permit while removing the cached trunk. The trunk's final
+                // drop cancels its session.
                 let mut reserved_permit = state
                     .as_ref()
                     .and_then(|trunk| Arc::clone(&trunk.review_lock).try_acquire_owned().ok());

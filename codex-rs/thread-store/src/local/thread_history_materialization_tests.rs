@@ -469,7 +469,7 @@ async fn paginated_command_history_caps_aggregated_output() {
         status: CommandExecutionStatus::Completed,
         aggregated_output: Some(output),
         exit_code: Some(0),
-        duration: Some(Duration::from_millis(12)),
+        duration: Some(Duration::from_millis(/*millis*/ 12)),
     };
 
     store
@@ -543,7 +543,7 @@ async fn paginated_mcp_history_caps_large_results() {
             meta: None,
         }),
         error: None,
-        duration: Some(Duration::from_millis(25)),
+        duration: Some(Duration::from_millis(/*millis*/ 25)),
     };
 
     store

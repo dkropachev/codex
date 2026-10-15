@@ -24,11 +24,10 @@ async fn decisions_disagreement_failures_and_disabled_flag_preserve_baseline() -
         let mut config = test.config.clone();
         config.features.enable(Feature::GuardianApproval)?;
         config.features.enable(Feature::GuardianV2)?;
-        if enabled {
-            config
-                .features
-                .enable(Feature::GuardianV2DecisionsComparison)?;
-        }
+        // Keep startup independent of ambient credentials; inject the local sampler below.
+        config
+            .features
+            .disable(Feature::GuardianV2DecisionsComparison)?;
         config.model_provider =
             ModelProviderInfo::create_openai_provider(Some(format!("{}/v1", server.uri())));
         config.model_provider.supports_websockets = false;
@@ -181,7 +180,54 @@ async fn decisions_disagreement_failures_and_disabled_flag_preserve_baseline() -
 #[tokio::test]
 async fn guardian_budget_rejects_both_backends_before_sending() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    let fixture = GuardianFailureFixture::new().await?;
+    assert_guardian_budget_rejects_both_backends(
+        GuardianFailureFixture::new().await?,
+        /*max_input_tokens*/ 256,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_item_budget_rejects_both_backends_below_aggregate_allowance() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let fixture = GuardianFailureFixture::with_config(
+        "[features.guardianv2.transcript]\ninclude_images = true\n",
+    )
+    .await?;
+    // A valid 45,000-byte 1x1 RGB PNG with a zero-filled private ancillary chunk.
+    // The base64 payload is 60,000 bytes, below the image-byte allowance but above
+    // the complete serialized-item limit, even though image token accounting fits.
+    let padding = "A".repeat(/*n*/ 59_891);
+    let image_url = format!(
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMQMgkDAAD4AJ3MaiF4AACvd3ZwQWc{padding}DplMsYAAAAAElFTkSuQmCC"
+    );
+    let mut evidence = user_instruction("Inspect this screenshot before reading README.md.");
+    let ResponseItem::Message { content, .. } = &mut evidence else {
+        unreachable!("user instruction is a message");
+    };
+    content.push(ContentItem::InputImage {
+        image: ImageReference::Inline { image_url },
+        detail: None,
+    });
+    let allowance = codex_guardian_context::DEFAULT_MAX_INPUT_TOKENS;
+    assert!(codex_guardian_context::estimate_input_tokens(&evidence) < allowance - 256);
+    assert!(
+        !codex_core::context::guardian_model_context_item_is_bounded(
+            &codex_history::ResponseItemEnvelope::new(evidence.clone())
+        )
+    );
+    fixture
+        .test
+        .codex
+        .inject_response_items(vec![evidence])
+        .await?;
+    assert_guardian_budget_rejects_both_backends(fixture, allowance).await
+}
+
+async fn assert_guardian_budget_rejects_both_backends(
+    fixture: GuardianFailureFixture,
+    max_input_tokens: usize,
+) -> Result<()> {
     let server = responses::start_mock_server().await;
     let store = fixture.test.codex.thread_extension_data();
     let mut config = fixture.test.config.clone();
@@ -189,7 +235,7 @@ async fn guardian_budget_rejects_both_backends_before_sending() -> Result<()> {
     config.features.enable(Feature::GuardianV2)?;
     config
         .features
-        .enable(Feature::GuardianV2DecisionsComparison)?;
+        .disable(Feature::GuardianV2DecisionsComparison)?;
     let metrics = Arc::new(RecordingMetrics::default());
     fixture.registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
@@ -204,7 +250,7 @@ async fn guardian_budget_rejects_both_backends_before_sending() -> Result<()> {
         })
         .await;
     let mut sampler_config = crate::async_scorer::sampler::tests::sampler_config(server.uri());
-    sampler_config.max_input_tokens = 256;
+    sampler_config.max_input_tokens = max_input_tokens;
     store.insert(LunaSampler::new(sampler_config));
     store.insert(DecisionsSampler::new(
         HttpClientBuilder::new().build_direct()?,

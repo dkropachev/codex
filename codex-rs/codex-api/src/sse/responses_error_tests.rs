@@ -39,7 +39,7 @@ async fn flex_failure_with_retry_header_ends_stream_immediately() {
                 headers: HeaderMap::new(),
                 bytes: Box::pin(bytes),
             },
-            Duration::from_secs(60),
+            Duration::from_secs(/*secs*/ 60),
             /*telemetry*/ None,
             /*turn_state*/ None,
         );
@@ -146,8 +146,8 @@ async fn retry_header_survives_other_failed_responses() {
             ),
             (
                 expected_code,
-                RetryAfter::from_delay(Duration::from_secs(7)),
-                Some(Duration::from_secs(7)),
+                RetryAfter::from_delay(Duration::from_secs(/*secs*/ 7)),
+                Some(Duration::from_secs(/*secs*/ 7)),
             )
         );
     }

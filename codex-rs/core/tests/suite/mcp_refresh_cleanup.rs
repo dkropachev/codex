@@ -105,13 +105,13 @@ impl McpServerProcess {
             windows => {{
                 use anyhow::Context;
 
-                tokio::time::timeout(Duration::from_secs(2), async {
+                tokio::time::timeout(Duration::from_secs(/*secs*/ 2), async {
                     loop {
                         let alive = self.is_alive()?;
                         if !alive {
                             return Ok(());
                         }
-                        tokio::time::sleep(Duration::from_millis(25)).await;
+                        tokio::time::sleep(Duration::from_millis(/*millis*/ 25)).await;
                     }
                 })
                 .await

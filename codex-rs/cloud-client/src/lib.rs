@@ -29,7 +29,7 @@ use tower::service_fn;
 use tower::util::BoxCloneSyncService;
 use url::Url;
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(150);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 150);
 const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 type Transport = BoxCloneSyncService<http::Request<Body>, http::Response<Body>, io::Error>;
 
@@ -76,7 +76,7 @@ impl Client {
             .without_redirects()
             .without_request_logging()
             .http2_prior_knowledge()
-            .connect_timeout(Duration::from_secs(30));
+            .connect_timeout(Duration::from_secs(/*secs*/ 30));
         let http = if local_http {
             // Plaintext credentials must never leave loopback through an outbound proxy.
             builder.build_direct().map_err(|_| Error::ClientBuild)?

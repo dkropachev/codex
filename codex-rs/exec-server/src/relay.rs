@@ -1082,7 +1082,7 @@ mod tests {
         environment_task.abort();
         let _ = environment_task.await;
         assert_eq!(
-            timeout(Duration::from_millis(1), outbound_rx.next()).await?,
+            timeout(Duration::from_millis(/*millis*/ 1), outbound_rx.next()).await?,
             None
         );
         Ok(())

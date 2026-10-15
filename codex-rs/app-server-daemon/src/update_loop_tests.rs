@@ -1197,7 +1197,7 @@ async fn installer_failure_includes_stderr() {
 #[tokio::test]
 async fn installer_failure_preserves_stderr_before_drain_timeout() {
     let error = tokio::time::timeout(
-        Duration::from_secs(3),
+        Duration::from_secs(/*secs*/ 3),
         super::run_installer_script(
             b"printf 'installer failed' >&2\nsleep 5 &\nexit 1\n",
             super::InstallerMode::Update("0.150.0-x86_64-unknown-linux-gnu"),

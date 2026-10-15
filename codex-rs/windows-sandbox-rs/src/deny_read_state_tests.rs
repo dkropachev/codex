@@ -31,7 +31,7 @@ fn load_waits_for_a_legacy_writer_without_recovering_over_it() -> Result<()> {
     let mut writer = OpenOptions::new().write(true).truncate(true).open(&path)?;
     std::thread::scope(|scope| -> Result<()> {
         let write = scope.spawn(move || {
-            std::thread::sleep(Duration::from_millis(75));
+            std::thread::sleep(Duration::from_millis(/*millis*/ 75));
             writer.write_all(valid)
         });
         let state = load_state(&path)?;
@@ -205,7 +205,7 @@ fn store_keeps_file_identity_permissions_and_legacy_writer_compatibility() -> Re
         .open(&path)?;
     std::thread::scope(|scope| -> Result<()> {
         let release = scope.spawn(move || {
-            std::thread::sleep(Duration::from_millis(75));
+            std::thread::sleep(Duration::from_millis(/*millis*/ 75));
             drop(holder);
         });
         store_state(&path, &state)?;
@@ -289,7 +289,7 @@ fn store_times_out_without_modifying_state_held_for_delete() -> Result<()> {
     let started = Instant::now();
     let error = store_state(&path, &PersistentDenyReadAclState::default())
         .expect_err("delete-access holder must block storage");
-    assert!(started.elapsed() >= Duration::from_secs(2));
+    assert!(started.elapsed() >= Duration::from_secs(/*secs*/ 2));
     assert_eq!(
         error
             .downcast_ref::<std::io::Error>()

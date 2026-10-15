@@ -82,7 +82,7 @@ pub unsafe fn sync_persistent_deny_read_acls(
 }
 
 fn load_state(path: &Path) -> Result<PersistentDenyReadAclState> {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(/*secs*/ 2);
     loop {
         let stable = Instant::now() >= deadline;
         let bytes = (|| -> Result<Vec<u8>> {
@@ -106,7 +106,7 @@ fn load_state(path: &Path) -> Result<PersistentDenyReadAclState> {
         match bytes {
             Ok(bytes) => match serde_json::from_slice(&bytes) {
                 Ok(state) => return Ok(state),
-                Err(_) if !stable => std::thread::sleep(Duration::from_millis(25)),
+                Err(_) if !stable => std::thread::sleep(Duration::from_millis(/*millis*/ 25)),
                 Err(_) => return Ok(PersistentDenyReadAclState::default()),
             },
             Err(err)
@@ -130,7 +130,7 @@ fn store_state(path: &Path, state: &PersistentDenyReadAclState) -> Result<()> {
         // Recovery makes malformed files writable. Never follow the state leaf
         // or truncate it before checking the actual object. Resolve configured
         // parent paths normally, including junctions and volume GUIDs.
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(/*secs*/ 2);
         let mut file = loop {
             let opened = OpenOptions::new()
                 .write(true)
@@ -145,7 +145,7 @@ fn store_state(path: &Path, state: &PersistentDenyReadAclState) -> Result<()> {
                     if error.raw_os_error() == Some(win::ERROR_SHARING_VIOLATION as i32)
                         && Instant::now() < deadline =>
                 {
-                    std::thread::sleep(Duration::from_millis(25));
+                    std::thread::sleep(Duration::from_millis(/*millis*/ 25));
                 }
                 Err(error) => return Err(error.into()),
             }

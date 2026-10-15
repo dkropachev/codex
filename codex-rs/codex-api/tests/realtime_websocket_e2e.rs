@@ -299,7 +299,7 @@ async fn realtime_ws_existing_call_retries_activation_404_with_a_bounded_budget(
         (StatusCode::NOT_FOUND, 4, false),
         (StatusCode::GONE, 1, false),
     ] {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
             let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
             let addr = listener.local_addr().expect("address");
             let server = tokio::spawn(async move {

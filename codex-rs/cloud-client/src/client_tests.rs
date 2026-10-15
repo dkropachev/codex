@@ -76,10 +76,11 @@ fn response(messages: Vec<Bytes>, status: tonic::Status) -> http::Response<Body>
         .unwrap()
 }
 async fn assert_request(fixture: &mut Fixture, method: &str, expected: &[u8]) {
-    let (parts, body) = tokio::time::timeout(Duration::from_secs(5), fixture.requests.recv())
-        .await
-        .unwrap()
-        .unwrap();
+    let (parts, body) =
+        tokio::time::timeout(Duration::from_secs(/*secs*/ 5), fixture.requests.recv())
+            .await
+            .unwrap()
+            .unwrap();
     assert_eq!(parts.method, http::Method::POST);
     assert_eq!(parts.version, http::Version::HTTP_2);
     assert_eq!(
@@ -222,7 +223,7 @@ async fn dropping_attachment_cancels_idle_response() {
     events.next().await.unwrap().unwrap();
     drop(events);
     assert!(
-        tokio::time::timeout(Duration::from_secs(5), dropped)
+        tokio::time::timeout(Duration::from_secs(/*secs*/ 5), dropped)
             .await
             .unwrap()
             .is_err()
@@ -317,7 +318,7 @@ async fn https_advertises_h2_in_tls_client_hello() {
         assert_eq!(protocols, vec![b"h2".to_vec()]);
         // Inspect negotiation without trusting a test CA or completing the TLS handshake.
     };
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
         let (_, result) = tokio::join!(handshake, request.send());
         assert!(result.is_err());
     })
@@ -337,7 +338,7 @@ async fn https_enforces_unmanaged_endpoint_restrictions_before_connecting() {
         Credentials::new("token", "account").unwrap(),
     )
     .unwrap();
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
         tokio::select! {
             result = client.attach("t") => assert!(result.is_err()),
             _ = listener.accept() => panic!("denied destination was contacted"),

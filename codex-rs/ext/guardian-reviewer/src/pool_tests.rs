@@ -36,7 +36,7 @@ impl ReviewerRequest for Request {
         self.fresh
     }
     fn deadline(&self) -> Instant {
-        Instant::now() + std::time::Duration::from_secs(5)
+        Instant::now() + std::time::Duration::from_secs(/*secs*/ 5)
     }
     fn cancellation(&self) -> Option<&CancellationToken> {
         None

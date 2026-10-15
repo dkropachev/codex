@@ -85,7 +85,7 @@ async fn helper_attempt_is_shared_after_cancellation() {
     .expect("dropped provider");
     // A slow spawn must not race cancellation. Wait for the helper's PID before
     // dropping the caller future, leaving the provider as the attempt's owner.
-    let dropped_pid = tokio::time::timeout(Duration::from_secs(5), async {
+    let dropped_pid = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
         tokio::select! {
             _ = dropped.headers() => panic!("helper completed before cancellation"),
             pid = async {
@@ -98,7 +98,7 @@ async fn helper_attempt_is_shared_after_cancellation() {
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                         Err(error) => panic!("failed to read helper PID: {error}"),
                     }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
                 }
             } => pid,
         }
@@ -108,7 +108,7 @@ async fn helper_attempt_is_shared_after_cancellation() {
     assert!(dropped_pid > 0);
     drop(dropped);
     // Observe cleanup before HELPER_TIMEOUT or the helper's sleep could finish.
-    tokio::time::timeout(Duration::from_secs(2), async {
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 2), async {
         loop {
             // SAFETY: signal 0 only checks whether the known child PID exists.
             let result = unsafe {

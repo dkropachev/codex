@@ -1,4 +1,4 @@
-//! Single-line editing strips line breaks and keeps a grapheme-aligned cursor viewport.
+//! Single-line editing filters line breaks and computes viewport offsets around the cursor.
 
 use super::*;
 

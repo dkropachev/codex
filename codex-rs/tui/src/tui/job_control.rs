@@ -241,7 +241,7 @@ fn suspend_process() -> Result<()> {
             if JOB_RESUMED.load(Ordering::Acquire) {
                 break;
             }
-            std::thread::park_timeout(std::time::Duration::from_millis(1));
+            std::thread::park_timeout(std::time::Duration::from_millis(/*millis*/ 1));
         }
         if JOB_RESUMED.load(Ordering::Acquire) {
             Ok(())

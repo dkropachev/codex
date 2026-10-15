@@ -218,7 +218,7 @@ impl ManagedWorktreeTools {
                 let mut operations = self.operations.lock().await;
                 operations.retain(|_, operation| {
                     operation.result.is_none()
-                        || operation.started.elapsed() < Duration::from_secs(3600)
+                        || operation.started.elapsed() < Duration::from_secs(/*secs*/ 3600)
                 });
                 if let Some((id, _)) = operations.iter().find(|(_, operation)| {
                     operation.thread_id == thread_id && operation.result.is_none()

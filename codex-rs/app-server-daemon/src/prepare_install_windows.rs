@@ -19,7 +19,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
-const PUBLISH_RELEASE_RETRY_INTERVAL: Duration = Duration::from_millis(50);
+const PUBLISH_RELEASE_RETRY_INTERVAL: Duration = Duration::from_millis(/*millis*/ 50);
 const PUBLISH_RELEASE_RETRY_LIMIT: usize = 100;
 
 pub(super) async fn publish_release(stage: &Path, release: &Path) -> Result<()> {

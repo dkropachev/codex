@@ -18,7 +18,7 @@ async fn read_mcp_subagent_parent_thread_id(
     thread_id: ThreadId,
 ) -> Option<ThreadId> {
     let response = tokio::time::timeout(Duration::from_secs(/*secs*/ 1), async {
-        let mut retry_delay = Duration::from_millis(50);
+        let mut retry_delay = Duration::from_millis(/*millis*/ 50);
         loop {
             match app_server_client
                 .request_handle()
@@ -37,7 +37,9 @@ async fn read_mcp_subagent_parent_thread_id(
                         || source.message.starts_with("thread not loaded:") =>
                 {
                     tokio::time::sleep(retry_delay).await;
-                    retry_delay = retry_delay.saturating_mul(2).min(Duration::from_secs(1));
+                    retry_delay = retry_delay
+                        .saturating_mul(/*rhs*/ 2)
+                        .min(Duration::from_secs(/*secs*/ 1));
                 }
                 Err(_) => return None,
             }

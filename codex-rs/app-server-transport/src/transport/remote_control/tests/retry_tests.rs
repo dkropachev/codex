@@ -256,13 +256,13 @@ async fn reconnect_backoff_covers_refresh_and_resets_after_healthy_connection() 
     websocket.close(None).await.expect("websocket should close");
     drop(websocket);
     let refresh_request =
-        accept_http_request_with_timeout(&listener, Duration::from_secs(45)).await;
+        accept_http_request_with_timeout(&listener, Duration::from_secs(/*secs*/ 45)).await;
     assert_eq!(
         refresh_request.request_line,
         "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
     );
     assert!(
-        disconnected_at.elapsed() >= Duration::from_millis(2_500),
+        disconnected_at.elapsed() >= Duration::from_millis(/*millis*/ 2_500),
         "the first automatic reconnect must wait before refreshing its token"
     );
     respond_with_json(
@@ -284,9 +284,10 @@ async fn reconnect_backoff_covers_refresh_and_resets_after_healthy_connection() 
     websocket.close(None).await.expect("websocket should close");
     drop(websocket);
     let mut websocket =
-        accept_remote_control_connection_with_timeout(&listener, Duration::from_secs(45)).await;
+        accept_remote_control_connection_with_timeout(&listener, Duration::from_secs(/*secs*/ 45))
+            .await;
     assert!(
-        disconnected_at.elapsed() >= Duration::from_secs(5),
+        disconnected_at.elapsed() >= Duration::from_secs(/*secs*/ 5),
         "a short-lived connection must retain the increased backoff"
     );
     status_rx
@@ -296,11 +297,11 @@ async fn reconnect_backoff_covers_refresh_and_resets_after_healthy_connection() 
 
     // Skip most of the healthy interval without crossing the 60-second pong timeout.
     tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(45)).await;
+    tokio::time::advance(Duration::from_secs(/*secs*/ 45)).await;
     tokio::time::resume();
     // Drive the socket so tungstenite answers pings while we cross the reset threshold.
     tokio::select! {
-        _ = tokio::time::sleep(Duration::from_secs(16)) => {}
+        _ = tokio::time::sleep(Duration::from_secs(/*secs*/ 16)) => {}
         _ = async {
             while let Some(frame) = websocket.next().await {
                 frame.expect("healthy connection should remain readable");
@@ -310,7 +311,8 @@ async fn reconnect_backoff_covers_refresh_and_resets_after_healthy_connection() 
     websocket.close(None).await.expect("websocket should close");
     drop(websocket);
     let mut websocket =
-        accept_remote_control_connection_with_timeout(&listener, Duration::from_secs(8)).await;
+        accept_remote_control_connection_with_timeout(&listener, Duration::from_secs(/*secs*/ 8))
+            .await;
     status_rx
         .wait_for(|status| status.status == RemoteControlConnectionStatus::Connected)
         .await
@@ -328,7 +330,8 @@ async fn reconnect_backoff_covers_refresh_and_resets_after_healthy_connection() 
         .enable_ephemeral()
         .expect("remote control should enable again");
     let mut websocket =
-        accept_remote_control_connection_with_timeout(&listener, Duration::from_secs(2)).await;
+        accept_remote_control_connection_with_timeout(&listener, Duration::from_secs(/*secs*/ 2))
+            .await;
     status_rx
         .wait_for(|status| status.status == RemoteControlConnectionStatus::Connected)
         .await
@@ -340,7 +343,7 @@ async fn reconnect_backoff_covers_refresh_and_resets_after_healthy_connection() 
         .await
         .expect("closed socket should enter reconnect backoff");
     shutdown_token.cancel();
-    timeout(Duration::from_secs(1), remote_task)
+    timeout(Duration::from_secs(/*secs*/ 1), remote_task)
         .await
         .expect("shutdown must interrupt reconnect backoff")
         .expect("remote task should finish");

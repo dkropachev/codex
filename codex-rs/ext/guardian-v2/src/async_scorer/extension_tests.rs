@@ -1020,6 +1020,10 @@ async fn sample_configured_conversation_history_with_delivery(
     let mut config = test.config.clone();
     config.model_provider = provider_info;
     config.features.enable(Feature::GuardianV2)?;
+    // Comparison tests install their local transport after this initial sample.
+    config
+        .features
+        .disable(Feature::GuardianV2DecisionsComparison)?;
     let mut builder = ExtensionRegistryBuilder::new();
     super::install(
         &mut builder,

@@ -138,7 +138,8 @@ async fn fresh_v2_subagent_can_call_parent_dynamic_tool_when_enabled() -> Result
     test.session_configured = root.session_configured;
     let mut created_threads = test.thread_manager.subscribe_thread_created();
     test.submit_turn(ROOT_PROMPT).await?;
-    let child_id = tokio::time::timeout(Duration::from_secs(10), created_threads.recv()).await??;
+    let child_id =
+        tokio::time::timeout(Duration::from_secs(/*secs*/ 10), created_threads.recv()).await??;
     let child = test.thread_manager.get_thread(child_id).await?;
     let call = wait_for_event_match(&child, |event| match event {
         EventMsg::DynamicToolCallRequest(call) => Some(call.clone()),
