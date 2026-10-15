@@ -13,6 +13,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 use test_case::test_case;
 
@@ -46,6 +47,89 @@ fn builder(incremental_tools: bool, token_budget: bool) -> TestCodexBuilder {
             config.model_auto_compact_token_limit = Some(100_000);
             config.code_mode.disable_in_process_fallback = true;
         })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn incremental_history_survives_standard_responses_resume() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let initial_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("initial")]),
+    )
+    .await;
+    let initial = builder(/*incremental_tools*/ true, /*token_budget*/ false)
+        .build_with_auto_env(&server)
+        .await?;
+    initial
+        .submit_turn("Remember the original request.")
+        .await?;
+    let original = initial_mock.single_request().input();
+    let declarations = original
+        .iter()
+        .filter(|item| item["type"] == "additional_tools")
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(!declarations.is_empty());
+
+    let standard_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("standard")]),
+    )
+    .await;
+    let standard = builder(/*incremental_tools*/ true, /*token_budget*/ false)
+        .with_model_info_override("gpt-5.4", |model| {
+            model.use_responses_lite = false;
+            model.tool_mode = Some(ToolMode::CodeMode);
+        })
+        .restart_with_auto_env(&server, &initial)
+        .await?;
+    standard
+        .submit_turn("Continue with standard Responses.")
+        .await?;
+    let request = standard_mock.single_request();
+    assert!(
+        request.body_json()["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty())
+    );
+    assert_eq!(
+        request
+            .input()
+            .into_iter()
+            .filter(|item| item["type"] == "additional_tools")
+            .collect::<Vec<_>>(),
+        Vec::<serde_json::Value>::new(),
+    );
+    let original_messages = original
+        .into_iter()
+        .filter(|item| item["type"] != "additional_tools")
+        .collect::<Vec<_>>();
+    assert!(
+        request
+            .input()
+            .windows(original_messages.len())
+            .any(|items| items == original_messages)
+    );
+
+    let lite_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("lite")]),
+    )
+    .await;
+    let lite = builder(/*incremental_tools*/ true, /*token_budget*/ false)
+        .restart_with_auto_env(&server, &standard)
+        .await?;
+    lite.submit_turn("Return to Lite with the saved catalog.")
+        .await?;
+    let resumed_declarations = lite_mock
+        .single_request()
+        .input()
+        .into_iter()
+        .filter(|item| item["type"] == "additional_tools")
+        .collect::<Vec<_>>();
+    assert!(resumed_declarations.starts_with(&declarations));
+    Ok(())
 }
 
 #[test_case(true; "window_reset")]
