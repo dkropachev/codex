@@ -95,6 +95,8 @@ mod guardian_authorization_refresh;
 mod guardian_cached_score;
 #[path = "guardian_checkpoint_migration_tests.rs"]
 mod guardian_checkpoint_migration;
+#[path = "incremental_tool_item_budget_tests.rs"]
+mod incremental_tool_item_budget;
 // Uses the same command-approval harness as guardian_review below.
 mod canonical_plugin_connectors;
 mod gateway_auth;

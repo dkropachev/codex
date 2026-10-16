@@ -3406,7 +3406,9 @@ impl Session {
         }
         let items = Cow::Owned(items);
         (
-            Self::assign_missing_response_item_ids(items),
+            Cow::Owned(crate::context::world_state::bound_tool_instruction_items(
+                Self::assign_missing_response_item_ids(items).into_owned(),
+            )),
             image_preparations,
         )
     }

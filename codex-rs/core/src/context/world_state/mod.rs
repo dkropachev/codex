@@ -18,6 +18,7 @@ mod pull_request_context;
 mod realtime;
 #[cfg(test)]
 pub(crate) mod test_support;
+mod tool_instructions;
 mod tools;
 mod top_level_tools;
 
@@ -59,6 +60,7 @@ pub(crate) use persistent_mode::PersistentModeState;
 pub(crate) use plugins_instructions::PluginsInstructionsState;
 pub(crate) use pull_request_context::PullRequestContextState;
 pub(crate) use realtime::RealtimeState;
+pub(crate) use tool_instructions::bound_tool_instruction_items;
 pub(crate) use tools::ToolsState;
 pub(crate) use top_level_tools::TopLevelToolsState;
 
