@@ -35,7 +35,7 @@ esac
 libcap_version="2.75"
 libcap_sha256="de4e7e064c9ba451d5234dd46e897d7c71c96a9ebf9a0c445bc04f4742d83632"
 libcap_tarball_name="libcap-${libcap_version}.tar.xz"
-libcap_download_url="https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
+libcap_download_path="pub/linux/libs/security/linux-privs/libcap2/${libcap_tarball_name}"
 
 # Use the musl toolchain as the Rust linker to avoid Zig injecting its own CRT.
 if command -v "${arch}-linux-musl-gcc" >/dev/null; then
@@ -63,7 +63,17 @@ if [[ ! -f "${libcap_prefix}/lib/libcap.a" ]]; then
   mkdir -p "${libcap_src_root}" "${libcap_prefix}/lib" "${libcap_prefix}/include/sys" "${libcap_prefix}/include/linux" "${libcap_pkgconfig_dir}"
   libcap_tarball="${libcap_root}/${libcap_tarball_name}"
 
-  curl -fsSL "${libcap_download_url}" -o "${libcap_tarball}"
+  # Retry transient transport errors, then try an independent kernel.org mirror.
+  downloaded=false
+  for mirror in https://www.kernel.org https://mirrors.edge.kernel.org; do
+    if curl -fsSL --connect-timeout 20 --max-time 120 \
+      --retry 3 --retry-all-errors --retry-delay 2 \
+      "${mirror}/${libcap_download_path}" -o "${libcap_tarball}"; then
+      downloaded=true
+      break
+    fi
+  done
+  [[ "$downloaded" == "true" ]] || { echo "Failed to download ${libcap_tarball_name}" >&2; exit 1; }
   echo "${libcap_sha256}  ${libcap_tarball}" | sha256sum -c -
 
   tar -xJf "${libcap_tarball}" -C "${libcap_src_root}"

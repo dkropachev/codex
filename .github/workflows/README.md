@@ -29,8 +29,11 @@ This includes full Bazel `//...` tests on Linux x86_64 and ARM64 (GNU and musl)
 and macOS x86_64 and ARM64, Clippy and release-build checks, native Windows
 x86_64 and ARM64 sandbox/protocol smoke tests, cargo-deny, codespell,
 repository checks, and SDK tests. `Pre-release CI results` fails if any of
-those checks fail. This opt-in workflow validates a PR but does not build or
-publish release packages.
+those checks fail. It also builds and smoke-tests the four Unix release
+packages using the same build action as stable releases and uploads them as
+workflow artifacts. Package builds use standard macOS runners (`macos-15-intel`
+and `macos-15`) and read-only repository permissions. This opt-in workflow does
+not create or publish a GitHub Release.
 
 ## Stable Release Tags
 

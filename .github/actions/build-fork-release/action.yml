@@ -1,0 +1,260 @@
+name: Build fork release package
+description: Build, archive, and smoke-test one native Unix release package
+inputs:
+  target:
+    description: Rust target triple
+    required: true
+  version:
+    description: Package version
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Set package build context
+      shell: bash
+      env:
+        PACKAGE_TARGET: ${{ inputs.target }}
+        PACKAGE_VERSION: ${{ inputs.version }}
+      run: |
+        echo "TARGET=$PACKAGE_TARGET" >>"$GITHUB_ENV"
+        echo "VERSION=$PACKAGE_VERSION" >>"$GITHUB_ENV"
+    - name: Read pinned Rust toolchain
+      id: toolchain
+      shell: bash
+      working-directory: ${{ github.workspace }}/codex-rs
+      run: |
+        set -euo pipefail
+        toolchain="$(sed -nE 's/^channel = "([^"]+)"/\1/p' rust-toolchain.toml)"
+        [[ -n "$toolchain" ]] || { echo "Pinned Rust toolchain is missing" >&2; exit 1; }
+        echo "version=$toolchain" >>"$GITHUB_OUTPUT"
+
+    - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      with:
+        toolchain: ${{ steps.toolchain.outputs.version }}
+        targets: ${{ inputs.target }}
+
+    - name: Use hermetic Cargo home
+      if: ${{ runner.os == 'Linux' }}
+      shell: bash
+      working-directory: ${{ github.workspace }}/codex-rs
+      run: |
+        set -euo pipefail
+        cargo_home="${GITHUB_WORKSPACE}/.cargo-home"
+        mkdir -p "${cargo_home}/bin"
+        : >"${cargo_home}/config.toml"
+        echo "CARGO_HOME=${cargo_home}" >>"$GITHUB_ENV"
+        echo "${cargo_home}/bin" >>"$GITHUB_PATH"
+
+    - name: Install Zig
+      if: ${{ runner.os == 'Linux' }}
+      uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+      with:
+        version: 0.14.0
+        use-cache: false
+
+    - name: Install MUSL build tools
+      if: ${{ runner.os == 'Linux' }}
+      shell: bash
+      working-directory: ${{ github.workspace }}/codex-rs
+      run: |
+        set -euo pipefail
+        sudo apt-get update -y
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends binutils
+        bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
+
+    - name: Disable aws-lc jitter entropy
+      if: ${{ runner.os == 'Linux' }}
+      shell: bash
+      working-directory: ${{ github.workspace }}/codex-rs
+      run: |
+        set -euo pipefail
+        echo "AWS_LC_SYS_NO_JITTER_ENTROPY=1" >>"$GITHUB_ENV"
+        target_variable="AWS_LC_SYS_NO_JITTER_ENTROPY_${TARGET//-/_}"
+        echo "${target_variable}=1" >>"$GITHUB_ENV"
+
+    - name: Configure rusty_v8 artifacts
+      uses: ./.github/actions/setup-rusty-v8
+      with:
+        target: ${{ inputs.target }}
+
+    - name: Record source lockfile
+      shell: bash
+      working-directory: ${{ github.workspace }}/codex-rs
+      run: |
+        set -euo pipefail
+        if command -v sha256sum >/dev/null 2>&1; then
+          sha256sum Cargo.lock >"${RUNNER_TEMP}/Cargo.lock.sha256"
+        else
+          shasum -a 256 Cargo.lock >"${RUNNER_TEMP}/Cargo.lock.sha256"
+        fi
+
+    - name: Build and finalize bwrap
+      if: ${{ runner.os == 'Linux' }}
+      shell: bash
+      working-directory: ${{ github.workspace }}/codex-rs
+      run: |
+        set -euo pipefail
+        cargo build --locked --target "$TARGET" --release --bin bwrap
+        bwrap="target/${TARGET}/release/bwrap"
+        strip --strip-debug --strip-unneeded "$bwrap"
+        digest="$(sha256sum "$bwrap" | awk '{print $1}')"
+        echo "CODEX_BWRAP_SHA256=${digest}" >>"$GITHUB_ENV"
+
+    - name: Build Codex binaries
+      shell: bash
+      working-directory: ${{ github.workspace }}/codex-rs
+      run: |
+        set -euo pipefail
+        export STABLE_GIT_COMMIT="$(git rev-parse HEAD)"
+        build_args=()
+        if [[ "$RUNNER_OS" == "macOS" ]]; then
+          build_args+=(--timings)
+        fi
+        cargo build --locked --target "$TARGET" --release "${build_args[@]}" \
+          --bin codex \
+          --bin codex-code-mode-host
+
+    - name: Upload Cargo timings (macOS)
+      if: ${{ always() && runner.os == 'macOS' }}
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      with:
+        name: cargo-timings-fork-release-${{ inputs.target }}
+        path: codex-rs/target/cargo-timings/cargo-timing.html
+        if-no-files-found: warn
+
+    - name: Strip Codex binaries
+      shell: bash
+      working-directory: ${{ github.workspace }}/codex-rs
+      run: |
+        set -euo pipefail
+        release_dir="target/${TARGET}/release"
+        if [[ "$RUNNER_OS" == "Linux" ]]; then
+          strip --strip-debug --strip-unneeded \
+            "${release_dir}/codex" \
+            "${release_dir}/codex-code-mode-host"
+        else
+          strip -x "${release_dir}/codex" "${release_dir}/codex-code-mode-host"
+        fi
+
+    - name: Fetch pinned zsh manifest
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        set -euo pipefail
+        manifest="${RUNNER_TEMP}/codex-zsh"
+        curl -fsSL "$CODEX_ZSH_MANIFEST_URL" -o "$manifest"
+        actual="$(python3 - "$manifest" <<'PY'
+        import hashlib
+        import pathlib
+        import sys
+        print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+        PY
+        )"
+        [[ "$actual" == "$CODEX_ZSH_MANIFEST_SHA256" ]] || {
+          echo "Pinned zsh manifest checksum mismatch" >&2
+          exit 1
+        }
+
+    - name: Assemble package archive
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        set -euo pipefail
+        release_dir="codex-rs/target/${TARGET}/release"
+        package_dir="${RUNNER_TEMP}/codex-package-${TARGET}"
+        archive_dir="${GITHUB_WORKSPACE}/dist/${TARGET}"
+        archive="${archive_dir}/codex-package-${TARGET}.tar.gz"
+        mkdir -p "$archive_dir"
+        args=(
+          --target "$TARGET"
+          --variant codex
+          --entrypoint-bin "${release_dir}/codex"
+          --code-mode-host-bin "${release_dir}/codex-code-mode-host"
+          --zsh-manifest "${RUNNER_TEMP}/codex-zsh"
+          --cargo-profile release
+          --package-dir "$package_dir"
+          --force
+        )
+        if [[ "$RUNNER_OS" == "Linux" ]]; then
+          args+=(--bwrap-bin "${release_dir}/bwrap")
+        fi
+        python3 scripts/build_codex_package.py "${args[@]}"
+        cp "${release_dir}/codex-code-mode-host" \
+          "${archive_dir}/codex-code-mode-host-${TARGET}"
+        python3 - "$package_dir" "$archive" <<'PY'
+        import gzip
+        import pathlib
+        import sys
+        import tarfile
+
+        package_dir = pathlib.Path(sys.argv[1])
+        archive_path = pathlib.Path(sys.argv[2])
+        with archive_path.open("wb") as raw:
+            with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as compressed:
+                with tarfile.open(fileobj=compressed, mode="w") as archive:
+                    for path in sorted(package_dir.rglob("*")):
+                        relative = path.relative_to(package_dir)
+                        info = archive.gettarinfo(path, arcname=relative.as_posix())
+                        info.uid = 0
+                        info.gid = 0
+                        info.uname = ""
+                        info.gname = ""
+                        info.mtime = 0
+                        info.pax_headers = {}
+                        if info.isdir() or info.mode & 0o111:
+                            info.mode = 0o755
+                        else:
+                            info.mode = 0o644
+                        if info.isfile():
+                            with path.open("rb") as source:
+                                archive.addfile(info, source)
+                        else:
+                            archive.addfile(info)
+        PY
+
+    - name: Smoke-test native package
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        set -euo pipefail
+        archive="dist/${TARGET}/codex-package-${TARGET}.tar.gz"
+        unpacked="${RUNNER_TEMP}/smoke-${TARGET}"
+        mkdir -p "$unpacked"
+        tar -xzf "$archive" -C "$unpacked"
+        python3 - "$unpacked/codex-package.json" "$VERSION" "$TARGET" <<'PY'
+        import json
+        import pathlib
+        import sys
+
+        metadata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+        expected = {
+            "layoutVersion": 1,
+            "version": sys.argv[2],
+            "target": sys.argv[3],
+            "variant": "codex",
+            "entrypoint": "bin/codex",
+            "resourcesDir": "codex-resources",
+            "pathDir": "codex-path",
+        }
+        if metadata != expected:
+            raise SystemExit(f"unexpected package metadata: {metadata!r}")
+        PY
+        "${unpacked}/bin/codex" --version | grep -F " $VERSION"
+        "${unpacked}/bin/codex-code-mode-host" </dev/null >/dev/null
+        "${unpacked}/codex-path/rg" --version >/dev/null
+        "${unpacked}/codex-resources/zsh/bin/zsh" --version >/dev/null
+        if [[ "$RUNNER_OS" == "Linux" ]]; then
+          "${unpacked}/codex-resources/bwrap" --version >/dev/null
+        fi
+
+    - name: Ensure Cargo.lock is unchanged
+      shell: bash
+      working-directory: ${{ github.workspace }}/codex-rs
+      run: |
+        set -euo pipefail
+        if command -v sha256sum >/dev/null 2>&1; then
+          sha256sum --check "${RUNNER_TEMP}/Cargo.lock.sha256"
+        else
+          shasum -a 256 --check "${RUNNER_TEMP}/Cargo.lock.sha256"
+        fi
+        git diff --exit-code -- Cargo.lock
