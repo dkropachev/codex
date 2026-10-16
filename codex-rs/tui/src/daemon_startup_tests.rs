@@ -157,6 +157,8 @@ async fn daemon_feature_compatibility_respects_required_and_optional_attachment(
             "legacy managed",
             "old requirements server",
             "unsupported RPC",
+            "stalled config",
+            "stalled requirements",
         ] {
             let home = TempDir::new()?;
             let mut config = ConfigBuilder::default()
@@ -206,6 +208,9 @@ async fn daemon_feature_compatibility_respects_required_and_optional_attachment(
                             json!({"id": request.id, "result": {"userAgent": "daemon-test"}})
                         }
                         "config/read" => {
+                            if scenario == "stalled config" {
+                                continue;
+                            }
                             json!({"id": request.id, "result": {"config": {}, "layers": [{
                                 "name": {"type": "legacyManagedConfigTomlFromFile"}, "config":
                                 if scenario == "legacy managed" {
@@ -216,6 +221,7 @@ async fn daemon_feature_compatibility_respects_required_and_optional_attachment(
                         "configRequirements/read" if scenario == "old requirements server" => {
                             json!({"id": request.id, "error": {"code": -32600, "message": "Invalid request: unknown variant `configRequirements/read`"}})
                         }
+                        "configRequirements/read" if scenario == "stalled requirements" => continue,
                         "configRequirements/read" => json!({"id": request.id, "result": {
                             "requirements": if scenario == "managed" {
                                 json!({"featureRequirements": {"api_key_model_discovery": true}})
@@ -252,6 +258,8 @@ async fn daemon_feature_compatibility_respects_required_and_optional_attachment(
                     "This session requires api_key_model_discovery to be disabled"
                 }
                 "unsupported RPC" => "Experimental feature request failed",
+                "stalled config" => "daemon configuration read timed out",
+                "stalled requirements" => "daemon configuration requirements read timed out",
                 _ => unreachable!(),
             };
             if allow_embedded_fallback {

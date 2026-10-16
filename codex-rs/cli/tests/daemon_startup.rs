@@ -373,7 +373,12 @@ async fn daemon_startup(command: &str) -> Result<()> {
                                 } else {
                                     "api_key_model_discovery"
                                 };
-                                assert_eq!(settings["featureOverrides"], serde_json::json!({(flag): false}));
+                                let expected = serde_json::json!({(flag): false});
+                                ensure!(
+                                    settings["featureOverrides"] == expected,
+                                    "expected feature overrides {expected}, got {}",
+                                    settings["featureOverrides"]
+                                );
                             }
                         }
                     } else if command == "start" {

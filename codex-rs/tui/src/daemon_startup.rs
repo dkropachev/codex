@@ -181,11 +181,15 @@ pub(super) async fn compatibility_warning(
             return Ok(());
         }
         // Both legacy managed config and current requirements override CLI flags.
-        let layers = crate::config_update::read_effective_config_if_supported(
-            client.request_handle(),
-            config.cwd.as_path(),
+        let layers = tokio::time::timeout(
+            Duration::from_secs(/*secs*/ 5),
+            crate::config_update::read_effective_config_if_supported(
+                client.request_handle(),
+                config.cwd.as_path(),
+            ),
         )
         .await
+        .map_err(|_| "daemon configuration read timed out".to_string())?
         .map_err(|_| "could not read daemon configuration".to_string())?
         .and_then(|config| config.layers)
         .unwrap_or_default();
@@ -198,15 +202,19 @@ pub(super) async fn compatibility_warning(
         }) {
             requested.retain(|name, _| layer["config"]["features"].get(name).is_none());
         }
-        match client
-            .request_handle()
-            .request_typed::<ConfigRequirementsReadResponse>(
-                ClientRequest::ConfigRequirementsRead {
-                    request_id: RequestId::String("tui-daemon-requirements".to_string()),
-                    params: None,
-                },
-            )
-            .await
+        match tokio::time::timeout(
+            Duration::from_secs(/*secs*/ 5),
+            client
+                .request_handle()
+                .request_typed::<ConfigRequirementsReadResponse>(
+                    ClientRequest::ConfigRequirementsRead {
+                        request_id: RequestId::String("tui-daemon-requirements".to_string()),
+                        params: None,
+                    },
+                ),
+        )
+        .await
+        .map_err(|_| "daemon configuration requirements read timed out".to_string())?
         {
             Ok(response) => {
                 if let Some(required) = response.requirements.and_then(|r| r.feature_requirements) {
