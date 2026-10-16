@@ -5584,3 +5584,6 @@ async fn resume_agent_from_rollout_skips_descendants_when_parent_resume_fails() 
         .await
         .expect("tree shutdown after partial subtree resume should succeed");
 }
+
+#[path = "spawn_inheritance_tests.rs"]
+mod spawn_inheritance_tests;
