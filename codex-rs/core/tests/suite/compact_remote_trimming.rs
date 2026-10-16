@@ -201,7 +201,24 @@ async fn remote_compact_v2_trim_estimate_uses_session_base_instructions(
         let request = mock.single_request();
         assert_eq!(request.path(), "/v1/responses");
         assert_eq!(request.inputs_of_type("compaction_trigger").len(), 1);
-        assert_eq!(request.instructions_text(), instructions);
+        let mut instruction_text = request.instructions_text();
+        if instruction_text.starts_with("Base instructions, part 1.") {
+            instruction_text.clear();
+            for item in request.input().into_iter().take_while(|item| {
+                item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                    == json!(["model.base_instructions"])
+            }) {
+                assert!(serde_json::to_vec(&item)?.len() <= 40_000);
+                let text = item["content"][0]["text"]
+                    .as_str()
+                    .context("base instruction part")?;
+                let (_, payload) = text
+                    .split_once(" UTF-8 bytes):\n")
+                    .context("base instruction payload")?;
+                instruction_text.push_str(payload);
+            }
+        }
+        assert_eq!(instruction_text, instructions);
         assert!(request.has_function_call("retained"));
         assert!(request.has_function_call("trailing"));
         assert_eq!(

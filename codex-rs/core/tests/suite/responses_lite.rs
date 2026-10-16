@@ -116,7 +116,7 @@ async fn base_instructions_use_input_items(responses_lite: bool) -> Result<()> {
                 config.code_mode.disable_in_process_fallback = true;
             })
     };
-    let test = builder().build(&server).await?;
+    let test = builder().build_with_auto_env(&server).await?;
 
     test.submit_turn("hello").await?;
 
@@ -198,7 +198,7 @@ async fn base_instructions_use_input_items(responses_lite: bool) -> Result<()> {
         responses::sse(vec![responses::ev_completed("resp-2")]),
     )
     .await;
-    let resumed = builder().restart(&server, &test).await?;
+    let resumed = builder().restart_with_auto_env(&server, &test).await?;
     resumed.submit_turn("continue").await?;
     assert_eq!(
         &followup.single_request().input()[..=instructions_index],
@@ -209,6 +209,112 @@ async fn base_instructions_use_input_items(responses_lite: bool) -> Result<()> {
         body["tools"]
     );
 
+    Ok(())
+}
+
+#[test_case::test_case("x ".repeat(/*n*/ 40_000); "ascii")]
+#[test_case::test_case("\u{0000}".repeat(/*n*/ 10_000); "escaping_dominated")]
+#[test_case::test_case("🦀é\u{301}漢\"\\\n\u{0000}".repeat(/*n*/ 5_000); "unicode_and_escaping")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversized_base_instructions_are_lossless_bounded_and_stable(
+    instructions: String,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let builder = || {
+        let instructions = instructions.clone();
+        test_codex()
+            .with_model_info_override("gpt-5.4", |model_info| {
+                model_info.use_responses_lite = false;
+            })
+            .with_config(move |config| {
+                config.base_instructions = Some(instructions);
+            })
+    };
+    let first = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("resp-1")]),
+    )
+    .await;
+    let test = builder().build_with_auto_env(&server).await?;
+    test.submit_turn("hello").await?;
+
+    let first_body = first.single_request().body_json();
+    assert!(first_body.get("instructions").is_none());
+    let prefix = first_body["input"]
+        .as_array()
+        .context("input array")?
+        .iter()
+        .take_while(|item| {
+            item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                == serde_json::json!(["model.base_instructions"])
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(!prefix.is_empty());
+    let mut reconstructed = String::new();
+    let mut ids = std::collections::HashSet::new();
+    for (index, item) in prefix.iter().enumerate() {
+        let bytes = serde_json::to_vec(item)?.len();
+        assert!(
+            bytes <= 40_000,
+            "base instruction item has {bytes} serialized bytes"
+        );
+        assert!(ids.insert(item["id"].as_str().context("message id")?));
+        let text = item["content"][0]["text"]
+            .as_str()
+            .context("instruction text")?;
+        let (header, payload) = text
+            .split_once("\nPayload (")
+            .context("continuation header")?;
+        let part = index + 1;
+        assert_eq!(
+            header,
+            format!(
+                "Base instructions, part {part}. Concatenate consecutive payloads without separators to obtain the complete instructions."
+            )
+        );
+        let (length, payload) = payload
+            .split_once(" UTF-8 bytes):\n")
+            .context("payload length")?;
+        assert_eq!(length.parse::<usize>()?, payload.len());
+        reconstructed.push_str(payload);
+        assert_eq!(
+            item,
+            &serde_json::json!({
+                "id": item["id"],
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": text}],
+                "internal_chat_message_metadata_passthrough": {
+                    "content_item_kinds": ["model.base_instructions"],
+                },
+            })
+        );
+    }
+    assert_eq!(reconstructed, instructions);
+
+    let second = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("resp-2")]),
+    )
+    .await;
+    test.submit_turn("continue").await?;
+    let second_input = second.single_request().input();
+    assert_eq!(&second_input[..prefix.len()], prefix.as_slice());
+    let first_input = first.single_request().input();
+    assert_eq!(&second_input[..first_input.len()], first_input.as_slice());
+
+    let third = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("resp-3")]),
+    )
+    .await;
+    let resumed = builder().restart_with_auto_env(&server, &test).await?;
+    resumed.submit_turn("after restart").await?;
+    let third_input = third.single_request().input();
+    assert_eq!(&third_input[..second_input.len()], second_input.as_slice());
     Ok(())
 }
 
