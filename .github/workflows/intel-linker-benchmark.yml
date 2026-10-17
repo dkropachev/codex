@@ -1,0 +1,72 @@
+name: Intel package linker benchmark
+run-name: Intel package ${{ inputs.linker }}
+
+on:
+  # Register this new manual workflow before merging its experiment PR.
+  pull_request:
+    paths: [.github/workflows/intel-linker-benchmark.yml]
+  workflow_dispatch:
+    inputs:
+      linker:
+        description: Linker mode (run a system diagnostic before rust-lld)
+        required: true
+        default: system
+        type: choice
+        options: [system, rust-lld]
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    timeout-minutes: 150
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/codex-rs/target
+      CODEX_REPO_ROOT: ${{ github.workspace }}
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
+      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: "off"
+      CODEX_ZSH_MANIFEST_URL: https://github.com/openai/codex/releases/download/codex-zsh-v0.1.0/codex-zsh
+      CODEX_ZSH_MANIFEST_SHA256: c534eab89dcea7e3d8a5e5b3f49c025c7c64cd4e4d9814ee24871de58a9359a1
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Require an empty Cargo target
+        shell: bash
+        run: test ! -e "$CARGO_TARGET_DIR"
+
+      - name: Read package version
+        id: version
+        shell: bash
+        run: |
+          version="$(sed -nE 's/^version = "([^"]+)"/\1/p' codex-rs/Cargo.toml | head -n 1)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/build-fork-release
+        with:
+          target: x86_64-apple-darwin
+          version: ${{ steps.version.outputs.version }}
+          linker: ${{ inputs.linker }}
+
+      - name: Upload linker timings
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: intel-linker-timings-${{ inputs.linker }}
+          path: ${{ runner.temp }}/package-linker.jsonl
+          if-no-files-found: error
+
+      - name: Upload packages
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: intel-package-${{ inputs.linker }}
+          path: dist/x86_64-apple-darwin/
+          if-no-files-found: error

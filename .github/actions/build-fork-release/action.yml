@@ -7,6 +7,10 @@ inputs:
   version:
     description: Package version
     required: true
+  linker:
+    description: Apple Clang linker selection for Intel Mac packages (system or rust-lld).
+    required: false
+    default: system
 runs:
   using: composite
   steps:
@@ -32,6 +36,36 @@ runs:
       with:
         toolchain: ${{ steps.toolchain.outputs.version }}
         targets: ${{ inputs.target }}
+
+    - name: Configure Intel Mac package linker
+      if: inputs.target == 'x86_64-apple-darwin'
+      shell: bash
+      env:
+        PACKAGE_LINKER: ${{ inputs.linker }}
+        PACKAGE_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        case "$PACKAGE_LINKER" in
+          system) ;;
+          rust-lld)
+            host="$(rustc -vV | sed -n 's/^host: //p')"
+            bundled="$(rustc --print sysroot)/lib/rustlib/${host}/bin/rust-lld"
+            test -x "$bundled"
+            mkdir -p "${RUNNER_TEMP}/package-linker"
+            ln -s "$bundled" "${RUNNER_TEMP}/package-linker/ld64.lld"
+            # The bundled linker selects its Mach-O flavor from this name.
+            "${RUNNER_TEMP}/package-linker/ld64.lld" --version
+            echo "CODEX_PACKAGE_LLD=${RUNNER_TEMP}/package-linker/ld64.lld" >> "$GITHUB_ENV"
+            ;;
+          *) echo "Unsupported package linker: $PACKAGE_LINKER" >&2; exit 1 ;;
+        esac
+        clang="$(xcrun --find clang)"
+        {
+          echo "CODEX_PACKAGE_LINKER=$PACKAGE_LINKER"
+          echo "CODEX_PACKAGE_CLANG=$clang"
+          echo "CODEX_PACKAGE_LINKER_LOG=${RUNNER_TEMP}/package-linker.jsonl"
+          echo "CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER=${PACKAGE_ACTION_PATH}/../../../.github/scripts/time-package-linker.py"
+        } >> "$GITHUB_ENV"
 
     - name: Use hermetic Cargo home
       if: ${{ runner.os == 'Linux' }}
