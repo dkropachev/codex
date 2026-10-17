@@ -1,6 +1,32 @@
 name: Bazel test platform
 
 on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Hosted runner (must support the selected target)
+        required: true
+        default: macos-15-intel
+        type: choice
+        options: [macos-15-intel, macos-15, ubuntu-24.04, ubuntu-24.04-arm]
+      target:
+        description: Rust target triple
+        required: true
+        default: x86_64-apple-darwin
+        type: choice
+        options:
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+          - x86_64-unknown-linux-gnu
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-gnu
+          - aarch64-unknown-linux-musl
+      test_suite:
+        description: Test coverage
+        required: true
+        default: full
+        type: choice
+        options: [full, pr]
   workflow_call:
     inputs:
       runner:
