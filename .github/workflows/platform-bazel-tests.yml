@@ -177,9 +177,9 @@ jobs:
           path: ${{ runner.temp }}/bazel-execution-logs
           if-no-files-found: ignore
 
-      # Share restored repository data, with one cache writer per platform.
+      # Main/manual runs use one cache writer per platform; PRs/tags restore only.
       - name: Save bazel repository cache
-        if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true' && (inputs.test_partition == 'all' || inputs.test_partition == 'rest')
+        if: always() && !cancelled() && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && steps.prepare_bazel.outputs.repository-cache-hit != 'true' && (inputs.test_partition == 'all' || inputs.test_partition == 'rest')
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
