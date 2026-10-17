@@ -9,6 +9,14 @@ on:
       target:
         required: true
         type: string
+      test_partition:
+        required: false
+        default: all
+        type: string
+      cache_test_results:
+        required: false
+        default: true
+        type: boolean
       test_suite:
         required: false
         default: full
@@ -16,7 +24,7 @@ on:
 
 jobs:
   test:
-    name: Bazel tests on ${{ inputs.target }}
+    name: Bazel tests on ${{ inputs.target }} (${{ inputs.test_partition }})
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 120
     environment:
@@ -35,14 +43,14 @@ jobs:
           cache-scope: bazel-${{ github.job }}
 
       - name: Check rusty_v8 MODULE.bazel checksums
-        if: inputs.runner == 'ubuntu-24.04' && inputs.target == 'x86_64-unknown-linux-gnu'
+        if: inputs.runner == 'ubuntu-24.04' && inputs.target == 'x86_64-unknown-linux-gnu' && (inputs.test_partition == 'all' || inputs.test_partition == 'rest')
         shell: bash
         run: |
           python3 .github/scripts/rusty_v8_bazel.py check-module-bazel
           just test-github-scripts
 
       - name: Check MODULE.bazel.lock is up to date
-        if: inputs.runner == 'ubuntu-24.04' && inputs.target == 'x86_64-unknown-linux-gnu'
+        if: inputs.runner == 'ubuntu-24.04' && inputs.target == 'x86_64-unknown-linux-gnu' && (inputs.test_partition == 'all' || inputs.test_partition == 'rest')
         shell: bash
         run: ./scripts/check-module-bazel-lock.sh
 
@@ -52,8 +60,14 @@ jobs:
           # Pilot only on x86_64 Linux; ARM64 retains automatic allocation.
           CODEX_BUILDBUDDY_RESOURCE_PROFILE: ${{ inputs.target == 'x86_64-unknown-linux-gnu' && vars.CODEX_BUILDBUDDY_RESOURCE_PROFILE || 'auto' }}
           TEST_SUITE: ${{ inputs.test_suite }}
+          TEST_PARTITION: ${{ inputs.test_partition }}
+          CACHE_TEST_RESULTS: ${{ inputs.cache_test_results && 'auto' || 'no' }}
         shell: bash
         run: |
+          if [[ "$TEST_SUITE" != full && "$TEST_PARTITION" != all ]]; then
+            echo 'Only the full suite supports package partitions' >&2
+            exit 1
+          fi
           case "$TEST_SUITE" in
             pr)
               bazel_targets=(
@@ -64,10 +78,25 @@ jobs:
               )
               ;;
             full)
-              bazel_targets=(
-                //...
-                # Standalone V8 library targets stay out of ordinary Bazel CI.
-                # V8 consumers under `//codex-rs/...` participate transitively.
+              # These package subtrees are disjoint; rest is their complement.
+              # Keep Bazel's wildcard/manual-target semantics in every group.
+              execution_targets=(//codex-rs/exec-server/... //codex-rs/exec/... //codex-rs/code-mode-host/...)
+              extension_targets=(//codex-rs/ext/... //codex-rs/rmcp-client/...)
+              case "$TEST_PARTITION" in
+                all) bazel_targets=(//...) ;;
+                cli) bazel_targets=(//codex-rs/cli/...) ;;
+                execution) bazel_targets=("${execution_targets[@]}") ;;
+                extensions) bazel_targets=("${extension_targets[@]}") ;;
+                rest)
+                  bazel_targets=(//... -//codex-rs/cli/...)
+                  for target in "${execution_targets[@]}" "${extension_targets[@]}"; do
+                    bazel_targets+=("-$target")
+                  done
+                  ;;
+                *) echo "Unknown test partition: $TEST_PARTITION" >&2; exit 1 ;;
+              esac
+              # Retain the original full-suite exclusions in every partition.
+              bazel_targets+=(
                 -//third_party/v8:all
                 -//codex-rs/v8-poc:v8-poc-unit-tests
               )
@@ -79,6 +108,7 @@ jobs:
             --print-failed-test-logs \
             -- \
             test \
+            "--cache_test_results=${CACHE_TEST_RESULTS}" \
             --test_tag_filters=-argument-comment-lint \
             --test_env=RUST_TEST_THREADS=1 \
             --test_verbose_timeout_warnings \
@@ -91,12 +121,13 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: bazel-execution-logs-test-${{ inputs.target }}
+          name: bazel-execution-logs-test-${{ inputs.target }}-${{ inputs.test_partition }}
           path: ${{ runner.temp }}/bazel-execution-logs
           if-no-files-found: ignore
 
+      # Share restored repository data, with one cache writer per platform.
       - name: Save bazel repository cache
-        if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
+        if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true' && (inputs.test_partition == 'all' || inputs.test_partition == 'rest')
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
