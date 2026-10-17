@@ -14,7 +14,15 @@ on:
         required: true
         default: x86_64-unknown-linux-musl
         type: choice
-        options: [x86_64-unknown-linux-gnu, x86_64-unknown-linux-musl, aarch64-unknown-linux-gnu, aarch64-unknown-linux-musl, aarch64-apple-darwin, x86_64-apple-darwin]
+        options:
+          [
+            x86_64-unknown-linux-gnu,
+            x86_64-unknown-linux-musl,
+            aarch64-unknown-linux-gnu,
+            aarch64-unknown-linux-musl,
+            aarch64-apple-darwin,
+            x86_64-apple-darwin,
+          ]
       test_suite:
         description: Test coverage
         required: true
