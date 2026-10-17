@@ -4,6 +4,12 @@ name: Windows release smoke
 on:
   workflow_call:
   workflow_dispatch:
+  # Release tags can restore default-branch caches, but not another tag's cache.
+  push:
+    branches: [main]
+    paths:
+      - codex-rs/**
+      - .github/workflows/windows-release-smoke.yml
   pull_request:
     paths:
       - codex-rs/workflows/**
@@ -44,6 +50,25 @@ jobs:
         with:
           tool: nextest
           version: 0.9.103
+
+      # The cache action accepts targets relative to workspace roots. Alias the
+      # source onto the Dev Drive while retaining Cargo's existing target path.
+      - name: Configure Cargo cache workspace
+        id: cargo_cache_workspace
+        continue-on-error: true
+        shell: pwsh
+        run: New-Item -ItemType Junction -Path "$env:CI_BUILD_ROOT/cargo-cache-workspace" -Target $env:GITHUB_WORKSPACE | Out-Null
+
+      - name: Cache Cargo dependencies
+        if: steps.cargo_cache_workspace.outcome == 'success'
+        continue-on-error: true
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: windows-smoke-deps-v1
+          shared-key: ${{ matrix.target }}
+          workspaces: ${{ env.CI_BUILD_ROOT }}/cargo-cache-workspace/codex-rs -> ../../cargo-target
+          cache-bin: "false"
+          save-if: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
       - name: Test Windows sandbox and protocol crates
         shell: bash

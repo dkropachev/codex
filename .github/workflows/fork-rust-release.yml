@@ -36,7 +36,10 @@ env:
   CODEX_ZSH_MANIFEST_SHA256: c534eab89dcea7e3d8a5e5b3f49c025c7c64cd4e4d9814ee24871de58a9359a1
 
 concurrency:
-  group: fork-rust-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  # Only release/backfill operations share a publication lock. Dry-runs retain
+  # run-scoped artifacts and can validate concurrently with a live release.
+  group: >-
+    fork-rust-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'dry-run' && format('-dry-run-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
 jobs:
@@ -258,15 +261,13 @@ jobs:
         run: echo 'Manual dry-runs and backfills do not create a release.'
 
   build:
-    needs:
-      - validate
-      - prepare-release
-    if: ${{ always() && needs.validate.result == 'success' && needs.prepare-release.result == 'success' }}
+    # Compile while checks run; release uploads still wait for every gate.
+    needs: validate
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     permissions:
-      contents: write
+      contents: read
     defaults:
       run:
         working-directory: codex-rs
@@ -301,6 +302,69 @@ jobs:
         with:
           target: ${{ matrix.target }}
           version: ${{ needs.validate.outputs.version }}
+
+      - name: Record verified package digests
+        shell: bash
+        working-directory: dist/${{ matrix.target }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          target = os.environ["TARGET"]
+          names = (f"codex-package-{target}.tar.gz", f"codex-code-mode-host-{target}")
+          with Path("SHA256SUMS").open("w") as checksums:
+              for name in names:
+                  digest = hashlib.sha256(Path(name).read_bytes()).hexdigest()
+                  checksums.write(f"{digest}  {name}\n")
+          PY
+
+      - name: Retain verified packages
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: fork-release-verified-${{ matrix.target }}
+          path: |
+            dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz
+            dist/${{ matrix.target }}/codex-code-mode-host-${{ matrix.target }}
+            dist/${{ matrix.target }}/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+
+  upload:
+    name: Stage ${{ matrix.target }}
+    needs:
+      - validate
+      - build
+      - prepare-release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.validate.outputs.tag_commit }}
+          persist-credentials: false
+
+      - name: Download verified packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fork-release-verified-${{ matrix.target }}
+          path: dist/${{ matrix.target }}/
+
+      - name: Verify downloaded package digests
+        working-directory: dist/${{ matrix.target }}
+        run: sha256sum --check SHA256SUMS
 
       - name: Upload package and code-mode host to the release
         if: ${{ needs.validate.outputs.mode != 'dry-run' }}
@@ -406,7 +470,7 @@ jobs:
   finalize:
     needs:
       - validate
-      - build
+      - upload
     if: ${{ needs.validate.outputs.mode != 'dry-run' }}
     runs-on: ubuntu-24.04
     permissions:

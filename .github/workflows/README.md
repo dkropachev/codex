@@ -5,6 +5,8 @@ checks. Stable release tags run the broader platform checks before publication.
 
 ## Pull Requests
 
+- New PR commits cancel superseded `blocking-ci` runs, including obsolete result
+  jobs. Every push to `main` keeps its own validation run.
 - Required checks run against GitHub's synthetic merge commit, not the pull
   request head alone. This includes changes already on `main` and catches
   conflicts before they reach the branch.
@@ -44,6 +46,13 @@ not create or publish a GitHub Release.
   release draft is created.
 - The Windows hosted-runner suite omits sandbox subprocess tests that need a
   separately provisioned sandbox account and PowerShell module installation.
+- Native Windows smoke tests also run on `main` after Rust or workflow changes
+  to populate Cargo caches that release tags can restore. Keys depend on the
+  target, lockfile, toolchain, and Rust build settings, so source-only commits
+  reuse an existing key. Cargo revalidates restored build inputs. Tag runs
+  restore caches without uploading tag-scoped entries that later tags cannot use.
+  Dependency caches omit workspace build outputs and extracted registry sources
+  to reduce archive size and restore work.
 - Manual package dry-runs and historical backfills retain their package
   validation without running release CI against the default branch.
 
@@ -54,6 +63,9 @@ not create or publish a GitHub Release.
 create a GitHub Release first. A tag push creates an
 unpublished draft, builds and verifies the four supported Unix packages, and
 publishes the draft as the latest release only after every package succeeds.
+Package compilation starts after tag validation, alongside release checks.
+Verified packages pass through workflow artifacts; release creation and asset
+uploads wait for the checks, and publication waits for all uploads.
 The previous out-of-repository source-only release publisher must therefore be
 disabled before the first managed tag is pushed.
 
