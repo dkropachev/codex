@@ -2,6 +2,13 @@ name: pre-release-ci
 
 # Run the same validation that gates stable release tags when a PR opts in.
 on:
+  workflow_dispatch:
+    inputs:
+      uncached_tests:
+        description: Execute every test instead of reusing test results
+        required: false
+        default: true
+        type: boolean
   pull_request:
     types: [opened, reopened, synchronize, labeled, unlabeled]
 
@@ -10,37 +17,39 @@ permissions:
 
 jobs:
   bazel:
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'pre-release-ci') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'pre-release-ci')) }}
     uses: ./.github/workflows/bazel.yml
+    with:
+      uncached_tests: ${{ github.event_name == 'workflow_dispatch' && inputs.uncached_tests }}
     secrets: inherit
 
   cargo-deny:
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'pre-release-ci') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'pre-release-ci')) }}
     uses: ./.github/workflows/cargo-deny.yml
     secrets: inherit
 
   codespell:
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'pre-release-ci') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'pre-release-ci')) }}
     uses: ./.github/workflows/codespell.yml
     secrets: inherit
 
   repo-checks:
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'pre-release-ci') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'pre-release-ci')) }}
     uses: ./.github/workflows/repo-checks.yml
     secrets: inherit
 
   sdk:
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'pre-release-ci') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'pre-release-ci')) }}
     uses: ./.github/workflows/sdk.yml
     secrets: inherit
 
   windows-smoke-tests:
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'pre-release-ci') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'pre-release-ci')) }}
     uses: ./.github/workflows/windows-release-smoke.yml
     secrets: inherit
 
   packages:
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'pre-release-ci') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'pre-release-ci')) }}
     name: Package ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
@@ -100,7 +109,7 @@ jobs:
       - sdk
       - windows-smoke-tests
       - packages
-    if: ${{ always() && contains(github.event.pull_request.labels.*.name, 'pre-release-ci') }}
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'pre-release-ci')) }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
