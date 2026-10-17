@@ -60,7 +60,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ${{ steps.setup_ci.outputs.cargo-target-dir }}
-          key: windows-smoke-v1-${{ matrix.target }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml', '.github/workflows/windows-release-smoke.yml') }}-${{ github.sha }}
+          key: windows-smoke-v1-${{ matrix.target }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml', '.github/workflows/windows-release-smoke.yml') }}
           restore-keys: |
             windows-smoke-v1-${{ matrix.target }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml', '.github/workflows/windows-release-smoke.yml') }}-
             windows-smoke-v1-${{ matrix.target }}-
@@ -87,7 +87,7 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
       - name: Save Cargo cache
-        if: success() && steps.cargo_cache.outputs.cache-hit != 'true'
+        if: success() && !startsWith(github.ref, 'refs/tags/') && steps.cargo_cache.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
