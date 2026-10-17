@@ -1,4 +1,7 @@
 name: Bazel test platform
+run-name: >-
+  Bazel ${{ inputs.target }} on ${{ inputs.runner }}
+  (${{ inputs.local_test_jobs }} local tests, ${{ inputs.cache_test_results && 'cached' || 'uncached' }} results)
 
 on:
   workflow_dispatch:
@@ -27,6 +30,16 @@ on:
         default: full
         type: choice
         options: [full, pr]
+      local_test_jobs:
+        description: Maximum concurrent local test actions
+        required: true
+        default: 8
+        type: number
+      cache_test_results:
+        description: Reuse cached test results (disable for timing comparisons)
+        required: true
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       runner:
@@ -39,6 +52,14 @@ on:
         required: false
         default: full
         type: string
+      local_test_jobs:
+        required: false
+        default: 8
+        type: number
+      cache_test_results:
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   test:
@@ -78,6 +99,8 @@ jobs:
           # Pilot only on x86_64 Linux; ARM64 retains automatic allocation.
           CODEX_BUILDBUDDY_RESOURCE_PROFILE: ${{ inputs.target == 'x86_64-unknown-linux-gnu' && vars.CODEX_BUILDBUDDY_RESOURCE_PROFILE || 'auto' }}
           TEST_SUITE: ${{ inputs.test_suite }}
+          LOCAL_TEST_JOBS: ${{ inputs.local_test_jobs }}
+          CACHE_TEST_RESULTS: ${{ inputs.cache_test_results && 'yes' || 'no' }}
         shell: bash
         run: |
           case "$TEST_SUITE" in
@@ -105,7 +128,8 @@ jobs:
             --print-failed-test-logs \
             -- \
             test \
-            --local_test_jobs=8 \
+            "--local_test_jobs=${LOCAL_TEST_JOBS}" \
+            "--cache_test_results=${CACHE_TEST_RESULTS}" \
             --test_tag_filters=-argument-comment-lint \
             --test_env=RUST_TEST_THREADS=1 \
             --test_verbose_timeout_warnings \
