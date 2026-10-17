@@ -5,7 +5,7 @@ inputs:
     description: Target triple used for setup and cache namespacing.
     required: true
   cache-scope:
-    description: Logical namespace used to keep concurrent Bazel jobs from reserving the same repository cache key.
+    description: Legacy job namespace used to restore caches created before sharing.
     required: true
 outputs:
   repository-cache-path:
@@ -35,9 +35,13 @@ runs:
         TARGET: ${{ inputs.target }}
         CACHE_HASH: ${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
       run: |
-        echo "repository-cache-key=bazel-cache-${CACHE_SCOPE}-${TARGET}-${CACHE_HASH}" >> "${GITHUB_OUTPUT}"
-        echo "repository-cache-restore-key=bazel-cache-${CACHE_SCOPE}-${TARGET}-" >> "${GITHUB_OUTPUT}"
+        echo "repository-cache-key=bazel-repository-v2-${RUNNER_OS}-${RUNNER_ARCH}-${TARGET}-${CACHE_HASH}" >> "${GITHUB_OUTPUT}"
+        echo "repository-cache-restore-key=bazel-repository-v2-${RUNNER_OS}-${RUNNER_ARCH}-${TARGET}-" >> "${GITHUB_OUTPUT}"
+        echo "repository-cache-legacy-key=bazel-cache-${CACHE_SCOPE}-${TARGET}-" >> "${GITHUB_OUTPUT}"
 
+    # Repository downloads are content-addressed and can be shared by tests,
+    # clippy, SDK builds, and release verification for the same host/target.
+    # Concurrent misses may race to save; existing non-fatal save steps handle it.
     # Restore the Bazel repository cache explicitly so external dependencies
     # do not need to be re-downloaded on every CI run. Keep restore failures
     # non-fatal so transient cache-service errors degrade to a cold build
@@ -51,6 +55,7 @@ runs:
         key: ${{ steps.cache_bazel_repository_key.outputs.repository-cache-key }}
         restore-keys: |
           ${{ steps.cache_bazel_repository_key.outputs.repository-cache-restore-key }}
+          ${{ steps.cache_bazel_repository_key.outputs.repository-cache-legacy-key }}
 
     - name: Set up Bazel execution logs
       shell: bash

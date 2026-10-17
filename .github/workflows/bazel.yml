@@ -79,9 +79,9 @@ jobs:
     with:
       runner: ${{ matrix.runner }}
       target: ${{ matrix.target }}
-      local_test_jobs: ${{ matrix.local_test_jobs || 2 }}
       test_partition: ${{ matrix.partition || 'all' }}
       cache_test_results: ${{ !inputs.uncached_tests }}
+      local_test_jobs: ${{ matrix.local_test_jobs || 2 }}
     secrets: inherit
 
   clippy:
@@ -146,10 +146,10 @@ jobs:
           path: ${{ runner.temp }}/bazel-execution-logs
           if-no-files-found: ignore
 
-      # Save the job-scoped Bazel repository cache after cache misses. Keep the
-      # upload non-fatal so cache service issues never fail the job itself.
+      # Main and explicit benchmarks populate shared dependency archives.
+      # Keep PRs/tags restore-only and cache uploads non-fatal.
       - name: Save bazel repository cache
-        if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
+        if: always() && !cancelled() && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
@@ -246,10 +246,10 @@ jobs:
           path: ${{ runner.temp }}/bazel-execution-logs
           if-no-files-found: ignore
 
-      # Save the job-scoped Bazel repository cache after cache misses. Keep the
-      # upload non-fatal so cache service issues never fail the job itself.
+      # Main and explicit benchmarks populate shared dependency archives.
+      # Keep PRs/tags restore-only and cache uploads non-fatal.
       - name: Save bazel repository cache
-        if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
+        if: always() && !cancelled() && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
