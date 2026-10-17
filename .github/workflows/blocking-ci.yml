@@ -7,6 +7,11 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  # Retain every main revision, but only validate the latest revision of a PR.
+  group: blocking-ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('main-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Keep reusable workflow calls alphabetized. The `required` job below is the
   # version-controlled list that the main-branch ruleset should require.
@@ -42,7 +47,7 @@ jobs:
     name: CI required
     # Without `always()`, GitHub skips this job after a failed dependency and a
     # required check can appear successful instead of reporting the failure.
-    if: ${{ always() }}
+    if: ${{ always() && !cancelled() }}
     needs:
       - blob-size-policy
       - linux-arm64-tests

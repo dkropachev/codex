@@ -5,6 +5,8 @@ checks. Stable release tags run the broader platform checks before publication.
 
 ## Pull Requests
 
+- New PR commits cancel superseded `blocking-ci` runs, including obsolete result
+  jobs. Every push to `main` keeps its own validation run.
 - Required checks run against GitHub's synthetic merge commit, not the pull
   request head alone. This includes changes already on `main` and catches
   conflicts before they reach the branch.
