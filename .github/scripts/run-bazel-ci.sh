@@ -328,7 +328,7 @@ if [[ "${RUNNER_OS:-}" == "macOS" ]]; then
   # config's --jobs=800 can exhaust
   # those limits during analysis or local test execution. Keep remote build
   # throughput while bounding the test processes that execute on the runner.
-  post_config_bazel_args+=(--jobs=40 --local_test_jobs=2)
+  post_config_bazel_args+=(--jobs=40)
 fi
 
 if [[ "${RUNNER_OS:-}" == "Linux" && "${bazel_args[0]}" == "test" ]]; then
@@ -339,9 +339,21 @@ if [[ "${RUNNER_OS:-}" == "Linux" && "${bazel_args[0]}" == "test" ]]; then
   post_config_bazel_args+=(
     --jobs=80
     --strategy=TestRunner=local
-    --local_test_jobs=2
     --test_env=RUST_TEST_THREADS=1
   )
+fi
+
+if [[ "${RUNNER_OS:-}" == "macOS" || ( "${RUNNER_OS:-}" == "Linux" && "${bazel_args[0]}" == "test" ) ]]; then
+  has_local_test_jobs_override=0
+  for arg in "${bazel_args[@]}"; do
+    if [[ "$arg" == --local_test_jobs || "$arg" == --local_test_jobs=* ]]; then
+      has_local_test_jobs_override=1
+      break
+    fi
+  done
+  if [[ $has_local_test_jobs_override -eq 0 ]]; then
+    post_config_bazel_args+=(--local_test_jobs=2)
+  fi
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
