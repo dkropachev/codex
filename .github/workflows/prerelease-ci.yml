@@ -49,6 +49,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_LTO: "false"
       CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
       CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: "off"
       CODEX_ZSH_MANIFEST_URL: https://github.com/openai/codex/releases/download/codex-zsh-v0.1.0/codex-zsh
