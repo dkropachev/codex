@@ -77,6 +77,18 @@ runs:
       with:
         target: ${{ inputs.target }}
 
+    # Cache dependencies after toolchain, native tools, and V8 are configured.
+    # Workspace outputs stay excluded so each source revision is rebuilt.
+    - name: Cache release Cargo dependencies
+      continue-on-error: true
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        prefix-key: fork-release-deps-v1
+        shared-key: ${{ inputs.target }}-${{ hashFiles('.github/actions/build-fork-release/action.yml', '.github/actions/setup-rusty-v8/action.yml', '.github/scripts/install-musl-build-tools.sh', 'third_party/v8/*_release_manifests.sha256') }}
+        workspaces: codex-rs -> target
+        cache-bin: "false"
+        save-if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
     - name: Record source lockfile
       shell: bash
       working-directory: ${{ github.workspace }}/codex-rs

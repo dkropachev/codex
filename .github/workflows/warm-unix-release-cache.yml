@@ -1,0 +1,70 @@
+name: Warm Unix release dependencies
+
+# Default-branch caches are visible to release tags. Rebuild only when cache
+# inputs change; source-only commits can reuse the existing dependency cache.
+on:
+  push:
+    branches: [main]
+    paths:
+      - codex-rs/Cargo.toml
+      - codex-rs/**/Cargo.toml
+      - codex-rs/Cargo.lock
+      - codex-rs/rust-toolchain.toml
+      - .github/actions/build-fork-release/**
+      - .github/actions/setup-rusty-v8/**
+      - .github/scripts/install-musl-build-tools.sh
+      - .github/workflows/warm-unix-release-cache.yml
+      - third_party/v8/*_release_manifests.sha256
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warm-unix-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  warm:
+    name: Cache ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    env:
+      CODEX_REPO_ROOT: ${{ github.workspace }}
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
+      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: "off"
+      CODEX_ZSH_MANIFEST_URL: https://github.com/openai/codex/releases/download/codex-zsh-v0.1.0/codex-zsh
+      CODEX_ZSH_MANIFEST_SHA256: c534eab89dcea7e3d8a5e5b3f49c025c7c64cd4e4d9814ee24871de58a9359a1
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Read package version
+        id: version
+        shell: bash
+        run: |
+          version="$(sed -nE 's/^version = "([^"]+)"/\1/p' codex-rs/Cargo.toml | head -n 1)"
+          [[ -n "$version" ]] || { echo "Package version is missing" >&2; exit 1; }
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/build-fork-release
+        with:
+          target: ${{ matrix.target }}
+          version: ${{ steps.version.outputs.version }}
