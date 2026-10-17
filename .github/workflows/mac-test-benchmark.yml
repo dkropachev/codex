@@ -1,0 +1,50 @@
+name: Mac test partition benchmark
+run-name: Mac tests ${{ inputs.mode }}
+
+on:
+  # Register this new manual workflow before merging its experiment PR.
+  pull_request:
+    paths: [.github/workflows/mac-test-benchmark.yml]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Full suite on one runner or three disjoint groups per architecture
+        required: true
+        default: all
+        type: choice
+        options: [all, partitioned]
+
+permissions:
+  contents: read
+
+jobs:
+  all:
+    if: inputs.mode == 'all'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    uses: ./.github/workflows/platform-bazel-tests.yml
+    with:
+      runner: macos-15
+      target: ${{ matrix.target }}
+      test_partition: all
+      local_test_jobs: 2
+      cache_test_results: false
+    secrets: inherit
+
+  partitioned:
+    if: inputs.mode == 'partitioned'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+        partition: [core, app-server, mac-rest]
+    uses: ./.github/workflows/platform-bazel-tests.yml
+    with:
+      runner: macos-15
+      target: ${{ matrix.target }}
+      test_partition: ${{ matrix.partition }}
+      local_test_jobs: 2
+      cache_test_results: false
+    secrets: inherit

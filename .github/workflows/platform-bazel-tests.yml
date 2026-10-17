@@ -34,7 +34,7 @@ on:
         required: true
         default: rest
         type: choice
-        options: [all, cli, execution, extensions, core, app-server, rest]
+        options: [all, cli, execution, extensions, core, app-server, rest, mac-rest]
       local_test_jobs:
         description: Concurrent local test processes
         required: false
@@ -138,6 +138,9 @@ jobs:
                 extensions) bazel_targets=("${extension_targets[@]}") ;;
                 core) bazel_targets=(//codex-rs/core/...) ;;
                 app-server) bazel_targets=(//codex-rs/app-server/...) ;;
+                mac-rest)
+                  bazel_targets=(//... -//codex-rs/core/... -//codex-rs/app-server/...)
+                  ;;
                 rest)
                   bazel_targets=(//... -//codex-rs/cli/... -//codex-rs/core/... -//codex-rs/app-server/...)
                   for target in "${execution_targets[@]}" "${extension_targets[@]}"; do
@@ -179,7 +182,7 @@ jobs:
 
       # Main/manual runs use one cache writer per platform; PRs/tags restore only.
       - name: Save bazel repository cache
-        if: always() && !cancelled() && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && steps.prepare_bazel.outputs.repository-cache-hit != 'true' && (inputs.test_partition == 'all' || inputs.test_partition == 'rest')
+        if: always() && !cancelled() && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && steps.prepare_bazel.outputs.repository-cache-hit != 'true' && (inputs.test_partition == 'all' || inputs.test_partition == 'rest' || inputs.test_partition == 'mac-rest')
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
