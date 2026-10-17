@@ -336,6 +336,7 @@ jobs:
 
   upload:
     name: Stage ${{ matrix.target }}
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.build.result == 'success' && needs.prepare-release.result == 'success' }}
     needs:
       - validate
       - build
@@ -472,7 +473,7 @@ jobs:
     needs:
       - validate
       - upload
-    if: ${{ needs.validate.outputs.mode != 'dry-run' }}
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.upload.result == 'success' && needs.validate.outputs.mode != 'dry-run' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
