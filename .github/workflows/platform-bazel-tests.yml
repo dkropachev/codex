@@ -100,7 +100,7 @@ jobs:
           CODEX_BUILDBUDDY_RESOURCE_PROFILE: ${{ inputs.target == 'x86_64-unknown-linux-gnu' && vars.CODEX_BUILDBUDDY_RESOURCE_PROFILE || 'auto' }}
           TEST_SUITE: ${{ inputs.test_suite }}
           LOCAL_TEST_JOBS: ${{ inputs.local_test_jobs }}
-          CACHE_TEST_RESULTS: ${{ inputs.cache_test_results && 'yes' || 'no' }}
+          CACHE_TEST_RESULTS: ${{ inputs.cache_test_results && 'auto' || 'no' }}
         shell: bash
         run: |
           case "$TEST_SUITE" in
