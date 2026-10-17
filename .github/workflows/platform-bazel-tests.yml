@@ -1,108 +1,93 @@
-name: Bazel test platform
-
-on:
-  workflow_call:
+name: Mac release LTO package comparison
+run-name: 'Mac package LTO comparison: ${{ inputs.target }}'
+'on':
+  workflow_dispatch:
     inputs:
-      runner:
-        required: true
-        type: string
       target:
+        type: choice
         required: true
-        type: string
-      test_suite:
-        required: false
-        default: full
-        type: string
-
+        default: aarch64-apple-darwin
+        options:
+        - aarch64-apple-darwin
+        - x86_64-apple-darwin
+permissions:
+  contents: read
+  actions: read
 jobs:
-  test:
-    name: Bazel tests on ${{ inputs.target }}
-    runs-on: ${{ inputs.runner }}
-    timeout-minutes: 120
-    environment:
-      name: bazel
-      deployment: false
+  benchmark:
+    runs-on: ${{ inputs.target == 'aarch64-apple-darwin' && 'macos-15' || 'macos-15-intel' }}
+    timeout-minutes: 20
+    env:
+      TARGET: ${{ inputs.target }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        persist-credentials: false
+    - name: Set benchmark directory
+      shell: bash
+      run: echo "BENCH_ROOT=$RUNNER_TEMP/release-lto-benchmark" >> "$GITHUB_ENV"
+    - name: Read and verify baseline package
+      env:
+        GH_TOKEN: ${{ github.token }}
+      shell: bash
+      run: 'mkdir -p "$BENCH_ROOT/baseline" "$BENCH_ROOT/candidate"
 
-      - name: Prepare Bazel CI
-        id: prepare_bazel
-        uses: ./.github/actions/prepare-bazel-ci
-        with:
-          target: ${{ inputs.target }}
-          cache-scope: bazel-${{ github.job }}
+        gh api "repos/$GITHUB_REPOSITORY/releases/tags/rust-v0.162.1" > "$BENCH_ROOT/baseline-release.json"
 
-      - name: Check rusty_v8 MODULE.bazel checksums
-        if: inputs.runner == 'ubuntu-24.04' && inputs.target == 'x86_64-unknown-linux-gnu'
-        shell: bash
-        run: |
-          python3 .github/scripts/rusty_v8_bazel.py check-module-bazel
-          just test-github-scripts
+        gh release download rust-v0.162.1 --repo "$GITHUB_REPOSITORY" --pattern "codex-package-$TARGET.tar.gz" --dir "$BENCH_ROOT/baseline"
 
-      - name: Check MODULE.bazel.lock is up to date
-        if: inputs.runner == 'ubuntu-24.04' && inputs.target == 'x86_64-unknown-linux-gnu'
-        shell: bash
-        run: ./scripts/check-module-bazel-lock.sh
+        python3 - <<''PY''
 
-      - name: Run Bazel tests
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
-          # Pilot only on x86_64 Linux; ARM64 retains automatic allocation.
-          CODEX_BUILDBUDDY_RESOURCE_PROFILE: ${{ inputs.target == 'x86_64-unknown-linux-gnu' && vars.CODEX_BUILDBUDDY_RESOURCE_PROFILE || 'auto' }}
-          TEST_SUITE: ${{ inputs.test_suite }}
-        shell: bash
-        run: |
-          case "$TEST_SUITE" in
-            pr)
-              bazel_targets=(
-                //codex-rs/core:core-all-test
-                //codex-rs/tui:tui-unit-tests
-                //codex-rs/protocol:protocol-unit-tests
-                //codex-rs/app-server-protocol:app-server-protocol-unit-tests
-              )
-              ;;
-            full)
-              bazel_targets=(
-                //...
-                # Standalone V8 library targets stay out of ordinary Bazel CI.
-                # V8 consumers under `//codex-rs/...` participate transitively.
-                -//third_party/v8:all
-                -//codex-rs/v8-poc:v8-poc-unit-tests
-              )
-              ;;
-            *) echo "Unknown test suite: $TEST_SUITE" >&2; exit 1 ;;
-          esac
-          ./.github/scripts/run-bazel-ci.sh \
-            --print-failed-action-summary \
-            --print-failed-test-logs \
-            -- \
-            test \
-            --test_tag_filters=-argument-comment-lint \
-            --test_env=RUST_TEST_THREADS=1 \
-            --test_verbose_timeout_warnings \
-            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
-            -- \
-            "${bazel_targets[@]}"
+        import hashlib
 
-      - name: Upload Bazel execution logs
-        if: always() && !cancelled()
-        continue-on-error: true
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: bazel-execution-logs-test-${{ inputs.target }}
-          path: ${{ runner.temp }}/bazel-execution-logs
-          if-no-files-found: ignore
+        import json
 
-      - name: Save bazel repository cache
-        if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
-        continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
-          key: ${{ steps.prepare_bazel.outputs.repository-cache-key }}
+        import os
 
-      - name: Check for a clean worktree
-        if: always() && !cancelled()
-        uses: ./.github/actions/check-clean-worktree
+        from pathlib import Path
+
+        root = Path(os.environ["BENCH_ROOT"])
+
+        name = f"codex-package-{os.environ[''TARGET'']}.tar.gz"
+
+        assets = json.loads((root / "baseline-release.json").read_text())["assets"]
+
+        asset = next(item for item in assets if item["name"] == name)
+
+        actual = "sha256:" + hashlib.sha256((root / "baseline" / name).read_bytes()).hexdigest()
+
+        assert actual == asset["digest"], (actual, asset["digest"])
+
+        print("Baseline release package digest verified")
+
+        PY
+
+        '
+    - name: Download candidate verified packages
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      with:
+        name: fork-release-verified-${{ inputs.target }}
+        path: ${{ env.BENCH_ROOT }}/candidate
+        run-id: 38991628239
+        github-token: ${{ github.token }}
+    - name: Verify candidate and compare both packages
+      shell: bash
+      working-directory: ${{ env.BENCH_ROOT }}/candidate
+      run: 'shasum -a 256 --check SHA256SUMS
+
+        mkdir -p "$BENCH_ROOT/baseline/unpacked" "$BENCH_ROOT/candidate/unpacked"
+
+        tar -xzf "$BENCH_ROOT/baseline/codex-package-$TARGET.tar.gz" -C "$BENCH_ROOT/baseline/unpacked"
+
+        tar -xzf "codex-package-$TARGET.tar.gz" -C "$BENCH_ROOT/candidate/unpacked"
+
+        python3 "$GITHUB_WORKSPACE/.github/scripts/benchmark_packages.py" --baseline "$BENCH_ROOT/baseline/unpacked" --candidate
+        "$BENCH_ROOT/candidate/unpacked" --samples 12 --output "$BENCH_ROOT/comparison.json"
+
+        '
+    - name: Retain comparison samples
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+      with:
+        name: mac-lto-comparison-${{ inputs.target }}
+        path: ${{ env.BENCH_ROOT }}/comparison.json
+        if-no-files-found: error
