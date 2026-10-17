@@ -44,6 +44,11 @@ not create or publish a GitHub Release.
   release draft is created.
 - The Windows hosted-runner suite omits sandbox subprocess tests that need a
   separately provisioned sandbox account and PowerShell module installation.
+- Native Windows smoke tests also run on `main` after Rust or workflow changes
+  to populate Cargo caches that release tags can restore. Keys depend on the
+  target, lockfile, toolchain, and workflow settings, so source-only commits
+  reuse an existing key. Cargo revalidates restored build inputs. Tag runs
+  restore caches without uploading tag-scoped entries that later tags cannot use.
 - Manual package dry-runs and historical backfills retain their package
   validation without running release CI against the default branch.
 
