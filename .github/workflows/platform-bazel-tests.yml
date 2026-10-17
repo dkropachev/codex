@@ -40,6 +40,15 @@ on:
         required: true
         default: false
         type: boolean
+      test_targets:
+        description: Optional newline-separated Bazel targets overriding the suite
+        required: false
+        type: string
+      test_runs:
+        description: Runs per target for repeatability checks
+        required: true
+        default: 1
+        type: number
   workflow_call:
     inputs:
       runner:
@@ -60,6 +69,14 @@ on:
         required: false
         default: true
         type: boolean
+      test_targets:
+        required: false
+        default: ""
+        type: string
+      test_runs:
+        required: false
+        default: 1
+        type: number
 
 jobs:
   test:
@@ -101,6 +118,8 @@ jobs:
           TEST_SUITE: ${{ inputs.test_suite }}
           LOCAL_TEST_JOBS: ${{ inputs.local_test_jobs }}
           CACHE_TEST_RESULTS: ${{ inputs.cache_test_results && 'auto' || 'no' }}
+          TEST_TARGETS: ${{ inputs.test_targets }}
+          TEST_RUNS: ${{ inputs.test_runs }}
         shell: bash
         run: |
           case "$TEST_SUITE" in
@@ -123,6 +142,14 @@ jobs:
               ;;
             *) echo "Unknown test suite: $TEST_SUITE" >&2; exit 1 ;;
           esac
+          if [[ -n "$TEST_TARGETS" ]]; then
+            bazel_targets=()
+            while IFS= read -r target; do
+              if [[ -n "$target" ]]; then
+                bazel_targets+=("$target")
+              fi
+            done <<< "$TEST_TARGETS"
+          fi
           ./.github/scripts/run-bazel-ci.sh \
             --print-failed-action-summary \
             --print-failed-test-logs \
@@ -130,6 +157,7 @@ jobs:
             test \
             "--local_test_jobs=${LOCAL_TEST_JOBS}" \
             "--cache_test_results=${CACHE_TEST_RESULTS}" \
+            "--runs_per_test=${TEST_RUNS}" \
             --test_tag_filters=-argument-comment-lint \
             --test_env=RUST_TEST_THREADS=1 \
             --test_verbose_timeout_warnings \
