@@ -1,6 +1,37 @@
 name: Bazel test platform
 
 on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Hosted runner matching the selected target
+        required: true
+        default: ubuntu-24.04
+        type: choice
+        options: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+      target:
+        description: Rust target triple
+        required: true
+        default: x86_64-unknown-linux-musl
+        type: choice
+        options: [x86_64-unknown-linux-gnu, x86_64-unknown-linux-musl, aarch64-unknown-linux-gnu, aarch64-unknown-linux-musl, aarch64-apple-darwin, x86_64-apple-darwin]
+      test_suite:
+        description: Test coverage
+        required: true
+        default: full
+        type: choice
+        options: [full, pr]
+      test_partition:
+        description: Package group (use all with the PR suite)
+        required: true
+        default: rest
+        type: choice
+        options: [all, cli, execution, extensions, core, app-server, rest]
+      cache_test_results:
+        description: Reuse cached test results
+        required: true
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       runner:
@@ -87,8 +118,10 @@ jobs:
                 cli) bazel_targets=(//codex-rs/cli/...) ;;
                 execution) bazel_targets=("${execution_targets[@]}") ;;
                 extensions) bazel_targets=("${extension_targets[@]}") ;;
+                core) bazel_targets=(//codex-rs/core/...) ;;
+                app-server) bazel_targets=(//codex-rs/app-server/...) ;;
                 rest)
-                  bazel_targets=(//... -//codex-rs/cli/...)
+                  bazel_targets=(//... -//codex-rs/cli/... -//codex-rs/core/... -//codex-rs/app-server/...)
                   for target in "${execution_targets[@]}" "${extension_targets[@]}"; do
                     bazel_targets+=("-$target")
                   done
