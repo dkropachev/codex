@@ -6,6 +6,12 @@ name: Bazel
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      uncached_tests:
+        description: Execute every test instead of reusing test results
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   # Cancel previous actions from the same PR or branch except 'main' branch.
@@ -25,16 +31,52 @@ jobs:
             target: x86_64-apple-darwin
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+            partition: cli
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            partition: execution
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            partition: extensions
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            partition: core
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            partition: app-server
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            partition: rest
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
+            partition: cli
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            partition: execution
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            partition: extensions
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            partition: core
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            partition: app-server
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            partition: rest
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            local_test_jobs: 4
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
     uses: ./.github/workflows/platform-bazel-tests.yml
     with:
       runner: ${{ matrix.runner }}
       target: ${{ matrix.target }}
+      test_partition: ${{ matrix.partition || 'all' }}
+      cache_test_results: ${{ !inputs.uncached_tests }}
+      local_test_jobs: ${{ matrix.local_test_jobs || 2 }}
     secrets: inherit
 
   clippy:
