@@ -303,6 +303,23 @@ jobs:
           target: ${{ matrix.target }}
           version: ${{ needs.validate.outputs.version }}
 
+      - name: Record verified package digests
+        shell: bash
+        working-directory: dist/${{ matrix.target }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          target = os.environ["TARGET"]
+          names = (f"codex-package-{target}.tar.gz", f"codex-code-mode-host-{target}")
+          with Path("SHA256SUMS").open("w") as checksums:
+              for name in names:
+                  digest = hashlib.sha256(Path(name).read_bytes()).hexdigest()
+                  checksums.write(f"{digest}  {name}\n")
+          PY
+
       - name: Retain verified packages
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -310,6 +327,7 @@ jobs:
           path: |
             dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz
             dist/${{ matrix.target }}/codex-code-mode-host-${{ matrix.target }}
+            dist/${{ matrix.target }}/SHA256SUMS
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -343,6 +361,10 @@ jobs:
         with:
           name: fork-release-verified-${{ matrix.target }}
           path: dist/${{ matrix.target }}/
+
+      - name: Verify downloaded package digests
+        working-directory: dist/${{ matrix.target }}
+        run: sha256sum --check SHA256SUMS
 
       - name: Upload package and code-mode host to the release
         if: ${{ needs.validate.outputs.mode != 'dry-run' }}
