@@ -1,24 +1,21 @@
-name: Mac release LTO package comparison
-run-name: 'Mac package LTO comparison: ${{ inputs.target }}'
+name: Native Intel validation of ARM-built package
+run-name: Cross-built Intel package compatibility and runtime
 'on':
   workflow_dispatch:
     inputs:
-      target:
-        type: choice
+      candidate_run_id:
+        type: string
         required: true
-        default: aarch64-apple-darwin
-        options:
-        - aarch64-apple-darwin
-        - x86_64-apple-darwin
+        default: '39004013921'
 permissions:
   contents: read
   actions: read
 jobs:
   benchmark:
-    runs-on: ${{ inputs.target == 'aarch64-apple-darwin' && 'macos-15' || 'macos-15-intel' }}
+    runs-on: macos-15-intel
     timeout-minutes: 20
     env:
-      TARGET: ${{ inputs.target }}
+      TARGET: x86_64-apple-darwin
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       with:
@@ -66,9 +63,9 @@ jobs:
     - name: Download candidate verified packages
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
       with:
-        name: fork-release-verified-${{ inputs.target }}
+        name: fork-release-verified-x86_64-apple-darwin
         path: ${{ env.BENCH_ROOT }}/candidate
-        run-id: 38991628239
+        run-id: ${{ inputs.candidate_run_id }}
         github-token: ${{ github.token }}
     - name: Verify candidate and compare both packages
       shell: bash
@@ -81,6 +78,9 @@ jobs:
 
         tar -xzf "codex-package-$TARGET.tar.gz" -C "$BENCH_ROOT/candidate/unpacked"
 
+        python3 "$GITHUB_WORKSPACE/.github/scripts/check_mac_package_compat.py" --baseline "$BENCH_ROOT/baseline/unpacked"
+        --candidate "$BENCH_ROOT/candidate/unpacked" --output "$BENCH_ROOT/compatibility.json"
+
         python3 "$GITHUB_WORKSPACE/.github/scripts/benchmark_packages.py" --baseline "$BENCH_ROOT/baseline/unpacked" --candidate
         "$BENCH_ROOT/candidate/unpacked" --samples 12 --output "$BENCH_ROOT/comparison.json"
 
@@ -88,6 +88,8 @@ jobs:
     - name: Retain comparison samples
       uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
       with:
-        name: mac-lto-comparison-${{ inputs.target }}
-        path: ${{ env.BENCH_ROOT }}/comparison.json
+        name: cross-built-intel-validation
+        path: '${{ env.BENCH_ROOT }}/comparison.json
+
+          ${{ env.BENCH_ROOT }}/compatibility.json'
         if-no-files-found: error
