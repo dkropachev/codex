@@ -35,6 +35,7 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-ci
+        id: setup_ci
 
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
@@ -44,6 +45,18 @@ jobs:
         with:
           tool: nextest
           version: 0.9.103
+
+      - name: Restore Cargo cache
+        id: cargo_cache
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ steps.setup_ci.outputs.cargo-target-dir }}
+          key: windows-smoke-v1-${{ matrix.target }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml', '.github/workflows/windows-release-smoke.yml') }}-${{ github.sha }}
+          restore-keys: |
+            windows-smoke-v1-${{ matrix.target }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml', '.github/workflows/windows-release-smoke.yml') }}-
 
       - name: Test Windows sandbox and protocol crates
         shell: bash
@@ -65,3 +78,14 @@ jobs:
       - name: Check for a clean worktree
         if: always() && !cancelled()
         uses: ./.github/actions/check-clean-worktree
+
+      - name: Save Cargo cache
+        if: success() && steps.cargo_cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ steps.setup_ci.outputs.cargo-target-dir }}
+          key: ${{ steps.cargo_cache.outputs.cache-primary-key }}
