@@ -41,7 +41,6 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-ci
-        id: setup_ci
 
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
@@ -52,18 +51,25 @@ jobs:
           tool: nextest
           version: 0.9.103
 
-      - name: Restore Cargo cache
-        id: cargo_cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      # The cache action accepts targets relative to workspace roots. Alias the
+      # source onto the Dev Drive while retaining Cargo's existing target path.
+      - name: Configure Cargo cache workspace
+        id: cargo_cache_workspace
+        continue-on-error: true
+        shell: pwsh
+        run: New-Item -ItemType Junction -Path "$env:CI_BUILD_ROOT/cargo-cache-workspace" -Target $env:GITHUB_WORKSPACE | Out-Null
+
+      - name: Cache Cargo dependencies
+        if: steps.cargo_cache_workspace.outcome == 'success'
+        continue-on-error: true
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ${{ steps.setup_ci.outputs.cargo-target-dir }}
-          key: windows-smoke-v1-${{ matrix.target }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml', '.github/workflows/windows-release-smoke.yml') }}
-          restore-keys: |
-            windows-smoke-v1-${{ matrix.target }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml', '.github/workflows/windows-release-smoke.yml') }}-
-            windows-smoke-v1-${{ matrix.target }}-
+          prefix-key: windows-smoke-deps-v1
+          shared-key: ${{ matrix.target }}
+          key: ${{ hashFiles('.github/workflows/windows-release-smoke.yml') }}
+          workspaces: ${{ env.CI_BUILD_ROOT }}/cargo-cache-workspace/codex-rs -> ../../cargo-target
+          cache-bin: "false"
+          save-if: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
       - name: Test Windows sandbox and protocol crates
         shell: bash
@@ -85,14 +91,3 @@ jobs:
       - name: Check for a clean worktree
         if: always() && !cancelled()
         uses: ./.github/actions/check-clean-worktree
-
-      - name: Save Cargo cache
-        if: success() && !startsWith(github.ref, 'refs/tags/') && steps.cargo_cache.outputs.cache-hit != 'true'
-        continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ${{ steps.setup_ci.outputs.cargo-target-dir }}
-          key: ${{ steps.cargo_cache.outputs.cache-primary-key }}
