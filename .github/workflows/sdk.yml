@@ -145,7 +145,7 @@ jobs:
           uv run --only-group dev --frozen --no-sync pytest
 
       - name: Save bazel repository cache
-        if: always() && !cancelled() && steps.build_bazel.outcome == 'success' && steps.setup_bazel.outputs.repository-cache-hit != 'true'
+        if: always() && !cancelled() && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && steps.build_bazel.outcome == 'success' && steps.setup_bazel.outputs.repository-cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
