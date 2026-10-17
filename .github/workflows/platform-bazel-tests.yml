@@ -9,6 +9,10 @@ on:
       target:
         required: true
         type: string
+      local_test_jobs:
+        required: false
+        default: 2
+        type: number
       test_suite:
         required: false
         default: full
@@ -51,6 +55,7 @@ jobs:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
           # Pilot only on x86_64 Linux; ARM64 retains automatic allocation.
           CODEX_BUILDBUDDY_RESOURCE_PROFILE: ${{ inputs.target == 'x86_64-unknown-linux-gnu' && vars.CODEX_BUILDBUDDY_RESOURCE_PROFILE || 'auto' }}
+          LOCAL_TEST_JOBS: ${{ inputs.local_test_jobs }}
           TEST_SUITE: ${{ inputs.test_suite }}
         shell: bash
         run: |
@@ -79,6 +84,7 @@ jobs:
             --print-failed-test-logs \
             -- \
             test \
+            "--local_test_jobs=${LOCAL_TEST_JOBS}" \
             --test_tag_filters=-argument-comment-lint \
             --test_env=RUST_TEST_THREADS=1 \
             --test_verbose_timeout_warnings \
