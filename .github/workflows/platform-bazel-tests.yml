@@ -81,6 +81,12 @@ jobs:
         python3 "$GITHUB_WORKSPACE/.github/scripts/check_mac_package_compat.py" --baseline "$BENCH_ROOT/baseline/unpacked"
         --candidate "$BENCH_ROOT/candidate/unpacked" --output "$BENCH_ROOT/compatibility.json"
 
+        python3 "$GITHUB_WORKSPACE/.github/scripts/probe_code_mode_host.py" --host "$BENCH_ROOT/baseline/unpacked/bin/codex-code-mode-host"
+        --output "$BENCH_ROOT/baseline-code-mode.json"
+
+        python3 "$GITHUB_WORKSPACE/.github/scripts/probe_code_mode_host.py" --host "$BENCH_ROOT/candidate/unpacked/bin/codex-code-mode-host"
+        --output "$BENCH_ROOT/candidate-code-mode.json"
+
         python3 "$GITHUB_WORKSPACE/.github/scripts/benchmark_packages.py" --baseline "$BENCH_ROOT/baseline/unpacked" --candidate
         "$BENCH_ROOT/candidate/unpacked" --samples 12 --output "$BENCH_ROOT/comparison.json"
 
@@ -91,5 +97,9 @@ jobs:
         name: cross-built-intel-validation
         path: '${{ env.BENCH_ROOT }}/comparison.json
 
-          ${{ env.BENCH_ROOT }}/compatibility.json'
+          ${{ env.BENCH_ROOT }}/compatibility.json
+
+          ${{ env.BENCH_ROOT }}/baseline-code-mode.json
+
+          ${{ env.BENCH_ROOT }}/candidate-code-mode.json'
         if-no-files-found: error
