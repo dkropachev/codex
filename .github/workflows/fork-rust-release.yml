@@ -258,15 +258,13 @@ jobs:
         run: echo 'Manual dry-runs and backfills do not create a release.'
 
   build:
-    needs:
-      - validate
-      - prepare-release
-    if: ${{ always() && needs.validate.result == 'success' && needs.prepare-release.result == 'success' }}
+    # Compile while checks run; release uploads still wait for every gate.
+    needs: validate
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     permissions:
-      contents: write
+      contents: read
     defaults:
       run:
         working-directory: codex-rs
@@ -301,6 +299,46 @@ jobs:
         with:
           target: ${{ matrix.target }}
           version: ${{ needs.validate.outputs.version }}
+
+      - name: Retain verified packages
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: fork-release-verified-${{ matrix.target }}
+          path: |
+            dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz
+            dist/${{ matrix.target }}/codex-code-mode-host-${{ matrix.target }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  upload:
+    name: Stage ${{ matrix.target }}
+    needs:
+      - validate
+      - build
+      - prepare-release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.validate.outputs.tag_commit }}
+          persist-credentials: false
+
+      - name: Download verified packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: fork-release-verified-${{ matrix.target }}
+          path: dist/${{ matrix.target }}/
 
       - name: Upload package and code-mode host to the release
         if: ${{ needs.validate.outputs.mode != 'dry-run' }}
@@ -406,7 +444,7 @@ jobs:
   finalize:
     needs:
       - validate
-      - build
+      - upload
     if: ${{ needs.validate.outputs.mode != 'dry-run' }}
     runs-on: ubuntu-24.04
     permissions:
