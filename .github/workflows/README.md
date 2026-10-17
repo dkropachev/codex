@@ -63,6 +63,9 @@ not create or publish a GitHub Release.
 create a GitHub Release first. A tag push creates an
 unpublished draft, builds and verifies the four supported Unix packages, and
 publishes the draft as the latest release only after every package succeeds.
+Package compilation starts after tag validation, alongside release checks.
+Verified packages pass through workflow artifacts; release creation and asset
+uploads wait for the checks, and publication waits for all uploads.
 The previous out-of-repository source-only release publisher must therefore be
 disabled before the first managed tag is pushed.
 
