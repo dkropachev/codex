@@ -255,6 +255,14 @@ if [[ ${#bazel_args[@]} -eq 0 || ${#bazel_targets[@]} -eq 0 ]]; then
   exit 1
 fi
 
+bazel_command=""
+for arg in "${bazel_args[@]}"; do
+  if [[ "$arg" != -* ]]; then
+    bazel_command="$arg"
+    break
+  fi
+done
+
 if [[ "${RUNNER_OS:-}" == "Windows" && $windows_cross_compile -eq 1 && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
   # Windows cross-compilation depends on authenticated RBE. Preserve the local
   # Windows build shape when credentials are unavailable.
@@ -319,7 +327,7 @@ fi
 
 if [[ -n "${CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR:-}" ]]; then
   post_config_bazel_args+=(
-    "--execution_log_compact_file=${CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR}/execution-log-${bazel_args[0]}-${GITHUB_JOB:-local}-$$.zst"
+    "--execution_log_compact_file=${CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR}/execution-log-${bazel_command}-${GITHUB_JOB:-local}-$$.zst"
   )
 fi
 
@@ -331,7 +339,7 @@ if [[ "${RUNNER_OS:-}" == "macOS" ]]; then
   post_config_bazel_args+=(--jobs=40)
 fi
 
-if [[ "${RUNNER_OS:-}" == "Linux" && "${bazel_args[0]}" == "test" ]]; then
+if [[ "${RUNNER_OS:-}" == "Linux" && "$bazel_command" == "test" ]]; then
   # RBE test actions have repeatedly stalled unrelated Core integration
   # tests even with bounded remote concurrency. Keep remote builds, but run
   # tests on the GitHub runner with bounded build, process, and Rust case
@@ -343,7 +351,7 @@ if [[ "${RUNNER_OS:-}" == "Linux" && "${bazel_args[0]}" == "test" ]]; then
   )
 fi
 
-if [[ "${RUNNER_OS:-}" == "macOS" || ( "${RUNNER_OS:-}" == "Linux" && "${bazel_args[0]}" == "test" ) ]]; then
+if [[ "${RUNNER_OS:-}" == "macOS" || ( "${RUNNER_OS:-}" == "Linux" && "$bazel_command" == "test" ) ]]; then
   has_local_test_jobs_override=0
   for arg in "${bazel_args[@]}"; do
     if [[ "$arg" == --local_test_jobs || "$arg" == --local_test_jobs=* ]]; then
@@ -413,15 +421,23 @@ fi
 bazel_console_log="$(mktemp)"
 trap 'rm -f "$bazel_console_log"' EXIT
 
-bazel_run_args=(
-  "${bazel_args[@]}"
-)
 if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   echo "BuildBuddy API key is available; using remote Bazel configuration."
-  bazel_run_args+=("--config=${ci_config}")
 else
   echo "BuildBuddy API key is not available; using local Bazel configuration."
 fi
+# Defaults precede explicit caller flags, including release-check cfg overrides.
+bazel_run_args=()
+ci_config_inserted=0
+for arg in "${bazel_args[@]}"; do
+  bazel_run_args+=("$arg")
+  if [[ $ci_config_inserted -eq 0 && "$arg" != -* ]]; then
+    if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+      bazel_run_args+=("--config=${ci_config}")
+    fi
+    ci_config_inserted=1
+  fi
+done
 if (( ${#post_config_bazel_args[@]} > 0 )); then
   bazel_run_args+=("${post_config_bazel_args[@]}")
 fi

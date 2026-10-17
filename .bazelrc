@@ -110,13 +110,11 @@ common:ci --disk_cache=
 # Shared config for the main Bazel CI workflow.
 common:ci-bazel --config=ci
 common:ci-bazel --build_metadata=TAG_workflow=bazel
-# Keep local test downloads small and CPU-heavy fixtures responsive while
-# retaining debug assertions, checked arithmetic, and source-line backtraces.
-common:ci-bazel --@rules_rust//rust/settings:extra_rustc_flag=-Cdebuginfo=line-tables-only
-common:ci-bazel --@rules_rust//rust/settings:extra_rustc_flag=-Copt-level=1
+# Reduce CI artifact size while retaining checked test behavior. The toolchain
+# already supplies line-table debug information for fastbuild.
+common:ci-bazel --@rules_rust//rust/settings:extra_rustc_flag=-Copt-level=s
 common:ci-bazel --@rules_rust//rust/settings:extra_rustc_flag=-Cdebug-assertions=yes
 common:ci-bazel --@rules_rust//rust/settings:extra_rustc_flag=-Coverflow-checks=yes
-common:ci-bazel --@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebuginfo=line-tables-only
 
 # Shared config for Bazel-backed Rust linting.
 build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
