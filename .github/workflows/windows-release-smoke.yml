@@ -4,6 +4,12 @@ name: Windows release smoke
 on:
   workflow_call:
   workflow_dispatch:
+  # Release tags can restore default-branch caches, but not another tag's cache.
+  push:
+    branches: [main]
+    paths:
+      - codex-rs/**
+      - .github/workflows/windows-release-smoke.yml
   pull_request:
     paths:
       - codex-rs/workflows/**
@@ -57,6 +63,7 @@ jobs:
           key: windows-smoke-v1-${{ matrix.target }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml', '.github/workflows/windows-release-smoke.yml') }}-${{ github.sha }}
           restore-keys: |
             windows-smoke-v1-${{ matrix.target }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml', '.github/workflows/windows-release-smoke.yml') }}-
+            windows-smoke-v1-${{ matrix.target }}-
 
       - name: Test Windows sandbox and protocol crates
         shell: bash
