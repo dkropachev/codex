@@ -33,7 +33,7 @@ on:
       local_test_jobs:
         description: Maximum concurrent local test actions
         required: true
-        default: 8
+        default: 2
         type: number
       cache_test_results:
         description: Reuse cached test results (disable for timing comparisons)
@@ -63,7 +63,7 @@ on:
         type: string
       local_test_jobs:
         required: false
-        default: 8
+        default: 2
         type: number
       cache_test_results:
         required: false
