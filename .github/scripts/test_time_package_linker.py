@@ -1,6 +1,5 @@
 import importlib.util
 import json
-import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -33,16 +32,12 @@ class PackageLinkerTests(unittest.TestCase):
                 "CODEX_PACKAGE_LLD": str(root / "ld64.lld"),
                 "CODEX_PACKAGE_LINKER_LOG": str(log),
             }
-            with (
-                patch.dict(os.environ, env),
-                patch.object(LINKER.sys, "argv", ["wrapper", *arguments]),
-                patch.object(
-                    LINKER.subprocess,
-                    "run",
-                    return_value=subprocess.CompletedProcess([], returncode),
-                ) as run,
-            ):
-                self.assertEqual(LINKER.main(), returncode)
+            with patch.object(
+                LINKER.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess([], returncode),
+            ) as run:
+                self.assertEqual(LINKER.main(arguments, env), returncode)
             expected = [env["CODEX_PACKAGE_CLANG"]]
             if mode == "rust-lld":
                 expected.extend(

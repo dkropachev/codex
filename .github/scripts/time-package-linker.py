@@ -13,15 +13,15 @@ import sys
 import time
 
 
-def main():
-    mode = os.environ["CODEX_PACKAGE_LINKER"]
-    command = [os.environ["CODEX_PACKAGE_CLANG"]]
+def main(arguments, env):
+    mode = env["CODEX_PACKAGE_LINKER"]
+    command = [env["CODEX_PACKAGE_CLANG"]]
     if mode == "rust-lld":
-        command.extend(["-fuse-ld=lld", f"--ld-path={os.environ['CODEX_PACKAGE_LLD']}"])
+        command.extend(["-fuse-ld=lld", f"--ld-path={env['CODEX_PACKAGE_LLD']}"])
     elif mode != "system":
         raise ValueError(f"Unsupported package linker: {mode}")
     started = time.monotonic()
-    result = subprocess.run([*command, *sys.argv[1:]], check=False)
+    result = subprocess.run([*command, *arguments], check=False)
     record = (
         json.dumps(
             {
@@ -33,7 +33,7 @@ def main():
         + "\n"
     )
     descriptor = os.open(
-        os.environ["CODEX_PACKAGE_LINKER_LOG"],
+        env["CODEX_PACKAGE_LINKER_LOG"],
         os.O_WRONLY | os.O_CREAT | os.O_APPEND,
         0o600,
     )
@@ -45,4 +45,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:], os.environ))
