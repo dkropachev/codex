@@ -48,7 +48,9 @@ not create or publish a GitHub Release.
   toolchain, native tools, and verified V8 artifacts. Workspace crates rebuild
   for every source revision; release tags restore without saving tag caches.
   The default branch warms matching caches when dependency or build inputs
-  change. This trades background runner work for shorter release builds.
+  change, skipping workspace-version-only bumps. Version-only pushes also
+  leave any dependency warm already in progress running. This trades
+  background runner work for shorter release builds.
 
 - Manual package dry-runs and historical backfills retain their package
   validation without running release CI against the default branch.

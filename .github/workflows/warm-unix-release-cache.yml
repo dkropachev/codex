@@ -14,6 +14,7 @@ on:
       - .github/actions/setup-rusty-v8/**
       - .github/scripts/install-musl-*.sh
       - .github/scripts/rusty_v8_bazel.py
+      - .github/scripts/release_cache_changes.py
       - .github/workflows/warm-unix-release-cache.yml
       - third_party/v8/*_release_manifests.sha256
   workflow_call:
@@ -22,12 +23,38 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: warm-unix-release-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
+  changes:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    outputs:
+      required: ${{ steps.changes.outputs.required }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Detect dependency and build changes
+        id: changes
+        env:
+          BASE: ${{ github.event.before }}
+        shell: bash
+        run: |
+          if [[ -n "${BASE//0/}" ]] && ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            # A shallow checkout may not contain a multi-commit push's base.
+            required=true
+          else
+            required="$(python3 .github/scripts/release_cache_changes.py --base "$BASE")"
+          fi
+          echo "required=$required" >> "$GITHUB_OUTPUT"
+
   warm:
+    needs: changes
+    # Manual calls skip the change detector; do not inherit that skipped state.
+    if: ${{ !cancelled() && (github.event_name != 'push' || needs.changes.outputs.required == 'true') }}
+    concurrency:
+      group: warm-unix-release-${{ github.ref }}-${{ matrix.target }}
+      cancel-in-progress: true
     name: Cache ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
