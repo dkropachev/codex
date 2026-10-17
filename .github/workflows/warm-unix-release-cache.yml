@@ -12,7 +12,8 @@ on:
       - codex-rs/rust-toolchain.toml
       - .github/actions/build-fork-release/**
       - .github/actions/setup-rusty-v8/**
-      - .github/scripts/install-musl-build-tools.sh
+      - .github/scripts/install-musl-*.sh
+      - .github/scripts/rusty_v8_bazel.py
       - .github/workflows/warm-unix-release-cache.yml
       - third_party/v8/*_release_manifests.sha256
   workflow_call:
