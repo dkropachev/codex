@@ -70,6 +70,7 @@ jobs:
             local_test_jobs: 4
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
+            local_test_jobs: 4
     uses: ./.github/workflows/platform-bazel-tests.yml
     with:
       runner: ${{ matrix.runner }}
