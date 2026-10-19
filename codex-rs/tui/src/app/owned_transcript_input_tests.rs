@@ -732,6 +732,8 @@ async fn raw_multiline_paste_defers_rendering_and_submits_once() -> Result<()> {
     app.local_settings.tui.animations = false;
     app.transcript_cells = vec![Arc::new(PlainHistoryCell::new(vec!["Before paste".into()]))];
     tokio::time::pause();
+    // Separate the paused input clock from wall time, even on fast test hosts.
+    tokio::time::advance(Duration::from_secs(/*secs*/ 1)).await;
     // The first character starts a possible burst; defer further renders until the draw.
     app.handle_tui_event(
         &mut tui,

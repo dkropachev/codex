@@ -4,7 +4,6 @@ use super::InputResult;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use std::time::Instant;
 
 impl ChatComposer {
     /// Handle a key event coming from the main UI.
@@ -56,7 +55,7 @@ impl ChatComposer {
             return self.begin_history_search();
         }
 
-        if self.handle_paste_tab(key_event, Instant::now()) {
+        if self.handle_paste_tab(key_event, tokio::time::Instant::now().into_std()) {
             return (InputResult::None, true);
         }
 

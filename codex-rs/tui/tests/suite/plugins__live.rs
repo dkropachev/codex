@@ -70,7 +70,7 @@ async fn plugin_popup_lists_installed_plugin_and_toggles_enabled_state() -> Resu
         &mut output_rx,
         &mut screen,
         "enabled plugin row",
-        |contents| contents.contains("[*] toggle-plugin") && contents.contains("Space to disable"),
+        |contents| contents.contains("[*] toggle-plugin") && contents.contains("Tab to disable"),
     )
     .await?;
 

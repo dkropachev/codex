@@ -116,6 +116,9 @@
 //!
 //! # Contract With Callers
 //!
+//! All timestamps for a detector must come from the same clock. The composer uses Tokio-derived
+//! instants for character, Enter, Tab, and flush paths so paused-time handling remains consistent.
+//!
 //! `PasteBurst` does not mutate the UI text buffer on its own. Callers must interpret decisions
 //! and apply the corresponding UI edits. `ChatComposer` uses the full buffering contract:
 //!
