@@ -877,11 +877,13 @@ fn transform_for_direct_spawn_windows_separates_wrapper_from_inner_command() {
                         environment_id: None,
                         network: None,
                         sandbox_policy_cwd: &cwd_uri,
-                        codex_linux_sandbox_exe: None,
+                        sandbox_exe: None,
                         use_legacy_landlock: false,
                         windows_sandbox_level: WindowsSandboxLevel::Elevated,
-                        windows_sandbox_private_desktop: false,
                     },
+                    workspace_roots: std::slice::from_ref(&root),
+                    windows_sandbox_proxy_settings_mode:
+                        crate::WindowsSandboxProxySettingsMode::Preserve,
                 },
                 SandboxDirectSpawnRuntime {
                     codex_home: &root,

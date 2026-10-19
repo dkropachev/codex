@@ -3,6 +3,7 @@ use std::ffi::OsString;
 
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::sandbox::SandboxOverride;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
@@ -20,6 +21,7 @@ use crate::WindowsSandboxProxySettingsMode;
 
 fn request(command: Vec<String>, cwd: PathUri) -> SandboxExecRequest {
     SandboxExecRequest {
+        sandbox_override: SandboxOverride::NoOverride,
         command,
         cwd: cwd.clone(),
         sandbox_policy_cwd: cwd,
@@ -222,10 +224,9 @@ fn public_atomic_preparation_wraps_windows_restricted_command() {
             environment_id: None,
             network: None,
             sandbox_policy_cwd: &cwd_uri,
-            codex_linux_sandbox_exe: None,
+            sandbox_exe: None,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
-            windows_sandbox_private_desktop: false,
         },
         workspace_roots: std::slice::from_ref(&cwd),
         windows_sandbox_proxy_settings_mode: WindowsSandboxProxySettingsMode::Preserve,
