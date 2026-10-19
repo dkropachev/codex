@@ -47,12 +47,12 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
         .await
         .expect("sqlite database should open");
 
-    migrator_through(/*version*/ 62)
+    migrator_through(/*version*/ 67)
         .run(&pool)
         .await
         .expect("released fork migrations should apply");
     let released_history = sqlx::query(
-        "SELECT version, description, checksum FROM _sqlx_migrations WHERE version <= 62 ORDER BY version",
+        "SELECT version, description, checksum FROM _sqlx_migrations WHERE version <= 67 ORDER BY version",
     )
     .fetch_all(&pool)
     .await
@@ -71,16 +71,20 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
             .iter()
             .map(|(version, _, _)| *version)
             .collect::<Vec<_>>(),
-        (1_i64..=62).collect::<Vec<_>>()
+        (1_i64..=67).collect::<Vec<_>>()
     );
 
-    STATE_MIGRATOR
-        .run(&pool)
+    pool.close().await;
+    let pool = sqlite
+        .open_state_db(
+            &super::runtime_state_migrator(),
+            /*telemetry_override*/ None,
+        )
         .await
         .expect("current migrations should upgrade the released fork database");
 
     let preserved_history = sqlx::query(
-        "SELECT version, description, checksum FROM _sqlx_migrations WHERE version <= 62 ORDER BY version",
+        "SELECT version, description, checksum FROM _sqlx_migrations WHERE version <= 67 ORDER BY version",
     )
     .fetch_all(&pool)
     .await
@@ -97,7 +101,7 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
     assert_eq!(preserved_history, released_history);
 
     let added_migrations = sqlx::query(
-        "SELECT version, description FROM _sqlx_migrations WHERE version >= 63 ORDER BY version",
+        "SELECT version, description FROM _sqlx_migrations WHERE version >= 68 ORDER BY version",
     )
     .fetch_all(&pool)
     .await
@@ -113,11 +117,8 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
     assert_eq!(
         added_migrations,
         vec![
-            (63, "thread attachments".to_string()),
-            (64, "threads creator identity".to_string()),
-            (65, "cleanup guardian thread metadata".to_string()),
-            (66, "threads archive sort indexes".to_string()),
-            (67, "thread attachment reverse lookup".to_string())
+            (68, "guardian review feedback".to_string()),
+            (69, "thread read state".to_string()),
         ]
     );
 
@@ -195,7 +196,72 @@ SELECT
         (1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0)
     );
 
+    assert_imported_tables_usable(&pool).await;
     pool.close().await;
+}
+
+#[tokio::test]
+async fn fresh_state_database_supports_imported_tables() {
+    let sqlite_home = crate::runtime::test_support::unique_temp_dir();
+    tokio::fs::create_dir_all(&sqlite_home).await.unwrap();
+    let _cleanup = scopeguard::guard(sqlite_home.clone(), |sqlite_home| {
+        let _ = std::fs::remove_dir_all(sqlite_home);
+    });
+    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+    let pool = sqlite
+        .open_state_db(
+            &super::runtime_state_migrator(),
+            /*telemetry_override*/ None,
+        )
+        .await
+        .expect("current migrations should initialize a fresh database");
+
+    assert_imported_tables_usable(&pool).await;
+    pool.close().await;
+}
+
+async fn assert_imported_tables_usable(pool: &sqlx::SqlitePool) {
+    sqlx::query(
+        r#"
+INSERT INTO threads (
+    id, rollout_path, created_at, updated_at, source, model_provider, cwd,
+    title, sandbox_policy, approval_mode
+) VALUES (
+    'reviewed-thread', '/tmp/reviewed.jsonl', 1700000000, 1700000001,
+    'cli', 'openai', '/tmp', 'reviewed thread', 'read-only', 'on-request'
+);
+INSERT INTO guardian_review_feedback (id, thread_id, record)
+VALUES ('review-1', 'reviewed-thread', X'010203');
+INSERT INTO thread_read_receipts (thread_id, first_unread_turn, revision, last_published_turn)
+VALUES ('reviewed-thread', 'turn-1', 'revision-1', 'turn-2');
+        "#,
+    )
+    .execute(pool)
+    .await
+    .expect("new tables should accept guardian feedback and read receipts");
+
+    let stored = sqlx::query_as::<_, (String, Vec<u8>, String, String, String)>(
+        r#"
+SELECT feedback.thread_id, feedback.record, receipts.first_unread_turn,
+       receipts.revision, receipts.last_published_turn
+FROM guardian_review_feedback AS feedback
+JOIN thread_read_receipts AS receipts ON receipts.thread_id = feedback.thread_id
+WHERE feedback.id = 'review-1'
+        "#,
+    )
+    .fetch_one(pool)
+    .await
+    .expect("newly stored feedback and read receipts should load");
+    assert_eq!(
+        stored,
+        (
+            "reviewed-thread".to_string(),
+            vec![1, 2, 3],
+            "turn-1".to_string(),
+            "revision-1".to_string(),
+            "turn-2".to_string(),
+        )
+    );
 }
 
 #[tokio::test]

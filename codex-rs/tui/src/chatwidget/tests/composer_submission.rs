@@ -274,6 +274,9 @@ async fn parent_owned_thread_blocks_all_direct_input_entry_points() {
 
     for command in [
         "/init",
+        "/config",
+        "/config change my default model",
+        "/config off",
         "/review check this",
         "/side inspect this",
         "/archive",
@@ -340,6 +343,22 @@ async fn parent_owned_thread_blocks_settings_shortcuts() {
         .collect::<Vec<_>>()
         .join("\n");
     assert_chatwidget_snapshot!("parent_owned_thread_rejects_settings_shortcuts", rendered);
+}
+
+#[tokio::test]
+async fn parent_owned_thread_allows_local_preferences_panel() {
+    let (mut chat, _events, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_parent_owned_thread();
+    let mode_before = chat.active_collaboration_mask.clone();
+    chat.bottom_pane
+        .set_composer_text("/preferences".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert!(chat.bottom_pane.has_active_view());
+    assert_eq!(chat.active_collaboration_mask, mode_before);
+    assert_eq!(chat.composer_text_with_pending(), "");
+    assert_no_submit_op(&mut ops);
 }
 
 #[tokio::test]

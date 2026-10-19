@@ -89,14 +89,9 @@ pub(super) async fn run_remote_compact_v2_attempt(
             let model_info = turn_context.model_info();
             let mut history = sess.clone_history().await;
             let input_goal_ids = UserGoalUpdate::message_ids(history.raw_items());
-            let tools_in_history = step_context.settings.model_info.use_responses_lite
-                && history
-                    .raw_items()
-                    .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }));
-            let base_instructions = if tools_in_history
-                || history
-                    .raw_items()
-                    .any(BaseInstructionsFragment::matches_item)
+            let base_instructions = if history
+                .raw_items()
+                .any(BaseInstructionsFragment::matches_item)
             {
                 BaseInstructions {
                     text: String::new(),
@@ -247,10 +242,9 @@ pub(crate) fn capture_background_input(
     auth_owner_generation: Option<u64>,
     window: (String, u64, uuid::Uuid),
 ) -> BackgroundCompactionInput {
-    let base_instructions = if step_context.settings.model_info.use_responses_lite
-        && snapshot
-            .raw_items()
-            .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
+    let base_instructions = if snapshot
+        .raw_items()
+        .any(BaseInstructionsFragment::matches_item)
     {
         BaseInstructions {
             text: String::new(),

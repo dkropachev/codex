@@ -111,6 +111,8 @@ fn oversized_user_messages_split_at_content_boundaries_and_partition_kinds() {
         ..Default::default()
     };
     let mut messages = split_oversized_user_messages(vec![ResponseItem::Message {
+        status: Some("completed".to_owned()),
+        encrypted_content: None,
         id: None,
         role: "user".to_owned(),
         content: content.clone(),
@@ -128,6 +130,8 @@ fn oversized_user_messages_split_at_content_boundaries_and_partition_kinds() {
         messages,
         vec![
             ResponseItem::Message {
+                status: Some("completed".to_owned()),
+                encrypted_content: None,
                 id: None,
                 role: "user".to_owned(),
                 content: vec![content[0].clone()],
@@ -140,6 +144,8 @@ fn oversized_user_messages_split_at_content_boundaries_and_partition_kinds() {
                 ),
             },
             ResponseItem::Message {
+                status: Some("completed".to_owned()),
+                encrypted_content: None,
                 id: None,
                 role: "user".to_owned(),
                 content: vec![content[1].clone()],
@@ -156,8 +162,39 @@ fn oversized_user_messages_split_at_content_boundaries_and_partition_kinds() {
 }
 
 #[test]
+fn splitter_preserves_oversized_encrypted_user_messages() {
+    let message = ResponseItem::Message {
+        status: Some("completed".to_owned()),
+        encrypted_content: Some("opaque ciphertext".repeat(/*n*/ 3_000)),
+        id: None,
+        role: "user".to_owned(),
+        content: vec![
+            ContentItem::InputText {
+                text: "a".repeat(/*n*/ 24_000),
+            },
+            ContentItem::InputText {
+                text: "b".repeat(/*n*/ 24_000),
+            },
+        ],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    assert!(!guardian_model_context_item_is_bounded(&message));
+
+    let mut messages = split_oversized_user_messages(vec![message.clone()]);
+
+    assert!(messages.iter().all(|item| item.id().is_some()));
+    for item in &mut messages {
+        item.set_id(/*new_id*/ None);
+    }
+    assert_eq!(messages, vec![message]);
+}
+
+#[test]
 fn idless_user_message_is_sized_with_its_final_id_before_splitting() {
     let message = |text_len, id| ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id,
         role: "user".to_owned(),
         content: vec![
@@ -212,6 +249,8 @@ fn splitter_leaves_misaligned_content_item_kinds_for_cap_rejection() {
         ],
     ] {
         let message = ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "user".to_owned(),
             content: content.clone(),
@@ -237,6 +276,8 @@ fn splitter_leaves_misaligned_content_item_kinds_for_cap_rejection() {
 #[test]
 fn splitting_preserves_an_unsplittable_empty_message() {
     let message = ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "user".to_owned(),
         content: Vec::new(),

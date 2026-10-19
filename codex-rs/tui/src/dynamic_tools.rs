@@ -1299,7 +1299,7 @@ async fn background_turn_program(
     };
     let eligible = provider == "openai"
         && match account {
-            Some(Account::Chatgpt { .. }) => true,
+            Some(Account::Chatgpt { .. } | Account::ChatgptPool { .. }) => true,
             Some(Account::ApiKey { .. }) => {
                 // Only the target thread can establish its forwarding policy, including
                 // project opt-outs. Older servers that cannot report it keep omission.

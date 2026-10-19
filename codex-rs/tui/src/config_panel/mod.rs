@@ -1,4 +1,4 @@
-//! Catalog of TUI configuration editors and directly editable preferences shown by `/config`.
+//! Catalog of TUI configuration editors and directly editable preferences shown by `/preferences`.
 //!
 //! This module defines the stable grouping, copy, search terms, and displayed values. Rendering
 //! and interaction live in later modules so they can consume one ordered catalog.

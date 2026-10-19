@@ -1216,6 +1216,51 @@ mod tests {
     }
 
     #[test]
+    fn config_planner_and_preferences_commands_have_distinct_popup_entries() {
+        let mut popup = CommandPopup::new(
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                ..CommandPopupFlags::default()
+            },
+            Vec::new(),
+        );
+        let mut snapshots = Vec::new();
+        for (input, command) in [
+            ("/config", SlashCommand::Config),
+            ("/preferences", SlashCommand::Preferences),
+        ] {
+            popup.on_composer_text_change(input.to_string());
+            assert_eq!(popup.selected_item(), Some(CommandItem::Builtin(command)));
+            let width = 76;
+            let area = Rect::new(
+                /*x*/ 0,
+                /*y*/ 0,
+                width,
+                popup.calculate_required_height(width),
+            );
+            let mut buf = Buffer::empty(area);
+            popup.render_ref(area, &mut buf);
+            snapshots.push(format!("{input}\n{buf:?}"));
+        }
+        insta::assert_snapshot!(
+            "command_popup_config_and_preferences",
+            snapshots.join("\n\n")
+        );
+    }
+
+    #[test]
+    fn preferences_command_remains_visible_without_collaboration_modes() {
+        let mut popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
+        popup.on_composer_text_change("/preferences".to_string());
+        assert_eq!(
+            popup.selected_item(),
+            Some(CommandItem::Builtin(SlashCommand::Preferences))
+        );
+        popup.on_composer_text_change("/config".to_string());
+        assert_eq!(popup.selected_item(), None);
+    }
+
+    #[test]
     fn plan_command_hidden_when_collaboration_modes_disabled() {
         let mut popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
         popup.on_composer_text_change("/".to_string());

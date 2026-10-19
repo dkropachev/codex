@@ -24,8 +24,6 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-const REMOVED_TOOLS_HEADER: &str = "The following tools are no longer available. Do not call them:";
-const REMOVED_NAMESPACES_HEADER: &str = "The following namespaces are no longer available. Do not call tools in them unless those tools are declared in a later update:";
 const REMOVAL_NOTICE_BYTES: usize = 768;
 const REMOVED_NAME_PART_BYTES: usize = 512;
 const ACTION_ADDED: &str = "added";
@@ -191,8 +189,10 @@ impl WorldStateSection for TopLevelToolsState {
                     text.push_str(instructions);
                     text
                 };
-                namespace_updates
-                    .push(WorldStateUpdate::fragment(ToolInstructions::new(text)).standalone());
+                if !text.is_empty() {
+                    namespace_updates
+                        .push(WorldStateUpdate::fragment(ToolInstructions::new(text)).standalone());
+                }
             }
         }
         let mut updates = Vec::new();

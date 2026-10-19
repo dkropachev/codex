@@ -1,0 +1,29 @@
+---
+source: tui/src/bottom_pane/command_popup.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+/config
+Buffer {
+    area: Rect { x: 0, y: 0, width: 76, height: 1 },
+    content: [
+        "› /config  plan Codex configuration changes                                 ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 11, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 43, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+    ]
+}
+
+/preferences
+Buffer {
+    area: Rect { x: 0, y: 0, width: 76, height: 1 },
+    content: [
+        "› /preferences  configure Codex preferences                                 ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 16, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 43, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+    ]
+}

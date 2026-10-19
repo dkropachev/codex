@@ -142,6 +142,7 @@ fn unavailable_thread_dispatches_recovery_and_local_commands() {
         SlashCommand::Rollout,
         SlashCommand::Copy,
         SlashCommand::Raw,
+        SlashCommand::Preferences,
     ] {
         let (mut composer, _) = new_test_composer();
         composer.set_text_content(format!("/{}", command.command()), Vec::new(), Vec::new());
@@ -157,16 +158,16 @@ fn unavailable_thread_dispatches_recovery_and_local_commands() {
 }
 
 #[test]
-fn disconnected_input_dispatches_local_config_command() {
+fn disconnected_input_dispatches_local_preferences_command() {
     let (mut composer, _) = new_test_composer();
-    composer.set_text_content("/config".into(), Vec::new(), Vec::new());
+    composer.set_text_content("/preferences".into(), Vec::new(), Vec::new());
 
     assert_eq!(
         composer.handle_restricted_key(
             KeyEvent::from(KeyCode::Enter),
             RestrictedInputMode::Disconnected,
         ),
-        InputResult::Command(SlashCommand::Config),
+        InputResult::Command(SlashCommand::Preferences),
     );
     assert_eq!(composer.current_text(), "");
 }
@@ -209,6 +210,9 @@ fn restricted_input_preserves_blocked_drafts_and_attachments() {
             "!echo hello",
             "/rename changed",
             "/compact",
+            "/config",
+            "/config change my default model",
+            "/config off",
             "/voice",
             "/unknown",
             "/status extra",

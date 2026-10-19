@@ -1,5 +1,5 @@
 mod retired_review_item_tests {
-    use super::super::deserialize_stored_thread_item;
+    use super::super::stored_thread_item_to_entry;
     use codex_thread_store::StoredThreadItem;
 
     #[test]
@@ -25,7 +25,7 @@ mod retired_review_item_tests {
             };
 
             assert!(
-                deserialize_stored_thread_item(item)
+                stored_thread_item_to_entry(item)
                     .expect("retired review item should be accepted")
                     .is_none()
             );

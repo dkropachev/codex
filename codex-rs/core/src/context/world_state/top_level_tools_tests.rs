@@ -603,7 +603,7 @@ fn large_member_removal_preserves_each_name_in_separate_notices() {
                 .chain(removed_names.iter().map(|name| declaration(name)))
                 .collect(),
         )],
-        None,
+        /*metrics*/ None,
     )
     .unwrap();
     let snapshot = original
@@ -613,7 +613,7 @@ fn large_member_removal_preserves_each_name_in_separate_notices() {
     let current = TopLevelToolsState::new(
         Default::default(),
         vec![namespace("functions", vec![declaration("retained")])],
-        None,
+        /*metrics*/ None,
     )
     .unwrap();
     let (_, updates) = current.render_diff(PreviousSectionState::Known(&snapshot));
@@ -629,7 +629,7 @@ fn large_member_removal_preserves_each_name_in_separate_notices() {
             panic!("removal notices must remain standalone text fragments");
         };
         assert!(text.len() <= REMOVAL_NOTICE_BYTES);
-        assert!(text.starts_with(REMOVED_TOOLS_HEADER));
+        assert!(text.starts_with(&ResolvedIncrementalToolMessages::default().removed_tools_header));
         actual_names.extend(
             text.lines()
                 .filter_map(|line| line.strip_prefix("- "))

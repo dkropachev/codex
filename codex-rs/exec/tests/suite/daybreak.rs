@@ -1,4 +1,5 @@
 use anyhow::Context;
+use codex_features::Feature;
 use core_test_support::responses;
 use core_test_support::test_codex_exec::TestCodexExecBuilder;
 use core_test_support::test_codex_exec::test_codex_exec;
@@ -178,7 +179,7 @@ async fn exec_daybreak_gate_preserves_saved_preference() -> anyhow::Result<()> {
         assert_eq!(
             response.single_request().body_json().get("access_programs"),
             rollout_enabled
-                .unwrap_or(false)
+                .unwrap_or(Feature::CliDaybreak.default_enabled())
                 .then(|| json!({"cyber": "daybreak_blue"}))
                 .as_ref()
         );

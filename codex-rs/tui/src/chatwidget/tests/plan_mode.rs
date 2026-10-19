@@ -1482,6 +1482,61 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
 }
 
 #[tokio::test]
+async fn config_slash_command_enters_planning_and_off_returns_to_default() {
+    let (mut chat, mut events, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    while events.try_recv().is_ok() {}
+    chat.bottom_pane
+        .set_composer_text("/config".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(
+        chat.active_collaboration_mask
+            .as_ref()
+            .map(|mask| mask.name.as_str()),
+        Some(crate::config_mode::CONFIG_MODE_NAME)
+    );
+    assert!(!chat.bottom_pane.has_active_view());
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::FollowTranscript))
+    );
+    assert_no_submit_op(&mut ops);
+
+    chat.bottom_pane
+        .set_composer_text("/config off".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_no_submit_op(&mut ops);
+}
+
+#[tokio::test]
+async fn preferences_slash_command_opens_local_panel_without_changing_planning_mode() {
+    let (mut chat, mut events, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    chat.dispatch_command(SlashCommand::Config);
+    let mode_before = chat.active_collaboration_mask.clone();
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ false);
+    while events.try_recv().is_ok() {}
+    chat.bottom_pane
+        .set_composer_text("/preferences".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert!(chat.bottom_pane.has_active_view());
+    assert_eq!(chat.active_collaboration_mask, mode_before);
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::FollowTranscript))
+    );
+    assert_no_submit_op(&mut ops);
+}
+
+#[tokio::test]
 async fn config_slash_command_with_args_submits_prompt_with_proposed_diff_policy() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);

@@ -1381,6 +1381,46 @@ fn read_extracted_backup_archive_git_sha_rejects_path_traversal_ref() {
     assert!(err.contains("invalid path components"));
 }
 
+#[cfg(unix)]
+#[test]
+fn extract_zipball_preserves_access_permissions_without_privileged_bits() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for mode in [0o7777, 0o755, 0o644] {
+        let mut writer = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        writer
+            .start_file("plugins/script", SimpleFileOptions::default())
+            .expect("start script entry");
+        writer.write_all(b"plugin script").expect("write script");
+        let mut bytes = writer.finish().expect("finish zip writer").into_inner();
+        // The writer masks privileged bits, so inject the untrusted mode into
+        // the central directory's external attributes as an attacker could.
+        let central_directory = bytes
+            .windows(/*size*/ 4)
+            .position(|signature| signature == b"PK\x01\x02")
+            .expect("central directory");
+        let external_attributes = central_directory + 38;
+        let attributes = ((0o100000u32 | mode) << 16).to_le_bytes();
+        bytes[external_attributes..external_attributes + 4].copy_from_slice(&attributes);
+
+        let tmp = tempdir().expect("tempdir");
+        extract_zipball_to_dir(&bytes, tmp.path()).expect("extract script");
+
+        assert_eq!(
+            std::fs::metadata(tmp.path().join("script"))
+                .expect("script metadata")
+                .permissions()
+                .mode()
+                & 0o7777,
+            mode & 0o777
+        );
+        assert_eq!(
+            std::fs::read(tmp.path().join("script")).expect("read script"),
+            b"plugin script"
+        );
+    }
+}
+
 fn curated_repo_zipball_bytes(sha: &str) -> Vec<u8> {
     let cursor = std::io::Cursor::new(Vec::new());
     let mut writer = ZipWriter::new(cursor);

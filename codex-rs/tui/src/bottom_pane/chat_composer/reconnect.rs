@@ -1,4 +1,4 @@
-//! Restricted editing retains drafts and allows the local warnings viewer.
+//! Restricted editing retains drafts and allows local warnings and preferences views.
 //! Unavailable threads also allow recovery and other local commands.
 //! Connected unavailable threads retain the empty-prompt agents shortcut.
 //! Paste Enter handling is shared with normal submission so buffered newlines survive both paths.
@@ -90,7 +90,7 @@ impl ChatComposer {
                 .filter(|_| text.trim().lines().count() == 1);
             if matches!(command, Some(SlashCommandItem::Builtin(command))
                 if command == SlashCommand::Warnings
-                    || command == SlashCommand::Config
+                    || command == SlashCommand::Preferences
                     || mode == RestrictedInputMode::UnavailableThread && command.available_when_thread_unavailable())
             {
                 return self

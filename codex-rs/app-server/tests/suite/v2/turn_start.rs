@@ -775,7 +775,7 @@ async fn turn_start_if_idle_starts_idle_turn_and_rejects_busy_thread() -> Result
             include_turns: true,
         })
         .await?;
-    let ThreadReadResponse { thread } =
+    let ThreadReadResponse { thread, .. } =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(read_id)).await??;
     let user_texts = thread
         .turns

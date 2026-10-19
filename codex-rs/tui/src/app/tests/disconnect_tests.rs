@@ -249,12 +249,12 @@ async fn disconnected_command_center_keeps_input_and_blocks_actions() -> Result<
 }
 
 #[tokio::test]
-async fn disconnected_config_panel_keeps_input() -> Result<()> {
+async fn disconnected_preferences_panel_keeps_input() -> Result<()> {
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     let mut session = crate::start_embedded_app_server_for_picker(&app.config).await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
     app.chat_widget
-        .restore_user_message_to_composer("/config".into());
+        .restore_user_message_to_composer("/preferences".into());
 
     app.handle_tui_event(&mut tui, &mut session, TuiEvent::Key(KeyCode::Enter.into()))
         .await?;

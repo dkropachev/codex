@@ -1806,7 +1806,7 @@ pub(crate) enum AppEvent {
         generation: u64,
     },
 
-    /// Requests saving a local `/config` preference and refreshing its effective value.
+    /// Requests saving a local `/preferences` preference and refreshing its effective value.
     SaveConfigPreference(crate::config_panel::ConfigPreference),
 
     /// Save the transcript renderer preference for the next launch only.

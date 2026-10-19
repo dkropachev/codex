@@ -1,12 +1,10 @@
 //! Request-history coverage for opt-in incremental tools on Responses Lite.
 
 use anyhow::Result;
-use codex_core::ConfigRefreshOutcome;
 use codex_core::StartThreadOptions;
 use codex_features::Feature;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
-use codex_history::RolloutItem;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;

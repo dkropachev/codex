@@ -3675,21 +3675,8 @@ impl ThreadRequestProcessor {
         let data = page
             .items
             .into_iter()
-            .filter_map(|stored_item| {
-                let turn_id = stored_item.turn_id.clone();
-                let started_at_ms = stored_item.started_at_ms;
-                let completed_at_ms = stored_item.completed_at_ms;
-                match deserialize_stored_thread_item(stored_item) {
-                    Ok(Some(item)) => Some(Ok(ThreadItemEntry {
-                        turn_id,
-                        item,
-                        started_at_ms,
-                        completed_at_ms,
-                    })),
-                    Ok(None) => None,
-                    Err(err) => Some(Err(err)),
-                }
-            })
+            .map(stored_thread_item_to_entry)
+            .filter_map(Result::transpose)
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(ThreadItemsListResponse {
@@ -3744,6 +3731,7 @@ impl ThreadRequestProcessor {
             .items
             .into_iter()
             .map(stored_thread_item_to_entry)
+            .filter_map(Result::transpose)
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(ThreadItemsReadResponse { data })
@@ -6278,17 +6266,17 @@ fn deserialize_stored_thread_item(
 
 fn stored_thread_item_to_entry(
     stored_item: codex_thread_store::StoredThreadItem,
-) -> Result<ThreadItemEntry, JSONRPCErrorError> {
+) -> Result<Option<ThreadItemEntry>, JSONRPCErrorError> {
     let turn_id = stored_item.turn_id.clone();
     let started_at_ms = stored_item.started_at_ms;
     let completed_at_ms = stored_item.completed_at_ms;
     let item = deserialize_stored_thread_item(stored_item)?;
-    Ok(ThreadItemEntry {
+    Ok(item.map(|item| ThreadItemEntry {
         turn_id,
         item,
         started_at_ms,
         completed_at_ms,
-    })
+    }))
 }
 
 fn stored_turn_to_api_turn(
