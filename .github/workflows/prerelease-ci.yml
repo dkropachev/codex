@@ -51,8 +51,6 @@ jobs:
       CARGO_PROFILE_RELEASE_DEBUG: "0"
       CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
       CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: "off"
-      CODEX_ZSH_MANIFEST_URL: https://github.com/openai/codex/releases/download/codex-zsh-v0.1.0/codex-zsh
-      CODEX_ZSH_MANIFEST_SHA256: c534eab89dcea7e3d8a5e5b3f49c025c7c64cd4e4d9814ee24871de58a9359a1
     strategy:
       fail-fast: false
       matrix:

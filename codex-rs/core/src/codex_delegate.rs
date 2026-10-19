@@ -32,6 +32,7 @@ use crate::session::session::Session;
 use crate::session::startup::SessionStartup;
 use crate::session::startup::SessionStartupGuard;
 use crate::session::turn_context::TurnContext;
+use codex_history::HistoryInitialization;
 use codex_history::InitialHistory;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -60,7 +61,7 @@ pub(crate) async fn run_codex_thread_interactive(
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
     initial_history: Option<InitialHistory>,
-    thread_extension_init: ExtensionDataInit,
+    mut thread_extension_init: ExtensionDataInit,
     git_enrichment_policy: GitEnrichmentPolicy,
     windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
 ) -> Result<(Arc<Session>, SessionIo), CodexErr> {
@@ -83,6 +84,13 @@ pub(crate) async fn run_codex_thread_interactive(
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let conversation_history = initial_history.unwrap_or(InitialHistory::New);
     let forked_from_thread_id = conversation_history.forked_from_id();
+    let history_initialization = if matches!(&conversation_history, InitialHistory::Forked(_))
+        && forked_from_thread_id == Some(parent_session.thread_id)
+    {
+        HistoryInitialization::WarmFork
+    } else {
+        HistoryInitialization::from_history(&conversation_history)
+    };
     let runtime = parent_session.services.local_agent_runtime.clone();
     let startup = Arc::new(SessionStartup::default());
     startup.hold_membership(runtime.admit_start()?);
@@ -90,7 +98,12 @@ pub(crate) async fn run_codex_thread_interactive(
     let instructions = parent_session.inherited_instructions().await;
     let session_source = SessionSource::SubAgent(subagent_source.clone());
     let is_guardian_reviewer = crate::guardian::is_basic_session_source(&session_source);
-    let extensions = if is_guardian_reviewer {
+    let isolation = thread_extension_init
+        .get::<codex_extension_api::SessionIsolation>()
+        .map(|policy| *policy)
+        .unwrap_or_default();
+    thread_extension_init.insert(isolation);
+    let extensions = if isolation == codex_extension_api::SessionIsolation::Isolated {
         codex_extension_api::empty_extension_registry()
     } else {
         Arc::clone(&parent_session.services.extensions)
@@ -114,7 +127,9 @@ pub(crate) async fn run_codex_thread_interactive(
         code_mode_session_provider: Arc::new(codex_code_mode::DisabledCodeModeSessionProvider),
         extensions,
         conversation_history,
-        disabled_plugin_ids: Some(parent_ctx.disabled_plugin_ids.clone()),
+        history_initialization,
+        disabled_plugin_ids: (isolation == codex_extension_api::SessionIsolation::Inherit)
+            .then(|| parent_ctx.disabled_plugin_ids.clone()),
         requested_history_mode: None,
         fork_persistence: ForkPersistence::Copied,
         session_source,

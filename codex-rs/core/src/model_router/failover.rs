@@ -121,6 +121,7 @@ pub(crate) fn model_router_failure_scope(err: &CodexErr) -> Option<ModelRouterFa
         | CodexErrorDetails::InternalServerError
         | CodexErrorDetails::RetryLimit(_)
         | CodexErrorDetails::ConnectionFailed(_)
+        | CodexErrorDetails::ResponseIncomplete(_)
         | CodexErrorDetails::ResponseStreamFailed(_) => Some(ModelRouterFailureScope::Provider),
         CodexErrorDetails::InvalidRequest(message) => message_failure_scope(message),
         CodexErrorDetails::TurnAborted

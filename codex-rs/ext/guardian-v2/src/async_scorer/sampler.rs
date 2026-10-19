@@ -3,8 +3,10 @@
 
 mod connection_pool;
 mod execution;
+mod response;
 
 use super::request::PreparedRequest;
+use super::score::PendingScore;
 use connection_pool::ConnectionPool;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -18,6 +20,7 @@ use codex_api::ReasoningContext;
 use codex_api::ResponsesApiRequest;
 use codex_context_fragments::RenderedFragment;
 use codex_core::context::guardian_model_context_item_is_bounded;
+use codex_core::cyber_access_program::ApiKeyCyberAccessPrograms;
 use codex_extension_api::ExtensionMetrics;
 use codex_history::ResponseItemEnvelope;
 use codex_http_client::HttpClientFactory;
@@ -30,6 +33,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::turn_input::CyberAccessProgram;
 use thiserror::Error;
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -45,6 +49,8 @@ const MAX_CONCURRENT_REQUESTS: usize = 16;
 pub struct LunaSamplerConfig {
     /// Provider and credentials selected for the owning thread.
     pub provider: SharedModelProvider,
+    /// Provider and feature policy shared with ordinary model requests.
+    pub api_key_cyber_access_programs: ApiKeyCyberAccessPrograms,
     /// Routing scope and retained configuration layers for the owning thread.
     pub workspace_routing: WorkspaceRoutingContext,
     /// Effective proxy, custom-CA, and cookie configuration.
@@ -71,6 +77,8 @@ pub struct LunaSamplerConfig {
 
 /// One tool-less Luna classification request.
 pub struct LunaSamplingRequest {
+    /// Cyber selection captured from the owning turn; Daybreak reviews use Blue.
+    pub cyber_access_program: Option<CyberAccessProgram>,
     /// ID of the response handling the classified tool.
     pub parent_response_id: Option<String>,
     /// Trusted classifier instructions with their role and content attribution.
@@ -87,6 +95,8 @@ pub struct LunaSamplingRequest {
     pub parent_turn_id: String,
     /// Trusted causal root of the owning turn, absent when unknown or ambiguous.
     pub root_turn_id: Option<String>,
+    /// Snapshot expiry remains active until its response finishes draining.
+    pub(super) pending_score: Option<PendingScore>,
 }
 
 /// Failures returned while connecting or sampling the Luna model.
@@ -107,7 +117,7 @@ pub enum LunaSamplerError {
     /// The response exceeded the bounded output limit.
     #[error("Luna response exceeded the output limit")]
     OutputTooLarge,
-    /// A newer classification replaced this request when the pool was full.
+    /// The classification expired, lost its owning generation, or was replaced at capacity.
     #[error("Luna request was superseded by a newer classification")]
     Superseded,
     /// The supplied parent checkpoint cannot be consumed by this Luna configuration.
@@ -262,6 +272,9 @@ impl LunaSampler {
         };
         execution::SamplingExecution {
             auth_owner_generation,
+            cyber_access_program: codex_guardian_reviewer::guardian_cyber_access_program(
+                request.cyber_access_program,
+            ),
             config: Arc::clone(&self.config),
             connections: Arc::clone(&self.connections),
             request: api_request,
@@ -278,6 +291,14 @@ impl LunaSampler {
         &self,
         mut request: LunaSamplingRequest,
     ) -> Result<String, LunaSamplerError> {
+        if request
+            .pending_score
+            .as_ref()
+            .is_some_and(PendingScore::is_expired)
+        {
+            return Err(LunaSamplerError::Superseded);
+        }
+        let pending_score = request.pending_score.take();
         let auth_owner_generation = self.auth_owner_generation();
         if request.parent_compaction.is_some()
             && !self.supports_parent_compaction(request.parent_compaction_hash.as_deref())
@@ -330,6 +351,18 @@ impl LunaSampler {
                 scored: Arc::clone(&scored),
             });
         }
+        // The same cancellation future moves into the detached drain after an early score.
+        let superseded = Box::pin(async move {
+            tokio::select! {
+                _ = superseded => {},
+                () = async {
+                    match pending_score {
+                        Some(pending) => pending.expired().await,
+                        None => std::future::pending().await,
+                    }
+                } => {},
+            }
+        });
         self.execution(&request, input, auth_owner_generation)
             .run(execution::SamplingMode::Snapshot { superseded, scored })
             .await
@@ -395,6 +428,8 @@ fn split_oversized_user_messages(items: Vec<ResponseItem>) -> Vec<ResponseItem> 
                 return vec![item];
             }
             let ResponseItem::Message {
+                encrypted_content,
+                status,
                 id,
                 role,
                 content,
@@ -404,8 +439,10 @@ fn split_oversized_user_messages(items: Vec<ResponseItem>) -> Vec<ResponseItem> 
             else {
                 return vec![item];
             };
-            if role != "user" {
+            if role != "user" || encrypted_content.is_some() {
                 return vec![ResponseItem::Message {
+                    encrypted_content,
+                    status,
                     id,
                     role,
                     content,
@@ -419,6 +456,8 @@ fn split_oversized_user_messages(items: Vec<ResponseItem>) -> Vec<ResponseItem> 
                 .is_some_and(|kinds| kinds.len() != content.len())
             {
                 return vec![ResponseItem::Message {
+                    encrypted_content,
+                    status,
                     id,
                     role,
                     content,
@@ -428,6 +467,8 @@ fn split_oversized_user_messages(items: Vec<ResponseItem>) -> Vec<ResponseItem> 
             }
             if content.is_empty() {
                 return vec![ResponseItem::Message {
+                    encrypted_content,
+                    status,
                     id,
                     role,
                     content,
@@ -438,6 +479,8 @@ fn split_oversized_user_messages(items: Vec<ResponseItem>) -> Vec<ResponseItem> 
 
             let content_len = content.len();
             let message = |content, start: usize, end: usize| ResponseItem::Message {
+                encrypted_content: None,
+                status: status.clone(),
                 id: Some(ResponseItemId::new("msg")),
                 role: role.clone(),
                 content,

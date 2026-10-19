@@ -62,6 +62,7 @@ pub(crate) use pull_request_context::PullRequestContextState;
 pub(crate) use realtime::RealtimeState;
 pub(crate) use tool_instructions::bound_tool_instruction_items;
 pub(crate) use tools::ToolsState;
+pub(crate) use top_level_tools::IncrementalToolsHint;
 pub(crate) use top_level_tools::TopLevelToolsState;
 
 /// One contribution to model context and its placement policy.

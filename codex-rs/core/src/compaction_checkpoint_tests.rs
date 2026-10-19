@@ -34,6 +34,8 @@ fn assemble_compaction_history_keeps_prefix_first_and_summary_last() {
     };
     let compacted_history = vec![
         ResponseItem::Message {
+            encrypted_content: None,
+            status: None,
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -43,6 +45,8 @@ fn assemble_compaction_history_keeps_prefix_first_and_summary_last() {
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::Message {
+            encrypted_content: None,
+            status: None,
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -53,6 +57,8 @@ fn assemble_compaction_history_keeps_prefix_first_and_summary_last() {
         },
         agent_completion.clone(),
         ResponseItem::Message {
+            encrypted_content: None,
+            status: None,
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -63,6 +69,8 @@ fn assemble_compaction_history_keeps_prefix_first_and_summary_last() {
         },
     ];
     let initial_context = vec![ResponseItem::Message {
+        encrypted_content: None,
+        status: None,
         id: None,
         role: "developer".to_string(),
         content: vec![ContentItem::InputText {
@@ -80,6 +88,8 @@ fn assemble_compaction_history_keeps_prefix_first_and_summary_last() {
     let expected = vec![
         prefix,
         ResponseItem::Message {
+            encrypted_content: None,
+            status: None,
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -89,6 +99,8 @@ fn assemble_compaction_history_keeps_prefix_first_and_summary_last() {
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::Message {
+            encrypted_content: None,
+            status: None,
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
@@ -98,6 +110,8 @@ fn assemble_compaction_history_keeps_prefix_first_and_summary_last() {
             internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::Message {
+            encrypted_content: None,
+            status: None,
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -108,6 +122,8 @@ fn assemble_compaction_history_keeps_prefix_first_and_summary_last() {
         },
         agent_completion,
         ResponseItem::Message {
+            encrypted_content: None,
+            status: None,
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -138,6 +154,8 @@ fn assemble_compaction_history_keeps_compaction_last() {
         },
     ];
     let initial_context = vec![ResponseItem::Message {
+        encrypted_content: None,
+        status: None,
         id: None,
         role: "developer".to_string(),
         content: vec![ContentItem::InputText {
@@ -154,6 +172,8 @@ fn assemble_compaction_history_keeps_compaction_last() {
     ));
     let expected = vec![
         ResponseItem::Message {
+            encrypted_content: None,
+            status: None,
             id: None,
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {

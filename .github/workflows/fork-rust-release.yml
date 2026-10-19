@@ -32,8 +32,6 @@ env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   RELEASE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'release' }}
   REPLACE_EXISTING: ${{ github.event_name == 'workflow_dispatch' && inputs.replace_existing || false }}
-  CODEX_ZSH_MANIFEST_URL: https://github.com/openai/codex/releases/download/codex-zsh-v0.1.0/codex-zsh
-  CODEX_ZSH_MANIFEST_SHA256: c534eab89dcea7e3d8a5e5b3f49c025c7c64cd4e4d9814ee24871de58a9359a1
 
 concurrency:
   # Only release/backfill operations share a publication lock. Dry-runs retain

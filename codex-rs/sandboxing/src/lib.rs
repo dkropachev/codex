@@ -9,6 +9,7 @@ mod local_selection;
 mod manager;
 pub mod policy_transforms;
 mod sandbox_command_input;
+mod sandbox_integrity;
 #[cfg(target_os = "macos")]
 pub mod seatbelt;
 mod spawn;
@@ -19,6 +20,8 @@ mod windows;
 #[cfg(windows)]
 mod windows_mxc;
 
+#[cfg(target_os = "linux")]
+pub use bwrap::find_executable_in_search_paths;
 #[cfg(target_os = "linux")]
 pub use bwrap::find_pre_sandbox_executable_in_path;
 #[cfg(target_os = "linux")]
@@ -55,6 +58,9 @@ pub use manager::get_platform_sandbox;
 pub use manager::with_managed_mitm_ca_readable_root;
 pub use sandbox_command_input::SandboxCommandInputError;
 pub use sandbox_command_input::prepare_sandbox_command;
+pub use sandbox_integrity::FileContentsChecker;
+pub use sandbox_integrity::IntegrityFinding;
+pub use sandbox_integrity::IntegrityFindingDetails;
 pub use spawn::SpawnRequest;
 pub use spawn::WindowsSandboxSpawnRequest;
 pub use spawn::spawn_process;

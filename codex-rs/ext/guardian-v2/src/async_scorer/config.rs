@@ -27,7 +27,7 @@ use super::transcript::TranscriptSource;
 pub(crate) const DEFAULT_MODEL_CONTEXT_ITEM_TOKENS: usize = 10_000;
 pub(crate) const DEFAULT_PARENT_COMPACTION_TOKENS: usize = 10_000;
 const MIN_MODEL_CONTEXT_ITEM_TOKENS: usize = 100;
-const MAX_MODEL_CONTEXT_ITEM_TOKENS: usize = 100_000;
+pub(super) const MAX_MODEL_CONTEXT_ITEM_TOKENS: usize = 100_000;
 // Reserve room for the enclosing developer message, its ID, and content metadata.
 const MAX_CLASSIFIER_INSTRUCTION_TOKENS: usize = 9_919;
 const MAX_PARENT_COMPACTION_TOKENS: usize = 10_000;
