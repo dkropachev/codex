@@ -1,17 +1,18 @@
 ---
 source: core/tests/suite/scenarios_partial_answers.rs
+assertion_line: 322
 expression: "context_snapshot::format_request_history_snapshot(\"A worker inherits the parent prefix unchanged and receives its own instructions. Requests are grouped by parent, then child.\",\n&requests, &ContextSnapshotOptions::default().rewrite_known_segments())"
 ---
 Scenario: A worker inherits the parent prefix unchanged and receives its own instructions. Requests are grouped by parent, then child.
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=cefa72e421dc276f):
-        - namespace/functions; hash=125a3a92f05f72e9
+00:additional_tools/developer (2; hash=be82b0cc6d5da824):
+        - namespace/functions; hash=27df215b02502e96
           - custom/exec
           - function/wait
           - function/request_user_input
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=8478a08e9ddf9239
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
@@ -46,12 +47,12 @@ Scenario: A worker inherits the parent prefix unchanged and receives its own ins
 
 ## Window 2 (after request 3: input diverged at item 12)
 -- request 4 (turn) --
-00:additional_tools/developer (2; hash=cefa72e421dc276f):
-        - namespace/functions; hash=125a3a92f05f72e9
+00:additional_tools/developer (2; hash=be82b0cc6d5da824):
+        - namespace/functions; hash=27df215b02502e96
           - custom/exec
           - function/wait
           - function/request_user_input
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=8478a08e9ddf9239
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents

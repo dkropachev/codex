@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
+assertion_line: 1145
 expression: "context_snapshot::format_context_snapshot(description, &entries,\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Astra applies refreshed plugin policy to the next step while preserving earlier authorized skill context and tool output.
@@ -16,15 +17,15 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (request) --
-00:additional_tools/developer (3; hash=5e8370540461db70):
-        - namespace/functions; hash=7d26e086c1dbba28
+00:additional_tools/developer (3; hash=1b8e33fab12cff2b):
+        - namespace/functions; hash=c3cf7d3beb684867
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=8478a08e9ddf9239
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents

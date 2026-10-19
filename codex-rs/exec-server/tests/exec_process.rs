@@ -347,9 +347,17 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
                 tty,
                 pipe_stdin: false,
                 arg0: (shell_name == "bash-sh").then(|| "sh".to_string()),
-                sandbox: (use_sandbox && attempt == 0).then(|| {
+                sandbox: use_sandbox.then(|| {
+                    let mut policy = FileSystemSandboxPolicy::read_only();
+                    policy.entries.push(FileSystemSandboxEntry::new(
+                        cwd.clone().into(),
+                        FileSystemAccessMode::Write,
+                    ));
                     FileSystemSandboxContext::from_permission_profile(
-                        PermissionProfile::read_only(),
+                        PermissionProfile::from_runtime_permissions(
+                            &policy,
+                            NetworkSandboxPolicy::Restricted,
+                        ),
                         cwd.clone(),
                     )
                 }),
@@ -575,6 +583,32 @@ async fn shell_snapshot_v2_remote_managed_proxy_uses_prepared_execution_context(
 }
 
 #[cfg(unix)]
+fn without_remote_login_diagnostic(
+    context: &ProcessContext,
+    params: &ExecParams,
+    mut output: (String, String, Option<i32>, bool),
+) -> (String, String, Option<i32>, bool) {
+    if cfg!(target_os = "linux") && context._server.is_some() {
+        // Accept only this host login diagnostic at its exact count and position.
+        let prefix = "Failed to create stream fd: Operation not permitted\n".repeat(/*n*/ 3);
+        let prefix = if params.tty {
+            prefix.replace('\n', "\r\n")
+        } else {
+            prefix
+        };
+        let text = if params.tty {
+            &mut output.0
+        } else {
+            &mut output.1
+        };
+        if let Some(rest) = text.strip_prefix(prefix.as_str()) {
+            *text = rest.to_owned();
+        }
+    }
+    output
+}
+
+#[cfg(unix)]
 #[derive(Clone, Copy)]
 enum CaptureFailure {
     Exit(i32),
@@ -695,7 +729,11 @@ async fn shell_snapshot_v2_capture_failure_falls_back_and_retries(
         } else {
             let fallback = start.await?;
             assert_eq!(
-                collect_process_output_from_events(fallback.process).await?,
+                without_remote_login_diagnostic(
+                    &context,
+                    &params,
+                    collect_process_output_from_events(fallback.process).await?,
+                ),
                 ("original".to_string(), String::new(), Some(0), true)
             );
         }
@@ -744,7 +782,11 @@ async fn shell_snapshot_v2_capture_failure_falls_back_and_retries(
         params.process_id = ProcessId::from(format!("snapshot-after-repair-{attempt}"));
         let started = context.backend.start(params.clone()).await?;
         assert_eq!(
-            collect_process_output_from_events(started.process).await?,
+            without_remote_login_diagnostic(
+                &context,
+                &params,
+                collect_process_output_from_events(started.process).await?,
+            ),
             (expected_output.to_string(), String::new(), Some(0), true)
         );
     }

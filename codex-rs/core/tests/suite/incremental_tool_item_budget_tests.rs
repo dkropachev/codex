@@ -171,8 +171,9 @@ fn instruction_text(items: &[Value]) -> String {
     items
         .iter()
         .filter(|item| {
-            item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
-                == json!(["tools.namespace_instructions"])
+            let kinds = &item["internal_chat_message_metadata_passthrough"]["content_item_kinds"];
+            kinds == &json!(["tools.namespace_instructions"])
+                || kinds == &json!(["tools.incremental_update"])
         })
         .map(|item| {
             assert!(serde_json::to_vec(item).expect("final text item").len() <= 4_000);
@@ -228,7 +229,7 @@ async fn incremental_member_refresh_bounds_final_tool_item() -> Result<()> {
     assert_eq!(declaration["tools"], expected);
     assert_eq!(
         instruction_text(delta),
-        "For the incremental declaration of the mcp__sample namespace:\nThis is an incremental namespace update. Previously declared tools remain available for direct calls unless explicitly marked unavailable. If a tool is redefined here, its latest definition replaces the earlier one."
+        "This is an incremental tools update. Previously declared tools remain available for direct calls unless explicitly marked unavailable. If a tool is redefined here, its latest definition replaces the earlier one."
     );
     let unchanged = capture(&test, &api).await?;
     assert_eq!(&unchanged[..changed.len()], changed.as_slice());

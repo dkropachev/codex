@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
+assertion_line: 853
 expression: "context_snapshot::format_request_history_snapshot(\"Astra sees the permitted calendar plugin and standalone skills, but not the unlisted notes plugin.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Astra sees the permitted calendar plugin and standalone skills, but not the unlisted notes plugin.
@@ -16,15 +17,15 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
-        - namespace/functions; hash=fada4a476a3754dd
+00:additional_tools/developer (3; hash=68d6cf1d20dc114e):
+        - namespace/functions; hash=e1875bbf8d39f064
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=8478a08e9ddf9239
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents

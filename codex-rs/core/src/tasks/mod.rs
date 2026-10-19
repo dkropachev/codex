@@ -690,6 +690,7 @@ impl Session {
             active.as_mut().and_then(|active_turn| {
                 let task = active_turn.task.take()?;
                 task.handle.detach();
+                active_turn.finishing_turn_id = Some(turn_context.sub_id.clone());
                 active_turn.finishing = Some(finishing);
                 Some(Arc::clone(&active_turn.turn_state))
             })

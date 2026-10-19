@@ -825,6 +825,7 @@ mod tests {
 
     impl CaptureBackend {
         fn new(width: u16, height: u16) -> Self {
+            crossterm::style::force_color_output(/*enabled*/ true);
             Self {
                 output: Vec::new(),
                 size: Size { width, height },
