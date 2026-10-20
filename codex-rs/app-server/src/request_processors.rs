@@ -564,6 +564,7 @@ mod thread_attachments;
 mod thread_enrichment;
 mod thread_fork_goal;
 mod thread_input;
+mod thread_items_read;
 mod thread_processor;
 mod thread_queue_processor;
 mod thread_read_state;
