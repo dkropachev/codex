@@ -1,4 +1,6 @@
 use super::super::KeymapEditOutcome;
+use super::super::build_keymap_action_menu_params;
+use super::super::build_keymap_capture_view;
 use super::super::build_keymap_replace_binding_menu_params;
 use super::super::keymap_with_bindings;
 use super::super::keymap_with_edit;
@@ -58,6 +60,78 @@ fn capture_lines_at_width(view: &KeymapCaptureView, width: u16) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[test]
+fn leader_menu_capture_renders_and_applies_suffix() {
+    let config = keymap_with_bindings(
+        &TuiKeymap::default(),
+        "global",
+        "leader",
+        &["ctrl-x".to_string()],
+    )
+    .expect("configured leader");
+    let runtime = RuntimeKeymap::from_config(&config).expect("valid leader keymap");
+    let params = build_keymap_action_menu_params(
+        "list".to_string(),
+        "jump_top".to_string(),
+        &runtime,
+        &config,
+    );
+    let use_leader = params
+        .items
+        .iter()
+        .find(|item| item.name == "Use leader...")
+        .expect("leader capture menu action");
+    assert_eq!(use_leader.disabled_reason, None);
+    let (tx, mut rx) = unbounded_channel();
+    let sender = AppEventSender::new(tx);
+    use_leader.actions[0](&sender);
+    let AppEvent::OpenKeymapCapture {
+        context,
+        action,
+        intent,
+        capture_mode,
+    } = rx.try_recv().expect("leader capture event")
+    else {
+        panic!("expected capture from Use leader action");
+    };
+    assert_eq!(capture_mode, KeymapCaptureMode::LeaderChord);
+    let mut view =
+        build_keymap_capture_view(context, action, intent, capture_mode, &runtime, sender);
+    insta::assert_snapshot!(
+        "leader_menu_capture_wide",
+        capture_lines_at_width(&view, /*width*/ 80),
+    );
+    insta::assert_snapshot!(
+        "leader_menu_capture_narrow",
+        capture_lines_at_width(&view, /*width*/ 24),
+    );
+    view.handle_key_event(KeyEvent::from(KeyCode::Char('c')));
+    let AppEvent::KeymapCaptured {
+        context,
+        action,
+        key,
+        intent,
+    } = rx.try_recv().expect("captured leader suffix")
+    else {
+        panic!("expected captured leader suffix");
+    };
+    assert!(view.is_complete());
+    let outcome = keymap_with_edit(&config, &runtime, &context, &action, &key, &intent)
+        .expect("apply captured leader shortcut");
+    let bindings = vec!["leader c".to_string()];
+    let expected_keymap = keymap_with_bindings(&config, "list", "jump_top", &bindings)
+        .expect("expected leader shortcut");
+    RuntimeKeymap::from_config(&expected_keymap).expect("captured leader shortcut is valid");
+    assert_eq!(
+        outcome,
+        KeymapEditOutcome::Updated {
+            keymap_config: Box::new(expected_keymap),
+            bindings,
+            message: "Remapped `list.jump_top` to `leader c`.".to_string(),
+        },
+    );
 }
 
 #[test]

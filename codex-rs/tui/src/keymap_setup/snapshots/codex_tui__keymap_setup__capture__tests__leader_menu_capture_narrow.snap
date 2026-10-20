@@ -1,0 +1,14 @@
+---
+source: tui/src/keymap_setup/capture_tests.rs
+assertion_line: 112
+expression: "capture_lines_at_width(&view, 24)"
+---
+
+  Remap Shortcut
+  Action: Jump Top
+  list.jump_top
+  Current: home
+  Press the key
+  that follows the
+  configured leader.
+  Esc cancels.
