@@ -24,7 +24,12 @@ struct TestDaemon {
 
 impl TestDaemon {
     fn new() -> Result<Self> {
-        let home = tempfile::Builder::new().tempdir_in("/tmp")?;
+        // Keep daemon Unix-socket paths short, including on macOS. Callers can
+        // choose a short disk-backed root when /tmp has insufficient capacity.
+        let short_tmpdir = std::env::var_os("CODEX_TEST_SHORT_TMPDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/tmp"));
+        let home = tempfile::Builder::new().tempdir_in(short_tmpdir)?;
         let codex = codex_utils_cargo_bin::cargo_bin("codex")?;
         let codex_source = std::fs::canonicalize(&codex)?;
         let target = if cfg!(target_os = "macos") {

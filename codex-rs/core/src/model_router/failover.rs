@@ -122,6 +122,7 @@ pub(crate) fn model_router_failure_scope(err: &CodexErr) -> Option<ModelRouterFa
         | CodexErrorDetails::RetryLimit(_)
         | CodexErrorDetails::ConnectionFailed(_)
         | CodexErrorDetails::ResponseStreamFailed(_) => Some(ModelRouterFailureScope::Provider),
+        CodexErrorDetails::ResponseIncomplete(error) => message_failure_scope(&error.to_string()),
         CodexErrorDetails::InvalidRequest(message) => message_failure_scope(message),
         CodexErrorDetails::TurnAborted
         | CodexErrorDetails::ContentFilter
@@ -254,8 +255,23 @@ mod tests {
     use crate::model_router::ModelRouterSource;
     use crate::model_router::apply_model_router_with_exclusions;
 
+    #[test_case::test_case(CodexErr::ContextWindowExceeded; "model error")]
+    #[test_case::test_case(CodexErrorDetails::ResponseIncomplete(Box::new(
+        codex_protocol::error::ResponseIncompleteError {
+            reason: "max_output_tokens".to_string(),
+            response_id: None,
+            token_usage: None,
+        },
+    )).into(); "incomplete max output tokens")]
+    #[test_case::test_case(CodexErrorDetails::ResponseIncomplete(Box::new(
+        codex_protocol::error::ResponseIncompleteError {
+            reason: "unknown".to_string(),
+            response_id: None,
+            token_usage: None,
+        },
+    )).into(); "incomplete unknown reason")]
     #[tokio::test]
-    async fn exclusions_skip_failed_model_and_select_next_route() {
+    async fn exclusions_preserve_alternate_models_on_the_same_provider(error: CodexErr) {
         let mut base = config::test_config().await;
         base.model = Some("gpt-5.4".to_string());
         base.model_router = Some(ModelRouterToml {
@@ -294,7 +310,8 @@ mod tests {
         assert_eq!(first.model.as_deref(), Some("gpt-5.3-codex-spark"));
 
         let mut failover = base;
-        let exclusion = route.exclusion_for_failure(ModelRouterFailureScope::Model);
+        let scope = model_router_failure_scope(&error).expect("error should allow route failover");
+        let exclusion = route.exclusion_for_failure(scope);
         let route = apply_model_router_with_exclusions(
             &mut failover,
             ModelRouterSource::Module("repo_ci.triage"),
@@ -306,7 +323,15 @@ mod tests {
         .expect("router should select a route");
 
         assert_eq!(failover.model.as_deref(), Some("gpt-5-mini"));
-        assert_eq!(route.route.model.as_deref(), Some("gpt-5-mini"));
+        assert_eq!(
+            route.route,
+            ModelRouterRouteKey {
+                model_provider: "openai".to_string(),
+                model: Some("gpt-5-mini".to_string()),
+                account_pool: None,
+                account: None,
+            }
+        );
     }
 
     #[test]

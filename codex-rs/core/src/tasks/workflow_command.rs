@@ -129,9 +129,13 @@ pub(crate) async fn record_workflow_output(
             turn_context.as_ref(),
             turn_context.model_info().as_ref(),
             ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
                 id: None,
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
+                    annotations: None,
+                    logprobs: None,
                     text: markdown.clone(),
                 }],
                 phase: Some(MessagePhase::FinalAnswer),

@@ -373,6 +373,8 @@ async fn remote_compact_v2_retains_only_client_developer_messages_when_enabled(
     )
     .await?;
     let developer = |text: &str| ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: None,
         role: "developer".to_string(),
         content: vec![ContentItem::InputText {
@@ -909,6 +911,8 @@ async fn remote_compact_v2_enforces_aggregate_image_budget_across_messages() -> 
         .map(|image_url| {
             RolloutItem::ResponseItem(
                 ResponseItem::Message {
+                    encrypted_content: None,
+                    status: None,
                     id: None,
                     role: "user".to_string(),
                     content: (0..5)

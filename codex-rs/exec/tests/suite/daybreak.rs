@@ -1,4 +1,5 @@
 use anyhow::Context;
+use codex_features::Feature;
 use core_test_support::responses;
 use core_test_support::test_codex_exec::TestCodexExecBuilder;
 use core_test_support::test_codex_exec::test_codex_exec;
@@ -21,34 +22,52 @@ fn started_thread(output: std::process::Output) -> anyhow::Result<String> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exec_rejects_daybreak_for_api_keys_and_allows_an_override() -> anyhow::Result<()> {
+async fn exec_resolves_daybreak_for_api_keys_and_allows_an_off_override() -> anyhow::Result<()> {
     let (test, server) = configured_daybreak_exec().await?;
     std::fs::remove_file(test.home_path().join("auth.json"))?;
-    let response = responses::mount_sse_once(&server, responses::sse_completed("response")).await;
-
+    for (args, expected) in [
+        (vec![], Some("daybreak_blue")),
+        (vec!["-c", "daybreak=false"], Some("standard")),
+        (vec!["-m", "unlisted-model"], None),
+        (
+            vec![
+                "-c",
+                "daybreak=false",
+                "-c",
+                "features.api_key_cyber_access_programs=false",
+            ],
+            None,
+        ),
+    ] {
+        let response =
+            responses::mount_sse_once(&server, responses::sse_completed("response")).await;
+        test.cmd_with_server(&server)
+            .env_remove("CODEX_ACCESS_TOKEN")
+            .arg("--skip-git-repo-check")
+            .args(args)
+            .arg("hello")
+            .assert()
+            .success();
+        assert_eq!(
+            response.single_request().body_json().get("access_programs"),
+            expected.map(|program| json!({"cyber": program})).as_ref()
+        );
+    }
+    let response = responses::mount_sse_once(&server, responses::sse_completed("unexpected")).await;
     test.cmd_with_server(&server)
         .env_remove("CODEX_ACCESS_TOKEN")
-        .arg("--skip-git-repo-check")
-        .arg("hello")
+        .args([
+            "--skip-git-repo-check",
+            "-c",
+            "features.api_key_cyber_access_programs=false",
+            "hello",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "Daybreak requires a signed-in ChatGPT account",
+            "Cyber access programs are disabled for this API-key session.",
         ));
     assert!(response.requests().is_empty());
-
-    test.cmd_with_server(&server)
-        .env_remove("CODEX_ACCESS_TOKEN")
-        .arg("--skip-git-repo-check")
-        .arg("-c")
-        .arg("daybreak=false")
-        .arg("hello")
-        .assert()
-        .success();
-    assert_eq!(
-        response.single_request().body_json().get("access_programs"),
-        None
-    );
     Ok(())
 }
 
@@ -160,7 +179,7 @@ async fn exec_daybreak_gate_preserves_saved_preference() -> anyhow::Result<()> {
         assert_eq!(
             response.single_request().body_json().get("access_programs"),
             rollout_enabled
-                .unwrap_or(false)
+                .unwrap_or(Feature::CliDaybreak.default_enabled())
                 .then(|| json!({"cyber": "daybreak_blue"}))
                 .as_ref()
         );

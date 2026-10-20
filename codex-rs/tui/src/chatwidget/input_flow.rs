@@ -30,6 +30,7 @@ impl ChatWidget {
                 SlashCommand::Model
                 | SlashCommand::Keymap
                 | SlashCommand::Memories
+                | SlashCommand::Preferences
                 | SlashCommand::Title
                 | SlashCommand::Statusline
                 | SlashCommand::Theme,

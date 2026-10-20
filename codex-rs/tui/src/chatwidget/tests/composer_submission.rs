@@ -274,6 +274,9 @@ async fn parent_owned_thread_blocks_all_direct_input_entry_points() {
 
     for command in [
         "/init",
+        "/config",
+        "/config change my default model",
+        "/config off",
         "/review check this",
         "/side inspect this",
         "/archive",
@@ -340,6 +343,22 @@ async fn parent_owned_thread_blocks_settings_shortcuts() {
         .collect::<Vec<_>>()
         .join("\n");
     assert_chatwidget_snapshot!("parent_owned_thread_rejects_settings_shortcuts", rendered);
+}
+
+#[tokio::test]
+async fn parent_owned_thread_allows_local_preferences_panel() {
+    let (mut chat, _events, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_parent_owned_thread();
+    let mode_before = chat.active_collaboration_mask.clone();
+    chat.bottom_pane
+        .set_composer_text("/preferences".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert!(chat.bottom_pane.has_active_view());
+    assert_eq!(chat.active_collaboration_mask, mode_before);
+    assert_eq!(chat.composer_text_with_pending(), "");
+    assert_no_submit_op(&mut ops);
 }
 
 #[tokio::test]
@@ -1009,6 +1028,68 @@ async fn submission_prefers_selected_duplicate_skill_path() {
         })
         .collect::<Vec<_>>();
     assert_eq!(selected_skill_paths, vec![user_skill_path.to_path_buf()]);
+}
+
+#[tokio::test]
+async fn plugin_mention_does_not_suppress_same_name_skill() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+    chat.bottom_pane
+        .set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+            config_name: "app-0123456789abcdef0123456789abcdef@test".to_string(),
+            display_name: "foo".to_string(),
+            plugin_namespace: None,
+            description: None,
+            has_skills: true,
+            mcp_server_names: Vec::new(),
+            app_connector_ids: Vec::new(),
+        }]));
+    let skill_path = test_path_buf("/tmp/foo/SKILL.md").abs();
+    chat.set_skills(Some(vec![SkillMetadata {
+        name: "foo".to_string(),
+        description: "Foo skill".to_string(),
+        short_description: None,
+        interface: None,
+        dependencies: None,
+        path: skill_path.clone().into(),
+        scope: crate::test_support::skill_scope_user(),
+        enabled: true,
+        plugin_id: None,
+    }]));
+
+    chat.submit_user_message(UserMessage {
+        text: "@foo $foo".to_string(),
+        local_images: Vec::new(),
+        remote_image_urls: Vec::new(),
+        text_elements: Vec::new(),
+        mention_bindings: vec![MentionBinding {
+            sigil: '@',
+            mention: "foo".to_string(),
+            path: "plugin://app-0123456789abcdef0123456789abcdef@test".to_string(),
+        }],
+    });
+
+    let Op::UserTurn { items, .. } = next_submit_op(&mut op_rx) else {
+        panic!("expected Op::UserTurn");
+    };
+    assert_eq!(
+        items,
+        vec![
+            UserInput::Text {
+                text: "@foo $foo".to_string(),
+                text_elements: Vec::new(),
+            },
+            UserInput::Skill {
+                name: "foo".to_string(),
+                path: skill_path.to_path_buf(),
+            },
+            UserInput::Mention {
+                name: "foo".to_string(),
+                path: "plugin://app-0123456789abcdef0123456789abcdef@test".to_string(),
+            },
+        ]
+    );
 }
 
 #[tokio::test]

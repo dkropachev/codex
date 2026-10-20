@@ -63,6 +63,7 @@ async fn settings_pickers_preserve_the_reading_anchor_through_open_and_close() -
 
     for (command, close) in [
         ("/model", KeyCode::Esc),
+        ("/preferences", KeyCode::Esc),
         ("/theme", KeyCode::Enter),
         ("/keymap", KeyCode::Esc),
         ("/memories", KeyCode::Esc),

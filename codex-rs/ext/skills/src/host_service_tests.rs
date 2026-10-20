@@ -45,6 +45,33 @@ fn test_plugin_skill_snapshots() -> SkillRootSnapshots<PluginSkillRoot> {
     SkillRootSnapshots::new(Arc::new(TestPluginSkillSnapshotCache::default()))
 }
 
+#[cfg(unix)]
+fn run_in_isolated_home(name: &str) -> bool {
+    const CHILD: &str = "CODEX_SKILLS_HOST_SERVICE_TEST_CHILD";
+    if std::env::var(CHILD).as_deref() == Ok(name) {
+        return true;
+    }
+    // HOME controls Unix discovery; Windows uses the user's known folder instead.
+    let home = tempfile::tempdir().expect("isolated home");
+    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            &format!("host_service::tests::{name}"),
+            "--nocapture",
+        ])
+        .env(CHILD, name)
+        .env("HOME", home.path())
+        .output()
+        .expect("run isolated host skills test");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    false
+}
+
 fn write_user_skill(codex_home: &TempDir, dir: &str, name: &str, description: &str) {
     let skill_dir = codex_home.path().join("skills").join(dir);
     fs::create_dir_all(&skill_dir).unwrap();
@@ -325,6 +352,10 @@ async fn watchable_skill_root_paths_exclude_plugin_and_system_roots() {
 
 #[tokio::test]
 async fn snapshot_for_config_merges_extension_host_and_legacy_plugin_roots() {
+    #[cfg(unix)]
+    if !run_in_isolated_home("snapshot_for_config_merges_extension_host_and_legacy_plugin_roots") {
+        return;
+    }
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
     write_user_skill(&codex_home, "user", "user-skill", "from the host loader");
@@ -370,6 +401,11 @@ async fn snapshot_for_config_merges_extension_host_and_legacy_plugin_roots() {
 async fn snapshot_for_config_preserves_host_precedence_for_symlinked_plugin_root() {
     use std::os::unix::fs::symlink;
 
+    if !run_in_isolated_home(
+        "snapshot_for_config_preserves_host_precedence_for_symlinked_plugin_root",
+    ) {
+        return;
+    }
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
     let plugin_skill_path = write_plugin_skill(

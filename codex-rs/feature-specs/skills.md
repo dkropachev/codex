@@ -129,7 +129,6 @@ skill exclusion, and bounded model-context injection during agent turns.
 #### Test cases
 
 - Skill model-context behavior is covered: codex-rs/core/tests/suite/skills.rs:user_turn_includes_skill_instructions
-- Skill script sandbox behavior is covered: codex-rs/core/tests/suite/skill_approval.rs:shell_zsh_fork_skill_scripts_ignore_declared_permissions,shell_zsh_fork_still_enforces_workspace_write_sandbox
 - PR babysitting wait targets and wake priorities are covered: codex-rs/core/tests/suite/skills.rs:pr_babysitting_skill_drives_monitoring_lifecycle
 - PR babysitting resumes after generation and watcher wake events: codex-rs/core/tests/suite/skills.rs:pr_babysitting_skill_drives_monitoring_lifecycle
 - PR babysitting keeps watching an open green PR: codex-rs/core/tests/suite/skills.rs:pr_babysitting_skill_drives_monitoring_lifecycle

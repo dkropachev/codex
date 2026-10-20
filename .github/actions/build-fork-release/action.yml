@@ -136,25 +136,6 @@ runs:
           strip -x "${release_dir}/codex" "${release_dir}/codex-code-mode-host"
         fi
 
-    - name: Fetch pinned zsh manifest
-      shell: bash
-      working-directory: ${{ github.workspace }}
-      run: |
-        set -euo pipefail
-        manifest="${RUNNER_TEMP}/codex-zsh"
-        curl -fsSL "$CODEX_ZSH_MANIFEST_URL" -o "$manifest"
-        actual="$(python3 - "$manifest" <<'PY'
-        import hashlib
-        import pathlib
-        import sys
-        print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
-        PY
-        )"
-        [[ "$actual" == "$CODEX_ZSH_MANIFEST_SHA256" ]] || {
-          echo "Pinned zsh manifest checksum mismatch" >&2
-          exit 1
-        }
-
     - name: Assemble package archive
       shell: bash
       working-directory: ${{ github.workspace }}
@@ -170,7 +151,6 @@ runs:
           --variant codex
           --entrypoint-bin "${release_dir}/codex"
           --code-mode-host-bin "${release_dir}/codex-code-mode-host"
-          --zsh-manifest "${RUNNER_TEMP}/codex-zsh"
           --cargo-profile release
           --package-dir "$package_dir"
           --force
@@ -242,7 +222,6 @@ runs:
         "${unpacked}/bin/codex" --version | grep -F " $VERSION"
         "${unpacked}/bin/codex-code-mode-host" </dev/null >/dev/null
         "${unpacked}/codex-path/rg" --version >/dev/null
-        "${unpacked}/codex-resources/zsh/bin/zsh" --version >/dev/null
         if [[ "$RUNNER_OS" == "Linux" ]]; then
           "${unpacked}/codex-resources/bwrap" --version >/dev/null
         fi
