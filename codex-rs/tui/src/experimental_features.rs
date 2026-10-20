@@ -1,6 +1,7 @@
 //! Bounded experimental-feature discovery and persistence through existing RPCs.
 //! Dropping a popup stops discovery, but submitted writes finish independently.
-//! Readback describes configured enablement; reserved IDs bound unanswered requests.
+//! Readback describes configured enablement; reserved IDs bound popup requests.
+//! Background discovery retains a per-connection slot until an admitted RPC settles.
 
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ClientRequest;
@@ -16,6 +17,9 @@ use std::collections::HashSet;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
+mod background;
+pub(crate) use background::fetch as fetch_background;
+
 pub(crate) fn fetch(
     request_handle: AppServerRequestHandle,
     thread_id: Option<ThreadId>,
@@ -24,46 +28,7 @@ pub(crate) fn fetch(
 ) {
     let request_id = request_id.into();
     tokio::spawn(async move {
-        let discovery = async {
-            let mut features = Vec::new();
-            let mut cursor = None;
-            let mut cursors = HashSet::new();
-            let mut names = HashSet::new();
-            for _ in 0..10 {
-                let response = request_handle
-                    .request_typed::<ExperimentalFeatureListResponse>(
-                        ClientRequest::ExperimentalFeatureList {
-                            // The client rejects duplicate pending IDs, bounding unanswered
-                            // requests across popup cancellation and timeout/retry cycles.
-                            request_id: RequestId::String(request_id.to_string()),
-                            params: ExperimentalFeatureListParams {
-                                cursor,
-                                limit: Some(100),
-                                thread_id: thread_id.map(|id| id.to_string()),
-                            },
-                        },
-                    )
-                    .await
-                    .map_err(|_| "Experimental feature request failed".to_string())?;
-                if response.data.len() > 100 {
-                    return Err("Experimental feature page exceeds requested limit".to_string());
-                }
-                features.extend(
-                    response
-                        .data
-                        .into_iter()
-                        .filter(|feature| names.insert(feature.name.clone())),
-                );
-                cursor = response.next_cursor;
-                let Some(next) = cursor.as_ref() else {
-                    return Ok(features);
-                };
-                if !cursors.insert(next.clone()) {
-                    return Err("Experimental feature pagination repeated a cursor".to_string());
-                }
-            }
-            Err("Experimental feature discovery exceeded 10 pages".to_string())
-        };
+        let discovery = discover(&request_handle, thread_id, &request_id, || false);
         tokio::select! {
             _ = response_tx.closed() => {},
             result = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), discovery) => {
@@ -72,6 +37,55 @@ pub(crate) fn fetch(
             }
         }
     });
+}
+
+async fn discover(
+    request_handle: &AppServerRequestHandle,
+    thread_id: Option<ThreadId>,
+    request_id: &str,
+    stop_before_next_page: impl Fn() -> bool,
+) -> Result<Vec<ExperimentalFeature>, String> {
+    let mut features = Vec::new();
+    let mut cursor = None;
+    let mut cursors = HashSet::new();
+    let mut names = HashSet::new();
+    for _ in 0..10 {
+        if stop_before_next_page() {
+            return Err("Experimental feature discovery timed out".to_string());
+        }
+        let response = request_handle
+            .request_typed::<ExperimentalFeatureListResponse>(
+                ClientRequest::ExperimentalFeatureList {
+                    // Popup/save IDs reject duplicate pending requests; background
+                    // discovery instead retains its per-connection slot.
+                    request_id: RequestId::String(request_id.to_string()),
+                    params: ExperimentalFeatureListParams {
+                        cursor,
+                        limit: Some(100),
+                        thread_id: thread_id.map(|id| id.to_string()),
+                    },
+                },
+            )
+            .await
+            .map_err(|_| "Experimental feature request failed".to_string())?;
+        if response.data.len() > 100 {
+            return Err("Experimental feature page exceeds requested limit".to_string());
+        }
+        features.extend(
+            response
+                .data
+                .into_iter()
+                .filter(|feature| names.insert(feature.name.clone())),
+        );
+        cursor = response.next_cursor;
+        let Some(next) = cursor.as_ref() else {
+            return Ok(features);
+        };
+        if !cursors.insert(next.clone()) {
+            return Err("Experimental feature pagination repeated a cursor".to_string());
+        }
+    }
+    Err("Experimental feature discovery exceeded 10 pages".to_string())
 }
 
 /// Configured readback, deliberately separate from running-task feature state.

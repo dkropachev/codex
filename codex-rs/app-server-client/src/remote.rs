@@ -624,6 +624,21 @@ impl RemoteAppServerClient {
     }
 }
 
+impl crate::AppServerRequestHandle {
+    /// Whether both handles send requests to the same app-server connection.
+    pub fn same_connection(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::InProcess(left), Self::InProcess(right)) => {
+                left.command_tx.same_channel(&right.command_tx)
+            }
+            (Self::Remote(left), Self::Remote(right)) => {
+                left.command_tx.same_channel(&right.command_tx)
+            }
+            (Self::InProcess(_), Self::Remote(_)) | (Self::Remote(_), Self::InProcess(_)) => false,
+        }
+    }
+}
+
 impl RemoteAppServerRequestHandle {
     pub(crate) async fn resolve_server_request(
         &self,

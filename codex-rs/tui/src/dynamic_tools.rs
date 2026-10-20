@@ -1303,14 +1303,13 @@ async fn background_turn_program(
             Some(Account::ApiKey { .. }) => {
                 // Only the target thread can establish its forwarding policy, including
                 // project opt-outs. Older servers that cannot report it keep omission.
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                crate::experimental_features::fetch(
+                if !crate::experimental_features::fetch_background(
                     handle.clone(),
-                    Some(ThreadId::from_string(thread_id).map_err(|error| error.to_string())?),
-                    format!("tui-dynamic-{}", Uuid::new_v4()),
-                    tx,
-                );
-                if !rx.await.ok().and_then(Result::ok).is_some_and(|features| {
+                    ThreadId::from_string(thread_id).map_err(|error| error.to_string())?,
+                )
+                .await
+                .ok()
+                .is_some_and(|features| {
                     features.into_iter().any(|feature| {
                         feature.name == Feature::ApiKeyCyberAccessPrograms.key() && feature.enabled
                     })
@@ -1612,3 +1611,7 @@ fn truncate(text: &str, limit: usize) -> String {
 #[cfg(test)]
 #[path = "dynamic_tools_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "dynamic_tools_background_tests.rs"]
+mod background_tests;
