@@ -88,6 +88,8 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant is unmaintained after merging into zbus 6; zbus 4 remains via codex-tui and keyring 3.6/secret-service 4 in codex-keyring-store; even secret-service 5 requires zbus 5; remove when the credential-store dependencies and TUI migrate to zbus 6" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names is unmaintained after merging into zbus 6; zbus 4 remains via codex-tui and keyring 3.6/secret-service 4 in codex-keyring-store; even secret-service 5 requires zbus 5; remove when the credential-store dependencies and TUI migrate to zbus 6" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive is unmaintained after merging into zbus 6; zbus 4 remains via codex-tui and keyring 3.6/secret-service 4 in codex-keyring-store; even secret-service 5 requires zbus 5; remove when the credential-store dependencies and TUI migrate to zbus 6" },
+    # Reviewed 2026-10-20: maintenance-only advisory; i18n-config has not released its toml migration.
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml is unmaintained; pulled in via i18n-config 0.4.8 under age 0.12.1 used by codex-secrets; no fixed i18n-config release yet; remove when age/i18n dependencies adopt the upstream toml migration" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
