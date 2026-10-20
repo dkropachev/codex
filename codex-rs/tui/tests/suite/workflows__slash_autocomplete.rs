@@ -1,10 +1,8 @@
 use std::collections::HashMap;
-use std::io::Write;
 use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_protocol::ThreadId;
 use codex_utils_pty::TerminalSize;
 use codex_utils_pty::combine_output_receivers;
 use codex_utils_pty::spawn_pty_process;
@@ -12,6 +10,9 @@ use codex_workflows::ScaffoldRequest;
 use codex_workflows::scaffold_workflow;
 use tempfile::tempdir;
 use tokio::sync::broadcast;
+
+use super::live_readiness::LiveScreen;
+use super::live_readiness::wait_for_ready;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -159,14 +160,14 @@ IFS= read -r _completion_ack
     .await?;
     let writer = spawned.session.writer_sender();
     let mut output_rx = combine_output_receivers(spawned.stdout_rx, spawned.stderr_rx);
-    let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
+    let mut screen = LiveScreen::new_with_callbacks(
+        /*rows*/ 24,
+        /*cols*/ 80,
+        /*scrollback_len*/ 0,
+        Default::default(),
+    );
 
-    wait_for_screen(&mut output_rx, &mut screen, "active thread", |contents| {
-        contents
-            .split_whitespace()
-            .any(|candidate| ThreadId::from_string(candidate).is_ok())
-    })
-    .await?;
+    wait_for_ready(&mut output_rx, &mut screen).await?;
 
     writer.send(b"/code-review".to_vec()).await?;
     wait_for_screen(
@@ -193,7 +194,7 @@ IFS= read -r _completion_ack
         |contents| contents.contains("Visible workflow result.") && !contents.contains("Working ("),
     )
     .await?;
-    tokio::time::sleep(Duration::from_millis(/*millis*/ 250)).await;
+    wait_for_ready(&mut output_rx, &mut screen).await?;
 
     std::fs::remove_file(&workflow_release)?;
     std::fs::write(&workflow_failure, "fail\n")?;
@@ -222,7 +223,7 @@ IFS= read -r _completion_ack
         |contents| contents.contains("workflow failed for test") && !contents.contains("Working ("),
     )
     .await?;
-    tokio::time::sleep(Duration::from_millis(/*millis*/ 250)).await;
+    wait_for_ready(&mut output_rx, &mut screen).await?;
 
     std::fs::remove_file(&workflow_release)?;
     std::fs::remove_file(&workflow_failure)?;
@@ -278,6 +279,9 @@ async fn workflow_command_autocompletes_in_live_tui() -> Result<()> {
 model_provider = "openai"
 suppress_unstable_features_warning = true
 notice.model_migrations."gpt-5.6-terra" = "gpt-6-sol"
+
+[tui]
+status_line = ["thread-id"]
 
 [features]
 workflows = true
@@ -340,12 +344,14 @@ trust_level = "trusted"
     .await?;
     let writer = spawned.session.writer_sender();
     let mut output_rx = combine_output_receivers(spawned.stdout_rx, spawned.stderr_rx);
-    let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
+    let mut screen = LiveScreen::new_with_callbacks(
+        /*rows*/ 24,
+        /*cols*/ 80,
+        /*scrollback_len*/ 0,
+        Default::default(),
+    );
 
-    wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("GPT-5.6-Terra default")
-    })
-    .await?;
+    wait_for_ready(&mut output_rx, &mut screen).await?;
 
     for byte in b"/code-review" {
         writer.send(vec![*byte]).await?;
@@ -505,7 +511,7 @@ esac
 
 async fn wait_for_screen(
     output_rx: &mut broadcast::Receiver<Vec<u8>>,
-    screen: &mut vt100::Parser,
+    screen: &mut LiveScreen,
     label: &str,
     predicate: impl Fn(&str) -> bool,
 ) -> Result<String> {
@@ -543,7 +549,7 @@ async fn wait_for_screen(
                     );
                 }
             };
-        screen.write_all(&chunk)?;
+        screen.process(&chunk);
         raw.extend_from_slice(&chunk);
     }
 }

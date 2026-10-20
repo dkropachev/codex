@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -13,6 +12,9 @@ use tempfile::tempdir;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use wiremock::MockServer;
+
+use super::live_readiness::LiveScreen;
+use super::live_readiness::wait_for_ready;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn skill_mention_submits_skill_instructions() -> Result<()> {
@@ -53,12 +55,14 @@ async fn skill_mention_submits_skill_instructions() -> Result<()> {
     let spawned = spawn_tui(&codex, codex_home.path(), log_dir.path(), workspace.path()).await?;
     let writer = spawned.session.writer_sender();
     let mut output_rx = combine_output_receivers(spawned.stdout_rx, spawned.stderr_rx);
-    let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
+    let mut screen = LiveScreen::new_with_callbacks(
+        /*rows*/ 24,
+        /*cols*/ 80,
+        /*scrollback_len*/ 0,
+        Default::default(),
+    );
 
-    wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("GPT-5.6-Terra default")
-    })
-    .await?;
+    wait_for_ready(&mut output_rx, &mut screen).await?;
 
     send_text(&writer, "$write").await?;
     wait_for_screen(&mut output_rx, &mut screen, "skill popup", |contents| {
@@ -157,12 +161,14 @@ async fn skill_toggle_enables_disabled_skill_and_preserves_draft() -> Result<()>
     let spawned = spawn_tui(&codex, codex_home.path(), log_dir.path(), workspace.path()).await?;
     let writer = spawned.session.writer_sender();
     let mut output_rx = combine_output_receivers(spawned.stdout_rx, spawned.stderr_rx);
-    let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
+    let mut screen = LiveScreen::new_with_callbacks(
+        /*rows*/ 24,
+        /*cols*/ 80,
+        /*scrollback_len*/ 0,
+        Default::default(),
+    );
 
-    wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("GPT-5.6-Terra default")
-    })
-    .await?;
+    wait_for_ready(&mut output_rx, &mut screen).await?;
     writer.send(b"$".to_vec()).await?;
     wait_for_screen(
         &mut output_rx,
@@ -177,7 +183,7 @@ async fn skill_toggle_enables_disabled_skill_and_preserves_draft() -> Result<()>
         &mut output_rx,
         &mut screen,
         "cleared skill probe",
-        |contents| contents.contains("GPT-5.6-Terra default") && !contents.contains('$'),
+        |contents| contents.contains("Ask Codex to do anything") && !contents.contains('$'),
     )
     .await?;
 
@@ -364,6 +370,9 @@ wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 
+[tui]
+status_line = ["thread-id"]
+
 [features]
 mentions_v2 = false
 
@@ -421,7 +430,7 @@ async fn send_text(writer: &mpsc::Sender<Vec<u8>>, text: &str) -> Result<()> {
 
 async fn wait_for_screen(
     output_rx: &mut broadcast::Receiver<Vec<u8>>,
-    screen: &mut vt100::Parser,
+    screen: &mut LiveScreen,
     label: &str,
     predicate: impl Fn(&str) -> bool,
 ) -> Result<String> {
@@ -463,7 +472,7 @@ async fn wait_for_screen(
                     );
                 }
             };
-        screen.write_all(&chunk)?;
+        screen.process(&chunk);
         raw.extend_from_slice(&chunk);
     }
 }

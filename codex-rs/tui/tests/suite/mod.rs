@@ -10,6 +10,7 @@ mod daemon_compatibility;
 mod directory_trust;
 #[cfg(unix)]
 mod focus_palette;
+mod live_readiness;
 #[path = "mcp__live.rs"]
 mod mcp_live;
 #[path = "plugins__live.rs"]
