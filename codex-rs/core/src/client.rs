@@ -327,6 +327,13 @@ pub struct ModelClientSession {
     turn_state: Arc<OnceLock<String>>,
 }
 
+/// A value copy of a turn's sticky routing token and its authentication ownership.
+pub(crate) struct ResponsesRoutingSnapshot {
+    pub(crate) turn_state: Option<String>,
+    pub(crate) account_pool_selection: Option<AccountPoolAuthSelection>,
+    pub(crate) auth_owner_generation: Option<u64>,
+}
+
 /// Account selection and sticky routing for an HTTP request sequence.
 pub(crate) struct ResponsesHttpState {
     turn_state: Arc<OnceLock<String>>,
@@ -334,10 +341,10 @@ pub(crate) struct ResponsesHttpState {
 }
 
 impl ResponsesHttpState {
-    pub(crate) fn new(turn_state: Arc<OnceLock<String>>) -> Self {
+    pub(crate) fn new(snapshot: ResponsesRoutingSnapshot) -> Self {
         Self {
-            turn_state,
-            account_pool_selection: None,
+            turn_state: Arc::new(snapshot.turn_state.map(OnceLock::from).unwrap_or_default()),
+            account_pool_selection: snapshot.account_pool_selection,
         }
     }
 }
@@ -1767,12 +1774,22 @@ impl<'a> ResponsesHttpExecutor<'a> {
 }
 
 impl ModelClientSession {
-    pub(crate) fn turn_state_with_auth_owner(&self) -> (Option<String>, Option<u64>) {
+    pub(crate) fn responses_routing_snapshot(&self) -> ResponsesRoutingSnapshot {
         let owner = self.client.auth_owner_generation();
-        let turn_state = (self.websocket_session.auth_owner_generation == owner)
-            .then(|| self.turn_state.get().cloned())
-            .flatten();
-        (turn_state, owner)
+        let (turn_state, account_pool_selection) =
+            if self.websocket_session.auth_owner_generation == owner {
+                (
+                    self.turn_state.get().cloned(),
+                    self.last_account_pool_selection.clone(),
+                )
+            } else {
+                (None, None)
+            };
+        ResponsesRoutingSnapshot {
+            turn_state,
+            account_pool_selection,
+            auth_owner_generation: owner,
+        }
     }
 
     /// Checks whether the current request is an incremental extension of the previous request.

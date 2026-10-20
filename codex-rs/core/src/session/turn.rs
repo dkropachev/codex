@@ -440,7 +440,7 @@ pub(crate) async fn run_turn(
             CompactionPhase::PreTurn,
             &cancellation_token,
             &token_status,
-            client_session.turn_state_with_auth_owner(),
+            client_session.responses_routing_snapshot(),
         )
         .await;
     }
@@ -628,7 +628,7 @@ pub(crate) async fn run_turn(
                     },
                     &cancellation_token,
                     &token_status,
-                    client_session.turn_state_with_auth_owner(),
+                    client_session.responses_routing_snapshot(),
                 )
                 .await;
 

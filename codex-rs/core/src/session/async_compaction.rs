@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use crate::client::ResponsesRoutingSnapshot;
 use crate::compact_remote_v2::BackgroundCompactionCandidate;
 use crate::compact_remote_v2::capture_background_input;
 use crate::compact_remote_v2::run_background_compaction;
@@ -56,11 +57,11 @@ pub(super) async fn maybe_start(
     phase: CompactionPhase,
     turn_cancellation: &CancellationToken,
     token_status: &ContextWindowTokenStatus,
-    (turn_state, auth_owner_generation): (Option<String>, Option<u64>),
+    routing_snapshot: ResponsesRoutingSnapshot,
 ) {
     let turn_context = &step_context.turn;
     // Let the foreground establish the backend's model pin before starting a parallel request.
-    if matches!(phase, CompactionPhase::PreTurn) && turn_state.is_none() {
+    if matches!(phase, CompactionPhase::PreTurn) && routing_snapshot.turn_state.is_none() {
         return;
     }
     if !enabled(turn_context)
@@ -83,6 +84,7 @@ pub(super) async fn maybe_start(
     let base_instructions = sess.get_prompt_base_instructions().await;
     let mut state = sess.state.lock().await;
     let model_info = &step_context.settings.model_info;
+    let auth_owner_generation = routing_snapshot.auth_owner_generation;
     let attempt = CompactionAttempt {
         history_version: state.history.history_version(),
         model_slug: model_info.slug.clone(),
@@ -106,8 +108,7 @@ pub(super) async fn maybe_start(
         step_context,
         state.history.clone(),
         base_instructions,
-        turn_state,
-        auth_owner_generation,
+        routing_snapshot,
         sess.current_window_from_state(&state),
     );
     let task_session = Arc::clone(sess);
