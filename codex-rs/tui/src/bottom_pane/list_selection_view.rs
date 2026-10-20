@@ -57,6 +57,10 @@ use super::selection_tabs::tab_bar_height;
 use std::cell::Cell;
 use unicode_width::UnicodeWidthStr;
 
+mod search;
+
+pub(crate) use search::SearchMode;
+
 /// Minimum list width (in content columns) required before the side-by-side
 /// layout is activated. Keeps the list usable even when sharing horizontal
 /// space with the side content panel.
@@ -323,14 +327,6 @@ impl Default for SelectionViewParams {
     }
 }
 
-/// Controls whether a searchable list starts in search mode or waits for a shortcut.
-#[derive(Clone, Copy, Default)]
-pub(crate) enum SearchMode {
-    #[default]
-    Immediate,
-    OnDemand(KeyBinding),
-}
-
 /// Runtime state for rendering and interacting with a list-based selection popup.
 ///
 /// This type is the single authority for filtered index mapping between
@@ -555,19 +551,6 @@ impl ListSelectionView {
 
     fn tabs_enabled(&self) -> bool {
         self.active_tab_idx.is_some()
-    }
-
-    fn search_items_active(&self) -> bool {
-        !self.search_query.is_empty() && !self.search_items.is_empty()
-    }
-
-    fn edit_search_query(&mut self, edit: impl FnOnce(&mut String)) {
-        let search_items_were_active = self.search_items_active();
-        edit(&mut self.search_query);
-        if search_items_were_active != self.search_items_active() {
-            self.state.reset();
-        }
-        self.apply_filter();
     }
 
     fn active_items(&self) -> &[SelectionItem] {
@@ -1013,41 +996,6 @@ impl ListSelectionView {
         } else {
             self.accept(SelectionActionKind::Primary);
         }
-    }
-
-    /// Preserve a searchable picker's filter when its parent rebuilds the view.
-    pub(crate) fn search_query(&self) -> Option<&str> {
-        self.search_field_visible()
-            .then_some(self.search_query.as_str())
-    }
-
-    fn search_field_visible(&self) -> bool {
-        self.is_searchable && self.search_active
-    }
-
-    fn on_demand_search_active(&self) -> bool {
-        self.search_active && matches!(self.search_mode, SearchMode::OnDemand(_))
-    }
-
-    fn stop_on_demand_search(&mut self) {
-        self.search_active = false;
-        self.edit_search_query(String::clear);
-    }
-
-    pub(crate) fn set_search_query(&mut self, query: String) {
-        let selected_actual_idx = self.selected_actual_idx();
-        let changes_item_source =
-            self.search_items_active() != (!query.is_empty() && !self.search_items.is_empty());
-        self.search_active = true;
-        self.search_query = query;
-        if changes_item_source {
-            self.state.reset();
-            self.initial_selected_idx = None;
-        } else {
-            self.state.selected_idx = None;
-            self.initial_selected_idx = selected_actual_idx;
-        }
-        self.apply_filter();
     }
 
     pub(crate) fn take_last_selected_index(&mut self) -> Option<usize> {
@@ -1737,30 +1685,7 @@ impl Renderable for ListSelectionView {
             );
         }
 
-        // -- Search bar --
-        if search_field_visible {
-            let query_span: Span<'static> = if self.search_query.is_empty() {
-                self.search_placeholder
-                    .as_ref()
-                    .map(|placeholder| placeholder.clone().dim())
-                    .unwrap_or_else(|| "".into())
-            } else {
-                self.search_query.clone().into()
-            };
-            if self.on_demand_search_active() {
-                let label = "Search › ";
-                buf.set_style(search_area, crate::bottom_pane::active_tab_style());
-                Line::from(vec![label.cyan().bold(), query_span]).render(search_area, buf);
-                let cursor_offset = (label.width() + self.search_query.width())
-                    .min(usize::from(search_area.width.saturating_sub(/*rhs*/ 1)));
-                self.search_cursor.set(Some((
-                    search_area.x.saturating_add(cursor_offset as u16),
-                    search_area.y,
-                )));
-            } else {
-                Line::from(query_span).render(search_area, buf);
-            }
-        }
+        self.render_search_field(search_area, buf);
 
         // -- List rows --
         if list_area.height > 0 {
@@ -1902,6 +1827,7 @@ impl ListSelectionView {
 }
 
 #[cfg(test)]
+#[path = "list_selection_view/tests"]
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
@@ -2005,39 +1931,6 @@ mod tests {
             assert_eq!(view.completion, expected.map(|_| ViewCompletion::Accepted));
             assert_eq!(view.search_query, if is_searchable { "s" } else { "" });
         }
-    }
-
-    #[test]
-    fn searchable_list_honors_configured_printable_accept_alternative() {
-        let (tx, mut rx) = unbounded_channel();
-        let mut keymap = crate::keymap::RuntimeKeymap::defaults().list;
-        keymap.accept = vec![
-            crate::key_hint::plain(KeyCode::Char('z')),
-            crate::key_hint::plain(KeyCode::Enter),
-        ];
-        let mut view = ListSelectionView::new(
-            SelectionViewParams {
-                is_searchable: true,
-                items: vec![SelectionItem {
-                    name: "Selection".into(),
-                    actions: vec![Box::new(|tx| {
-                        tx.send(AppEvent::UpdateModel("accepted".into()))
-                    })],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            },
-            AppEventSender::new(tx),
-            keymap,
-        );
-
-        view.handle_key_event(KeyEvent::from(KeyCode::Char('z')));
-
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(AppEvent::UpdateModel(model)) if model == "accepted"
-        ));
-        assert_eq!(view.search_query(), Some(""));
     }
 
     fn make_selection_view(subtitle: Option<&str>) -> ListSelectionView {
@@ -2272,37 +2165,6 @@ mod tests {
     }
 
     #[test]
-    fn renders_search_query_line_when_enabled() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let items = vec![SelectionItem {
-            name: "Read Only".to_string(),
-            description: Some("Codex can read files".to_string()),
-            is_current: false,
-            dismiss_on_select: true,
-            ..Default::default()
-        }];
-        let mut view = new_view(
-            SelectionViewParams {
-                title: Some("Select Approval Mode".to_string()),
-                footer_hint: Some(standard_popup_hint_line()),
-                items,
-                is_searchable: true,
-                search_placeholder: Some("Type to search branches".to_string()),
-                ..Default::default()
-            },
-            tx,
-        );
-        view.set_search_query("filters".to_string());
-
-        let lines = render_lines(&view);
-        assert!(
-            lines.contains("filters"),
-            "expected search query line to include rendered query, got {lines:?}"
-        );
-    }
-
-    #[test]
     fn empty_searchable_list_keeps_search_and_no_matches_visible() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -2323,113 +2185,6 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert_snapshot!("list_selection_empty_searchable", rendered);
-    }
-
-    #[test]
-    fn paste_appends_to_search_query_and_filters_items() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut view = new_view(
-            SelectionViewParams {
-                items: vec![
-                    SelectionItem {
-                        name: "main -> feature/other".to_string(),
-                        search_value: Some("feature/other".to_string()),
-                        ..Default::default()
-                    },
-                    SelectionItem {
-                        name: "main -> feature/paste-support".to_string(),
-                        search_value: Some("feature/paste-support".to_string()),
-                        ..Default::default()
-                    },
-                ],
-                is_searchable: true,
-                ..Default::default()
-            },
-            tx,
-        );
-        view.handle_key_event(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
-
-        assert!(view.handle_paste("eature/paste-support\n".to_string()));
-
-        assert_eq!(view.search_query, "feature/paste-support");
-        assert_eq!(view.filtered_indices, vec![1]);
-        assert_eq!(view.selected_actual_idx(), Some(1));
-    }
-
-    #[test]
-    fn whitespace_only_paste_is_ignored() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut view = new_view(
-            SelectionViewParams {
-                items: vec![SelectionItem {
-                    name: "main".to_string(),
-                    search_value: Some("main".to_string()),
-                    ..Default::default()
-                }],
-                is_searchable: true,
-                ..Default::default()
-            },
-            tx,
-        );
-
-        assert!(!view.handle_paste(" \n\t ".to_string()));
-
-        assert_eq!(view.search_query, "");
-        assert_eq!(view.filtered_indices, vec![0]);
-    }
-
-    #[test]
-    fn switching_tabs_changes_visible_items_and_clears_search() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut view = ListSelectionView::new(
-            SelectionViewParams {
-                tabs: vec![
-                    SelectionTab {
-                        id: "alpha".to_string(),
-                        label: "Alpha".to_string(),
-                        header: Box::new(()),
-                        items: vec![SelectionItem {
-                            name: "Alpha Item".to_string(),
-                            dismiss_on_select: true,
-                            ..Default::default()
-                        }],
-                    },
-                    SelectionTab {
-                        id: "beta".to_string(),
-                        label: "Beta".to_string(),
-                        header: Box::new(()),
-                        items: vec![SelectionItem {
-                            name: "Beta Item".to_string(),
-                            dismiss_on_select: true,
-                            ..Default::default()
-                        }],
-                    },
-                ],
-                initial_tab_id: Some("beta".to_string()),
-                is_searchable: true,
-                ..Default::default()
-            },
-            tx,
-            crate::keymap::RuntimeKeymap::defaults().list,
-        );
-        view.set_search_query("beta".to_string());
-
-        view.handle_key_event(KeyEvent::from(KeyCode::Left));
-
-        assert_eq!(view.active_tab_id(), Some("alpha"));
-        assert_eq!(view.search_query, "");
-        view.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
-        assert_eq!(view.active_tab_id(), Some("beta"));
-        view.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
-        assert_eq!(view.active_tab_id(), Some("alpha"));
-        let rendered = render_lines(&view);
-        assert!(
-            rendered.contains("Alpha Item") && !rendered.contains("Beta Item"),
-            "expected switched tab to render the alpha items, got:\n{rendered}"
-        );
     }
 
     #[test]
@@ -2490,94 +2245,6 @@ mod tests {
 
         assert_eq!(view.active_tab_id(), Some("alpha"));
         assert_eq!(view.selected_actual_idx(), Some(1));
-    }
-
-    #[test]
-    fn space_appends_to_active_search_instead_of_toggling_selected_item() {
-        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut view = ListSelectionView::new(
-            SelectionViewParams {
-                items: vec![SelectionItem {
-                    name: "Plugin".to_string(),
-                    toggle: Some(SelectionToggle {
-                        is_on: false,
-                        action: Box::new(|_enabled, tx: &_| {
-                            tx.send(AppEvent::OpenApprovalsPopup);
-                        }),
-                    }),
-                    ..Default::default()
-                }],
-                is_searchable: true,
-                ..Default::default()
-            },
-            tx,
-            crate::keymap::RuntimeKeymap::defaults().list,
-        );
-        view.set_search_query("plugin".to_string());
-
-        view.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
-
-        assert_eq!(view.search_query, "plugin ");
-        assert!(
-            !view.active_items()[0]
-                .toggle
-                .as_ref()
-                .is_some_and(|toggle| toggle.is_on),
-            "expected Space to leave the toggle state unchanged while search is active"
-        );
-        assert!(
-            rx.try_recv().is_err(),
-            "expected Space with an active search query to avoid firing the toggle action"
-        );
-    }
-
-    #[test]
-    fn configured_list_binding_takes_precedence_over_search_toggle_key() {
-        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut keymap = crate::keymap::RuntimeKeymap::defaults().list;
-        keymap.move_down = vec![crate::key_hint::plain(KeyCode::Tab)];
-        let mut view = ListSelectionView::new(
-            SelectionViewParams {
-                items: vec![
-                    SelectionItem {
-                        name: "Plugin".to_string(),
-                        toggle: Some(SelectionToggle {
-                            is_on: false,
-                            action: Box::new(|_enabled, tx: &_| {
-                                tx.send(AppEvent::OpenApprovalsPopup);
-                            }),
-                        }),
-                        ..Default::default()
-                    },
-                    SelectionItem {
-                        name: "Next".to_string(),
-                        ..Default::default()
-                    },
-                ],
-                is_searchable: true,
-                search_toggle_key: Some(crate::key_hint::plain(KeyCode::Tab)),
-                ..Default::default()
-            },
-            tx,
-            keymap,
-        );
-
-        view.handle_key_event(KeyEvent::from(KeyCode::Tab));
-
-        assert_eq!(view.selected_actual_idx(), Some(1));
-        assert!(
-            !view.active_items()[0]
-                .toggle
-                .as_ref()
-                .is_some_and(|toggle| toggle.is_on),
-            "expected the configured move-down binding to leave the toggle unchanged"
-        );
-        assert!(
-            rx.try_recv().is_err(),
-            "expected the configured move-down binding not to fire the toggle action"
-        );
     }
 
     #[test]
@@ -3494,6 +3161,9 @@ mod tests {
         assert_eq!(cell.symbol(), " ");
         assert_eq!(cell.style().bg, Some(Color::Reset));
     }
+
+    #[path = "search_tests.rs"]
+    mod search_tests;
 }
 
 #[cfg(test)]
