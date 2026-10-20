@@ -60,6 +60,54 @@ class InstallShTest(unittest.TestCase):
             )
             self.assertIn(f"Resolved version: {VERSION}", result.stdout)
 
+    def test_current_release_without_bundled_zsh_installs_and_reuses_cache(
+        self,
+    ) -> None:
+        version = "0.163.0"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive_path, checksum_path, metadata_json = create_package_release(
+                root,
+                binary_version=version,
+                metadata_version=version,
+                bundled_zsh=False,
+            )
+            for phase, expected_requests in (
+                (
+                    "install",
+                    [
+                        tag_metadata_url(version),
+                        release_asset_url(version, CHECKSUM_ASSET),
+                        release_asset_url(version, PACKAGE_ASSET),
+                        release_asset_url(version, HOST_ASSET),
+                    ],
+                ),
+                ("reuse", [tag_metadata_url(version)]),
+            ):
+                with self.subTest(phase=phase):
+                    (root / "requests.log").unlink(missing_ok=True)
+                    result, requests = run_installer_in(
+                        root,
+                        version,
+                        metadata_json=metadata_json,
+                        archive_path=archive_path,
+                        checksum_path=checksum_path,
+                        force_macos=True,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(requests, expected_requests)
+                    release_dir = root / (
+                        "codex-home/packages/standalone/releases/"
+                        f"dkropachev-{version}-{TARGET}"
+                    )
+                    self.assertEqual(
+                        (root / "codex-home/packages/standalone/current").resolve(),
+                        release_dir,
+                    )
+                    self.assertFalse(
+                        (release_dir / "codex-resources/zsh/bin/zsh").exists()
+                    )
+
     def test_latest_release_uses_fork_latest_metadata_and_resolved_assets(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -498,12 +546,15 @@ class InstallShTest(unittest.TestCase):
             )
 
     def test_reinstall_repairs_missing_bundled_zsh(self) -> None:
+        version = "0.162.1"
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            archive_path, checksum_path, metadata_json = create_package_release(root)
+            archive_path, checksum_path, metadata_json = create_package_release(
+                root, binary_version=version, metadata_version=version
+            )
             first_result, _requests = run_installer_in(
                 root,
-                VERSION,
+                version,
                 metadata_json=metadata_json,
                 archive_path=archive_path,
                 checksum_path=checksum_path,
@@ -517,7 +568,7 @@ class InstallShTest(unittest.TestCase):
                 / "packages"
                 / "standalone"
                 / "releases"
-                / f"dkropachev-{VERSION}-{TARGET}"
+                / f"dkropachev-{version}-{TARGET}"
             )
             zsh_path = release_dir / "codex-resources" / "zsh" / "bin" / "zsh"
             zsh_path.unlink()
@@ -525,7 +576,7 @@ class InstallShTest(unittest.TestCase):
 
             second_result, second_requests = run_installer_in(
                 root,
-                VERSION,
+                version,
                 metadata_json=metadata_json,
                 archive_path=archive_path,
                 checksum_path=checksum_path,
@@ -536,10 +587,10 @@ class InstallShTest(unittest.TestCase):
             self.assertEqual(
                 second_requests,
                 [
-                    tag_metadata_url(VERSION),
-                    release_asset_url(VERSION, CHECKSUM_ASSET),
-                    release_asset_url(VERSION, PACKAGE_ASSET),
-                    release_asset_url(VERSION, HOST_ASSET),
+                    tag_metadata_url(version),
+                    release_asset_url(version, CHECKSUM_ASSET),
+                    release_asset_url(version, PACKAGE_ASSET),
+                    release_asset_url(version, HOST_ASSET),
                 ],
             )
             self.assertTrue(os.access(zsh_path, os.X_OK))
@@ -889,11 +940,14 @@ def create_package_release(
     *,
     binary_version: str = VERSION,
     metadata_version: str = VERSION,
+    bundled_zsh: bool = True,
 ) -> tuple[Path, Path, str]:
     package_dir = root / "package"
     (package_dir / "bin").mkdir(parents=True)
     (package_dir / "codex-path").mkdir()
-    (package_dir / "codex-resources" / "zsh" / "bin").mkdir(parents=True)
+    (package_dir / "codex-resources").mkdir()
+    if bundled_zsh:
+        (package_dir / "codex-resources" / "zsh" / "bin").mkdir(parents=True)
     (package_dir / "codex-package.json").write_text(
         json.dumps(
             {
@@ -918,10 +972,11 @@ def create_package_release(
         "#!/bin/sh\nexit 0\n",
     )
     write_executable(package_dir / "codex-path" / "rg", "#!/bin/sh\nexit 0\n")
-    write_executable(
-        package_dir / "codex-resources" / "zsh" / "bin" / "zsh",
-        "#!/bin/sh\nexit 0\n",
-    )
+    if bundled_zsh:
+        write_executable(
+            package_dir / "codex-resources" / "zsh" / "bin" / "zsh",
+            "#!/bin/sh\nexit 0\n",
+        )
 
     archive_path = root / PACKAGE_ASSET
     with tarfile.open(archive_path, "w:gz") as archive:
