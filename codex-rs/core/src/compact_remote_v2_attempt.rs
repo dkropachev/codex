@@ -11,6 +11,7 @@ use super::RemoteCompactionV2Output;
 use super::run_remote_compaction_request_v2;
 use crate::Prompt;
 use crate::client::ModelClientSession;
+use crate::client::ResponsesRoutingSnapshot;
 use crate::compact::CompactionAnalyticsDetails;
 use crate::compact_remote_history::trim_function_call_history_to_fit_context_window;
 use crate::context::world_state::WorldState;
@@ -58,7 +59,7 @@ pub(crate) struct BackgroundCompactionCandidate {
 
 pub(crate) struct BackgroundCompactionInput {
     prefix: CompactionPrefix,
-    turn_state: Option<String>,
+    routing_snapshot: Box<ResponsesRoutingSnapshot>,
     window: (String, u64, uuid::Uuid),
     base_instructions: BaseInstructions,
     input: Vec<ResponseItem>,
@@ -157,10 +158,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
             input.base_instructions,
             input.input,
             input.metadata,
-            CompactionRequestTransport::Background(
-                input.turn_state,
-                input.prefix.auth_owner_generation,
-            ),
+            CompactionRequestTransport::Background(input.routing_snapshot),
             Some(input.window),
         ),
     };
@@ -238,8 +236,7 @@ pub(crate) fn capture_background_input(
     step_context: &StepContext,
     mut snapshot: ContextManager,
     base_instructions: BaseInstructions,
-    turn_state: Option<String>,
-    auth_owner_generation: Option<u64>,
+    routing_snapshot: ResponsesRoutingSnapshot,
     window: (String, u64, uuid::Uuid),
 ) -> BackgroundCompactionInput {
     let base_instructions = if snapshot
@@ -256,7 +253,7 @@ pub(crate) fn capture_background_input(
     let prefix = CompactionPrefix {
         generation: snapshot.history_version(),
         len: snapshot.annotated_items().len(),
-        auth_owner_generation,
+        auth_owner_generation: routing_snapshot.auth_owner_generation,
     };
     trim_function_call_history_to_fit_context_window(
         &mut snapshot,
@@ -274,7 +271,7 @@ pub(crate) fn capture_background_input(
         .attach_to_compaction_prompt(&mut input);
     BackgroundCompactionInput {
         prefix,
-        turn_state,
+        routing_snapshot: Box::new(routing_snapshot),
         window,
         base_instructions,
         input,

@@ -119,6 +119,7 @@ App-server coverage exercises defaults, response correlation, and idle-versus-bu
 - Omitted-source compaction returns the exact lifecycle ID with manual provenance: codex-rs/app-server/tests/suite/v2/compaction.rs:thread_compact_start_triggers_compaction_and_returns_exact_turn_id
 - Automatic-source compaction preserves provenance and exact IDs with auto-selected execution environments: codex-rs/app-server/tests/suite/v2/compaction.rs:thread_compact_start_automatic_source_uses_auto_env_and_exact_turn_id
 - Busy compaction rejects without interrupting the active turn: codex-rs/app-server/tests/suite/v2/compaction.rs:thread_compact_start_rejects_busy_thread_without_interrupting_active_turn
+- Prediction forks suppress speculative V2 compaction while their normal parents still launch it: codex-rs/app-server/tests/suite/v2/compaction_prediction_async_tests.rs:prediction_forks_do_not_launch_background_compaction
 - Idle-only turn start accepts idle work and rejects a busy request: codex-rs/app-server/tests/suite/v2/turn_start.rs:turn_start_if_idle_starts_idle_turn_and_rejects_busy_thread
 - Idle-only turn start preserves an empty user turn in Plan mode: codex-rs/app-server/tests/suite/v2/turn_start.rs:turn_start_with_empty_input_runs_model_request
 - Omission preserves start-or-steer behavior: codex-rs/app-server/tests/suite/v2/turn_start.rs:turn_start_defaults_to_start_or_steer_while_active

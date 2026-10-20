@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::OnceLock;
 
 use crate::compact_retained_tool_outputs::is_retained_tool_output;
 
@@ -8,6 +7,7 @@ use crate::ResponseStream;
 use crate::client::ModelClientSession;
 use crate::client::ResponsesHttpExecutor;
 use crate::client::ResponsesHttpState;
+use crate::client::ResponsesRoutingSnapshot;
 use crate::client_common::ResponseEvent;
 use crate::compact::CompactionAnalyticsAttempt;
 use crate::compact::CompactionAnalyticsDetails;
@@ -100,7 +100,7 @@ enum CompactionRequestKind<'a> {
 
 enum CompactionRequestTransport<'a> {
     Foreground(&'a mut ModelClientSession),
-    Background(Option<String>, Option<u64>),
+    Background(Box<ResponsesRoutingSnapshot>),
 }
 
 /// The caller decides whether a declined prepared result needs a foreground request.
@@ -296,16 +296,16 @@ async fn run_remote_compaction_request_v2(
 ) -> CodexResult<RemoteCompactionV2Output> {
     let turn_context = &step_context.turn;
     let client_session = match transport {
-        CompactionRequestTransport::Background(turn_state, auth_owner_generation) => {
+        CompactionRequestTransport::Background(routing_snapshot) => {
             let settings = &step_context.settings;
             let cancellation = crate::session::async_compaction::shutdown_cancellation(sess).await;
             let effort = sess
                 .reasoning_effort_for_request(settings, RequestEffortUsage::Compaction)
                 .await;
             let trace = InferenceTraceContext::disabled();
-            // Replay the routing token without letting this request change foreground routing.
-            let turn_state = Arc::new(turn_state.map(OnceLock::from).unwrap_or_default());
-            let mut http_state = ResponsesHttpState::new(turn_state);
+            // Replay the token with its account owner without sharing foreground routing state.
+            let auth_owner_generation = routing_snapshot.auth_owner_generation;
+            let mut http_state = ResponsesHttpState::new(*routing_snapshot);
             let http_executor = ResponsesHttpExecutor::new(&sess.services.model_client);
             let stream = tokio::select! {
                 biased;
@@ -643,7 +643,7 @@ fn truncate_retained_messages(
             content_tokens.max(1)
         };
         let token_count = source_tokens.saturating_add(notice_tokens);
-        let exceeds_item_budget = charge_images
+        let exceeds_item_budget = (charge_images || is_retained_tool_output(&group.source))
             && usize::try_from(estimate_item_token_count(&group.source.item)).unwrap_or(usize::MAX)
                 > MAX_MODEL_CONTEXT_ITEM_TOKENS;
         let at_history_boundary = token_count > remaining;
@@ -824,6 +824,10 @@ fn truncate_message_text_to_token_budget(
     }
     Some(envelope)
 }
+
+#[cfg(test)]
+#[path = "compact_remote_v2_retained_output_tests.rs"]
+mod retained_output_tests;
 
 #[cfg(test)]
 mod tests {

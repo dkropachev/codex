@@ -73,6 +73,11 @@ async fn cancelled_turn_skips_launch_but_preserves_existing_work(trigger: Compac
     let cancelled = CancellationToken::new();
     cancelled.cancel();
     let auth = sess.services.model_client.auth_owner_generation();
+    let routing_snapshot = || crate::client::ResponsesRoutingSnapshot {
+        turn_state: Some("routing".to_string()),
+        account_pool_selection: None,
+        auth_owner_generation: auth,
+    };
     maybe_start(
         &sess,
         &step,
@@ -80,7 +85,7 @@ async fn cancelled_turn_skips_launch_but_preserves_existing_work(trigger: Compac
         phase,
         &cancelled,
         &status,
-        (Some("routing".to_string()), auth),
+        routing_snapshot(),
     )
     .await;
     assert!(
@@ -101,7 +106,7 @@ async fn cancelled_turn_skips_launch_but_preserves_existing_work(trigger: Compac
         phase,
         &turn_cancellation,
         &status,
-        (Some("routing".to_string()), auth),
+        routing_snapshot(),
     )
     .await;
     turn_cancellation.cancel();
@@ -112,7 +117,7 @@ async fn cancelled_turn_skips_launch_but_preserves_existing_work(trigger: Compac
         phase,
         &turn_cancellation,
         &status,
-        (Some("routing".to_string()), auth),
+        routing_snapshot(),
     )
     .await;
     // Wait for client publication before exercising either ready-result consumer.

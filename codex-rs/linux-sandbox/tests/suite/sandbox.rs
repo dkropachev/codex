@@ -1161,8 +1161,11 @@ fi
     );
 
     let cwd = AbsolutePathBuf::try_from(subdir.as_path()).expect("cwd should be absolute");
+    // The symlink-redirection fixture must also work when TMPDIR is outside /tmp.
+    let fixture_root =
+        AbsolutePathBuf::try_from(tmpdir.path()).expect("fixture root should be absolute");
     let permission_profile = PermissionProfile::workspace_write_with(
-        std::slice::from_ref(&cwd),
+        &[cwd.clone(), fixture_root],
         NetworkSandboxPolicy::Enabled,
         /*exclude_tmpdir_env_var*/ false,
         /*exclude_slash_tmp*/ false,

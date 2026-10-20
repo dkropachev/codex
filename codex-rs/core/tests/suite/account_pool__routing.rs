@@ -20,6 +20,8 @@ use codex_config::config_toml::ModelRouterModelSelectorToml;
 use codex_config::config_toml::ModelRouterModelsToml;
 use codex_config::config_toml::ModelRouterToml;
 use codex_core::TurnInputRequest;
+use codex_features::Feature;
+use codex_login::AccountPoolUsageBucket;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
@@ -54,6 +56,154 @@ async fn account_pool_retries_regular_usage_limit_with_next_member() -> Result<(
     submit_prompt(&codex, "use regular pool").await?;
     wait_for_turn_complete(&codex).await;
 
+    Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BackgroundRoutingOwner {
+    SameMember,
+    NextMember,
+}
+
+#[test_case::test_case(BackgroundRoutingOwner::SameMember; "same member replays captured state")]
+#[test_case::test_case(BackgroundRoutingOwner::NextMember; "new member clears captured state")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn account_pool_background_compaction_preserves_routing_owner(
+    owner: BackgroundRoutingOwner,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    let test = test_codex()
+        .with_config_auth_manager()
+        .with_pre_build_hook(|codex_home| {
+            write_chatgpt_auth(codex_home, "work-pro", "work@example.com");
+            write_chatgpt_auth(codex_home, "personal-pro", "personal@example.com");
+        })
+        .with_config(|config| {
+            config.account_pool = Some(AccountPoolToml {
+                enabled: true,
+                default_pool: Some("codex-pro".to_string()),
+                pools: [(
+                    "codex-pro".to_string(),
+                    AccountPoolDefinitionToml {
+                        provider: "openai".to_string(),
+                        policy: AccountPoolPolicyToml::Drain,
+                        accounts: vec!["work-pro".to_string(), "personal-pro".to_string()],
+                    },
+                )]
+                .into(),
+            });
+            config.model_context_window = Some(100_000);
+            config.model_auto_compact_token_limit = Some(90_000);
+            config.async_compaction_threshold_percent = 65;
+            config.model_post_turn_compact_threshold_percent = 0;
+            config.update_plan_enabled = true;
+            config
+                .features
+                .enable(Feature::AsyncCompaction)
+                .expect("enable background compaction");
+            config
+                .features
+                .disable(Feature::TokenBudget)
+                .expect("disable token-budget compaction");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let auth = test.thread_manager.auth_manager();
+    let original_owner = auth.auth_change_state_receiver().borrow().owner_generation;
+    let seed_auth = Arc::clone(&auth);
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header("ChatGPT-Account-ID", "work-pro"))
+        .respond_with(move |_: &wiremock::Request| {
+            assert_eq!(
+                seed_auth.active_account_pool_member_id().as_deref(),
+                Some("work-pro")
+            );
+            if owner == BackgroundRoutingOwner::NextMember {
+                // Setup already remembered A; only the background's independent selection changes.
+                assert!(seed_auth.mark_active_account_pool_member_exhausted(
+                    AccountPoolUsageBucket::Regular,
+                    "seed account exhausted".to_string(),
+                ));
+            }
+            responses::sse_response(sse(vec![
+                ev_assistant_message("seed", "seed"),
+                responses::ev_completed_with_tokens("seed", /*total_tokens*/ 70_000),
+            ]))
+            .insert_header("x-codex-turn-state", "sampling-state")
+        })
+        .up_to_n_times(/*n*/ 1)
+        .expect(/*r*/ 1)
+        .with_priority(/*p*/ 1)
+        .mount(&server)
+        .await;
+    let remaining = responses::mount_response_sequence(
+        &server,
+        vec![
+            responses::sse_response(sse(vec![
+                json!({"type": "response.output_item.done", "item": {
+                    "type": "compaction", "encrypted_content": "background-summary"
+                }}),
+                responses::ev_completed_with_tokens("background", /*total_tokens*/ 3_000),
+            ]))
+            .insert_header("x-codex-turn-state", "background-state"),
+            responses::sse_response(sse(vec![
+                responses::ev_function_call(
+                    "next-plan",
+                    "update_plan",
+                    r#"{"plan":[{"step":"finish","status":"completed"}]}"#,
+                ),
+                responses::ev_completed_with_tokens("next", /*total_tokens*/ 3_000),
+            ]))
+            .insert_header("x-codex-turn-state", "next-foreground-state"),
+            responses::sse_response(sse(vec![
+                ev_assistant_message("done", "done"),
+                responses::ev_completed_with_tokens("done", /*total_tokens*/ 3_000),
+            ])),
+        ],
+    )
+    .await;
+
+    submit_prompt(&test.codex, "seed background compaction").await?;
+    wait_for_turn_complete(&test.codex).await;
+    test.codex.wait_for_background_compaction_for_test().await;
+    submit_prompt(&test.codex, "finish the plan").await?;
+    wait_for_turn_complete(&test.codex).await;
+
+    let requests = responses::received_responses_requests(&server).await;
+    let current_account = match owner {
+        BackgroundRoutingOwner::SameMember => "work-pro",
+        BackgroundRoutingOwner::NextMember => "personal-pro",
+    };
+    let background_state = match owner {
+        BackgroundRoutingOwner::SameMember => Some("sampling-state".to_string()),
+        BackgroundRoutingOwner::NextMember => None,
+    };
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| (
+                request.header("ChatGPT-Account-ID"),
+                request.header("x-codex-turn-state")
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (Some("work-pro".to_string()), None),
+            (Some(current_account.to_string()), background_state),
+            (Some(current_account.to_string()), None),
+            (
+                Some(current_account.to_string()),
+                Some("next-foreground-state".to_string())
+            ),
+        ],
+    );
+    assert_eq!(remaining.requests().len(), 3);
+    assert_eq!(requests[1].inputs_of_type("compaction_trigger").len(), 1);
+    assert_eq!(
+        auth.auth_change_state_receiver().borrow().owner_generation,
+        original_owner,
+    );
     Ok(())
 }
 

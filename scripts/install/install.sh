@@ -855,6 +855,11 @@ handle_conflicting_install() {
   fi
 }
 
+# Releases before 0.163.0 require the bundled zsh runtime.
+release_requires_bundled_zsh() {
+  printf '%s\n' "$1" | awk -F . '{ exit !($1 == 0 && $2 < 163) }'
+}
+
 install_package_release() {
   release_dir="$1"
   archive_path="$2"
@@ -873,8 +878,11 @@ install_package_release() {
   chmod 0755 \
     "$stage_release/bin/codex" \
     "$stage_release/bin/codex-code-mode-host" \
-    "$stage_release/codex-path/rg" \
-    "$stage_release/codex-resources/zsh/bin/zsh"
+    "$stage_release/codex-path/rg"
+  if release_requires_bundled_zsh "$resolved_version" ||
+    [ -f "$stage_release/codex-resources/zsh/bin/zsh" ]; then
+    chmod 0755 "$stage_release/codex-resources/zsh/bin/zsh"
+  fi
   if [ -f "$stage_release/codex-resources/bwrap" ]; then
     chmod 0755 "$stage_release/codex-resources/bwrap"
   fi
@@ -900,9 +908,12 @@ release_dir_is_complete() {
     [ -x "$release_dir/bin/codex" ] &&
     [ -x "$release_dir/bin/codex-code-mode-host" ] &&
     [ -x "$release_dir/codex" ] &&
-    [ -x "$release_dir/codex-path/rg" ] &&
-    [ -x "$release_dir/codex-resources/zsh/bin/zsh" ] ||
+    [ -x "$release_dir/codex-path/rg" ] ||
     return 1
+  if release_requires_bundled_zsh "$expected_version" &&
+    [ ! -x "$release_dir/codex-resources/zsh/bin/zsh" ]; then
+    return 1
+  fi
 
   case "$expected_target" in
     *linux*)
