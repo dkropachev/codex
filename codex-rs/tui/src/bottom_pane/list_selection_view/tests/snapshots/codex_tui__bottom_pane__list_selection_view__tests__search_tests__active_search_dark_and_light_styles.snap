@@ -1,0 +1,48 @@
+---
+source: tui/src/bottom_pane/list_selection_view/tests/search_tests.rs
+assertion_line: 335
+expression: "snapshots.join(\"\\n\\n\")"
+---
+dark
+row: "  Search › theme                                "
+cursor: (16, 0)
+styles: [
+    (
+        "  ",
+        Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset),
+    ),
+    (
+        "Search › ",
+        Style::new().fg(Color::Rgb(142, 192, 249)).bg(Color::Rgb(76, 76, 76)).underline_color(Color::Reset).bold(),
+    ),
+    (
+        "theme                              ",
+        Style::new().fg(Color::Rgb(230, 230, 230)).bg(Color::Rgb(76, 76, 76)).underline_color(Color::Reset).bold(),
+    ),
+    (
+        "  ",
+        Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset),
+    ),
+]
+
+light
+row: "  Search › theme                                "
+cursor: (16, 0)
+styles: [
+    (
+        "  ",
+        Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset),
+    ),
+    (
+        "Search › ",
+        Style::new().fg(Color::Rgb(26, 94, 189)).bg(Color::Rgb(220, 220, 220)).underline_color(Color::Reset).bold(),
+    ),
+    (
+        "theme                              ",
+        Style::new().fg(Color::Rgb(30, 30, 30)).bg(Color::Rgb(220, 220, 220)).underline_color(Color::Reset).bold(),
+    ),
+    (
+        "  ",
+        Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset),
+    ),
+]
