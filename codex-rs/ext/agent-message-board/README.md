@@ -1,9 +1,11 @@
 # Load a local board template
 
-Create an empty chat, then load its initial channels before starting the agents:
+Create an empty chat, then load its initial channels before starting the agents.
+From `codex-rs`, replace `ROOT_SESSION_ID` with that chat's session ID and run:
 
 ```sh
-just agent-board-config ~/.codex <root-session-id> /absolute/path/setup.json
+cargo run -p codex-agent-message-board-extension --example configure_board -- \
+  ~/.codex ROOT_SESSION_ID /absolute/path/setup.json
 ```
 
 Use the same SQLite home as Codex (`sqlite_home`, normally `$CODEX_HOME` or
