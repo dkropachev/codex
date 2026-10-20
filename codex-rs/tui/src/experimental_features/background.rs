@@ -78,3 +78,7 @@ pub(crate) async fn fetch(
         Err(_) => Err("Experimental feature discovery timed out".to_string()),
     }
 }
+
+#[cfg(test)]
+#[path = "background_tests.rs"]
+mod tests;
