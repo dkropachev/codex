@@ -106,10 +106,7 @@ impl ConfigEditorHandoff {
     }
 
     pub(crate) fn mark_activation_seen(&self) {
-        self.mark_activation_seen_at(Instant::now());
-    }
-
-    fn mark_activation_seen_at(&self, seen_at: Instant) {
+        let seen_at = Instant::now();
         let mut activation = self
             .activation
             .lock()
