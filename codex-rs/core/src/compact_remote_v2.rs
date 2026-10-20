@@ -643,7 +643,7 @@ fn truncate_retained_messages(
             content_tokens.max(1)
         };
         let token_count = source_tokens.saturating_add(notice_tokens);
-        let exceeds_item_budget = charge_images
+        let exceeds_item_budget = (charge_images || is_retained_tool_output(&group.source))
             && usize::try_from(estimate_item_token_count(&group.source.item)).unwrap_or(usize::MAX)
                 > MAX_MODEL_CONTEXT_ITEM_TOKENS;
         let at_history_boundary = token_count > remaining;
@@ -824,6 +824,10 @@ fn truncate_message_text_to_token_budget(
     }
     Some(envelope)
 }
+
+#[cfg(test)]
+#[path = "compact_remote_v2_retained_output_tests.rs"]
+mod retained_output_tests;
 
 #[cfg(test)]
 mod tests {

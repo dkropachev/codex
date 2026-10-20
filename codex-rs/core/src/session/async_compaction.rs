@@ -64,7 +64,12 @@ pub(super) async fn maybe_start(
     if matches!(phase, CompactionPhase::PreTurn) && routing_snapshot.turn_state.is_none() {
         return;
     }
-    if !enabled(turn_context)
+    if sess
+        .services
+        .thread_extension_data
+        .get::<crate::compact::AutoCompactionDisabled>()
+        .is_some()
+        || !enabled(turn_context)
         || token_status.token_limit_reached
         || (matches!(phase, CompactionPhase::PostTurn)
             && token_status.turn_end_compaction_threshold_reached)
