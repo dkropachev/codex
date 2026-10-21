@@ -1,5 +1,5 @@
 //! Installs complete CLI packages after confirmation. Initial starts preserve
-//! existing selections; explicit replacements migrate to dedicated packages and stay pinned.
+//! existing selections; replacements either pin or preserve the latest channel.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -40,49 +40,14 @@ pub(super) async fn prepare(daemon: &Daemon, settings: &DaemonSettings) -> Resul
     .map(|_| ())
 }
 
-/// Select this CLI's complete package and pin it, restarting only a running daemon.
-/// Returns None when the user cancels without changing the installation.
-pub async fn update_from_cli(
-    confirm: impl FnOnce(&InstallRequest) -> Result<bool>,
-) -> Result<Option<crate::UpdateOutput>> {
-    crate::ensure_supported_platform()?;
-    #[cfg(windows)]
-    crate::backend::windows::ensure_not_elevated()?;
-    let daemon = Daemon::from_environment()?;
-    let settings = daemon.load_settings().await?;
-    let source = InstallContext::current().package_layout.as_ref();
-    if !Box::pin(prepare_from_package(
-        &daemon,
-        &settings,
-        InstallMode::Replace,
-        source.map(|layout| layout.package_dir.as_path()),
-        &std::env::current_exe()?,
-        confirm,
-    ))
-    .await?
-    {
-        return Ok(None);
-    }
-    let managed_codex_path = daemon.current_managed_codex_bin()?;
-    Ok(Some(crate::UpdateOutput {
-        status: crate::UpdateStatus::Updated,
-        installed_version: Some(managed_install::managed_codex_version(&managed_codex_path).await?),
-        running_version: crate::client::probe(&daemon.socket_path)
-            .await
-            .ok()
-            .map(|info| info.app_server_version),
-        managed_codex_path,
-        message: "The CLI package is selected and pinned. Run `codex app-server daemon update` to return to production updates.".to_string(),
-    }))
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum InstallMode {
+pub(super) enum InstallMode {
     Missing,
     Replace,
+    RefreshLatest,
 }
 
-async fn prepare_from_package(
+pub(super) async fn prepare_from_package(
     daemon: &Daemon,
     settings: &DaemonSettings,
     mode: InstallMode,
@@ -101,6 +66,11 @@ async fn prepare_from_package(
         daemon.managed_codex_bin.starts_with(&previous_root),
         "daemon package location changed; retry the command"
     );
+    if mode == InstallMode::RefreshLatest
+        && !managed_install::is_stable_standalone_release(home, &daemon.managed_codex_bin)
+    {
+        return Ok(false);
+    }
     if mode == InstallMode::Missing {
         if previous_root != root
             || daemon.running_backend_instance(settings).await?.is_some()
@@ -191,18 +161,23 @@ async fn prepare_from_package(
     }
     // Confirmation must not block lifecycle commands. Recheck the approved
     // selection and running state once this operation owns both locks.
-    let _operation_lock = if mode == InstallMode::Replace {
+    let _operation_lock = if mode != InstallMode::Missing {
         Some(daemon.acquire_operation_lock().await?)
     } else {
         None // Initial startup already holds the operation lock.
     };
-    let current_settings = if mode == InstallMode::Replace {
+    let current_settings = if mode != InstallMode::Missing {
         Some(daemon.load_settings().await?)
     } else {
         None
     };
     let settings = current_settings.as_ref().unwrap_or(settings);
     let _install_lock = acquire_install_lock(&root).await?;
+    if mode == InstallMode::RefreshLatest
+        && !managed_install::is_stable_standalone_release(home, &daemon.managed_codex_bin)
+    {
+        return Ok(false);
+    }
     anyhow::ensure!(
         managed_install::package_root(home) == previous_root,
         "daemon package location changed; retry the command"
@@ -247,8 +222,8 @@ async fn prepare_from_package(
         !stable || version == binary_version,
         "the CLI package version does not match its executable"
     );
-    let name = if stable && mode == InstallMode::Missing {
-        format!("{version}-{target}")
+    let name = if stable && mode != InstallMode::Replace {
+        format!("dkropachev-{version}-{target}")
     } else {
         format!("local-{digest}-{target}")
     };
@@ -271,7 +246,7 @@ async fn prepare_from_package(
     }
     let standalone = home.join("packages/standalone");
     let canonical_source = source.canonicalize()?;
-    let follows_latest = mode == InstallMode::Missing
+    let follows_latest = mode != InstallMode::Replace
         && stable
         && (standalone.join("current").canonicalize().ok().as_deref()
             != Some(canonical_source.as_path())
@@ -279,6 +254,35 @@ async fn prepare_from_package(
                 .ok()
                 .as_deref()
                 == canonical_source.file_name().and_then(|name| name.to_str()));
+    if mode == InstallMode::RefreshLatest {
+        anyhow::ensure!(
+            stable
+                && standalone.join("current").canonicalize()? == canonical_source
+                && std::fs::read_to_string(standalone.join("auto-update-version"))?
+                    == canonical_source
+                        .file_name()
+                        .context("CLI release has no name")?
+                        .to_string_lossy(),
+            "daemon synchronization requires the selected latest-channel CLI package"
+        );
+        if previous_release.as_ref() == Some(&release.canonicalize()?) {
+            let running_matches = match &backend {
+                Some(backend) => {
+                    backend.running_executable_identity().await?
+                        == Some(
+                            managed_install::executable_identity(&release.join(entrypoint)).await?,
+                        )
+                }
+                None => true,
+            };
+            if running_matches {
+                if backend.is_some() {
+                    daemon.ensure_managed_updater(settings).await?;
+                }
+                return Ok(true);
+            }
+        }
+    }
     anyhow::ensure!(
         managed_install::package_root(home) == previous_root
             && (backend.is_some() || crate::client::probe(&daemon.socket_path).await.is_err()),
@@ -290,7 +294,7 @@ async fn prepare_from_package(
     }
     #[cfg(windows)]
     windows::validate_selection(&root)?;
-    if mode == InstallMode::Replace {
+    if mode != InstallMode::Missing {
         let stopped = async {
             crate::backend::pid_update_loop_backend(daemon.backend_paths(settings))
                 .stop()
@@ -359,6 +363,9 @@ async fn prepare_from_package(
             "daemon package selected but could not start; retry with `codex app-server daemon start`",
         )?;
         selected.wait_until_ready().await?;
+        if mode == InstallMode::RefreshLatest {
+            selected.ensure_managed_updater(settings).await?;
+        }
     }
     Ok(true)
 }

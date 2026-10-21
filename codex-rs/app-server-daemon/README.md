@@ -109,6 +109,16 @@ New daemons use `CODEX_HOME/packages/app-server-daemon/current/bin/codex`
 (`codex.exe` on Windows). The package contains the executable and its helpers.
 Daemon-only installer updates leave the user's CLI command and shell setup alone.
 
+A manual latest-channel CLI installation also copies its complete runtime package
+into an existing latest-channel daemon installation and restarts a running daemon.
+The code-mode host comes from the same selected package as app-server. An explicit
+CLI release selection or a pinned daemon is left alone. Installer calls made by
+the daemon updater do not recursively synchronize the daemon. If synchronization
+fails, installation reports that the CLI was installed but the server still needs
+updating; rerun `codex app-server daemon sync-from-cli` to retry. This internal
+command preserves the latest channel, whereas `update --from-cli` explicitly pins
+its copied package.
+
 Previously launched legacy daemons retain `CODEX_HOME/packages/standalone/current`,
 including its flat binary layout when present. Starts and scheduled updates keep
 using that location. An explicit production update prepares and validates a
