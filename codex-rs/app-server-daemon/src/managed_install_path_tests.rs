@@ -121,3 +121,32 @@ async fn older_managed_binary_does_not_claim_updater_support() {
     codex_utils_cargo_bin::write_executable(&binary, "#!/bin/sh\nexit 0\n").expect("newer binary");
     assert!(super::supports_daemon_update_loop(&binary).await);
 }
+
+#[cfg(unix)]
+#[test]
+fn previously_seeded_daemons_remain_eligible_only_while_following_latest() {
+    let home = tempfile::TempDir::new().unwrap();
+    let root = home.path().join("packages/app-server-daemon");
+    let name = "0.161.0-x86_64-unknown-linux-musl";
+    let release = root.join("releases").join(name);
+    let bin = release.join("bin/codex");
+    std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+    std::fs::write(&bin, "binary").unwrap();
+    std::os::unix::fs::symlink(&release, root.join("current")).unwrap();
+    let marker = root.join("auto-update-version");
+    for (selection, eligible) in [
+        (Some(name), true),
+        (Some("another-release"), false),
+        (None, false),
+    ] {
+        if let Some(selection) = selection {
+            std::fs::write(&marker, selection).unwrap();
+        } else {
+            std::fs::remove_file(&marker).unwrap();
+        }
+        assert_eq!(
+            super::is_stable_standalone_release(home.path(), &bin),
+            eligible
+        );
+    }
+}

@@ -748,6 +748,10 @@ enum AppServerDaemonSubcommand {
         yes: bool,
     },
 
+    /// [internal] Refresh an existing latest-channel daemon from the installed CLI.
+    #[clap(hide = true)]
+    SyncFromCli,
+
     /// Enable remote control for future starts and a currently running managed daemon.
     EnableRemoteControl,
 
@@ -1377,9 +1381,10 @@ async fn cli_main(
                         from_cli: true,
                         yes,
                     } => {
-                        let result = codex_app_server_daemon::update_from_cli(|request| {
-                            daemon_install::confirm_install(request, yes)
-                        })
+                        let result = codex_app_server_daemon::update_from_cli(
+                            codex_app_server_daemon::CliUpdatePolicy::Pin,
+                            |request| daemon_install::confirm_install(request, yes),
+                        )
                         .await;
                         daemon_telemetry::record_command(
                             &root_config_overrides,
@@ -1389,6 +1394,16 @@ async fn cli_main(
                         )
                         .await;
                         if let Some(output) = result? {
+                            println!("{}", serde_json::to_string(&output)?);
+                        }
+                    }
+                    AppServerDaemonSubcommand::SyncFromCli => {
+                        if let Some(output) = codex_app_server_daemon::update_from_cli(
+                            codex_app_server_daemon::CliUpdatePolicy::FollowLatest,
+                            |_| Ok(true),
+                        )
+                        .await?
+                        {
                             println!("{}", serde_json::to_string(&output)?);
                         }
                     }
@@ -2490,6 +2505,7 @@ fn app_server_subcommand_name(subcommand: Option<&AppServerSubcommand>) -> &'sta
             AppServerDaemonSubcommand::Stop => "app-server daemon stop",
             AppServerDaemonSubcommand::Version => "app-server daemon version",
             AppServerDaemonSubcommand::PidUpdateLoop { .. } => "app-server daemon pid-update-loop",
+            AppServerDaemonSubcommand::SyncFromCli => "app-server daemon sync-from-cli",
         },
         Some(AppServerSubcommand::Proxy(_)) => "app-server proxy",
         Some(AppServerSubcommand::GenerateTs(_)) => "app-server generate-ts",

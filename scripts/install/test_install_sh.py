@@ -23,6 +23,80 @@ CHECKSUM_ASSET = "codex-package_SHA256SUMS"
 
 
 class InstallShTest(unittest.TestCase):
+    def test_cli_latest_refreshes_daemon_but_explicit_and_daemon_installs_do_not(
+        self,
+    ) -> None:
+        for release, daemon_only, syncs in [
+            ("latest", False, True),
+            (VERSION, False, False),
+            ("latest", True, False),
+        ]:
+            with (
+                self.subTest(release=release, daemon_only=daemon_only),
+                tempfile.TemporaryDirectory() as temp,
+            ):
+                root = Path(temp)
+                archive, checksum, metadata = create_package_release(root)
+                result, _ = run_installer_in(
+                    root,
+                    release,
+                    daemon_only=daemon_only,
+                    metadata_json=metadata,
+                    archive_path=archive,
+                    checksum_path=checksum,
+                    force_macos=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                log = root / "codex-home/daemon-sync.log"
+                self.assertEqual(
+                    log.read_text().splitlines() if log.exists() else [],
+                    ["app-server daemon sync-from-cli"] if syncs else [],
+                )
+
+    def test_updater_installer_calls_do_not_recursively_synchronize_the_daemon(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive, checksum, metadata = create_package_release(root)
+            options = dict(
+                metadata_json=metadata,
+                archive_path=archive,
+                checksum_path=checksum,
+                force_macos=True,
+            )
+            installed, _ = run_installer_in(root, "latest", **options)
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            log = root / "codex-home/daemon-sync.log"
+            log.unlink()
+            for manual in [False, True]:
+                result, _ = run_installer_in(
+                    root,
+                    "latest",
+                    update_guard_from_release=f"dkropachev-{VERSION}-{TARGET}",
+                    manual_update=manual,
+                    **options,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(log.exists())
+
+    def test_daemon_refresh_failure_does_not_report_successful_upgrade(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive, checksum, metadata = create_package_release(root)
+            result, _ = run_installer_in(
+                root,
+                "latest",
+                metadata_json=metadata,
+                archive_path=archive,
+                checksum_path=checksum,
+                force_macos=True,
+                daemon_sync_status=1,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("background server could not be updated", result.stderr)
+            self.assertNotIn("installed successfully", result.stdout)
+
     def test_metadata_fetch_failure_is_not_reported_as_missing_assets(self) -> None:
         result, requests = run_installer(VERSION, metadata_failure=True)
 
@@ -790,6 +864,7 @@ def run_installer_in(
     update_guard_from_release: str | None = None,
     old_updater_parent_pid: int | None = None,
     fail_ps: bool = False,
+    daemon_sync_status: int = 0,
     daemon_only: bool = False,
     manual_update: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
@@ -898,6 +973,7 @@ def run_installer_in(
                 metadata_json if metadata_json is not None else release_metadata()
             ),
             "CODEX_TEST_REQUEST_LOG": str(request_log),
+            "CODEX_TEST_DAEMON_SYNC_STATUS": str(daemon_sync_status),
             "HOME": str(home),
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "SHELL": "/bin/sh",
@@ -965,7 +1041,12 @@ def create_package_release(
     )
     write_executable(
         package_dir / "bin" / "codex",
-        f"#!/bin/sh\nprintf 'codex-cli {binary_version}\\n'\n",
+        "#!/bin/sh\n"
+        'if [ "$*" = "app-server daemon sync-from-cli" ]; then\n'
+        '  printf "%s\\n" "$*" >>"$CODEX_HOME/daemon-sync.log"\n'
+        '  exit "${CODEX_TEST_DAEMON_SYNC_STATUS:-0}"\n'
+        "fi\n"
+        f"printf 'codex-cli {binary_version}\\n'\n",
     )
     write_executable(
         package_dir / "bin" / "codex-code-mode-host",

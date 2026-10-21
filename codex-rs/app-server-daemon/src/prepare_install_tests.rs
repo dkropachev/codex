@@ -79,6 +79,10 @@ async fn seeds_full_package() {
         selected.file_name().expect("name").to_string_lossy()
     );
     assert!(validate_package(&selected).is_ok());
+    assert!(crate::managed_install::is_stable_standalone_release(
+        &home,
+        &selected.join("bin/codex")
+    ));
 }
 
 #[tokio::test]
@@ -197,6 +201,13 @@ async fn standalone_seed_preserves_explicit_pin_or_latest_channel() {
         .unwrap();
         let root = home.join("packages/app-server-daemon");
         let selected = root.join("current").canonicalize().unwrap();
+        assert_eq!(
+            crate::managed_install::is_stable_standalone_release(
+                &home,
+                &selected.join("bin/codex")
+            ),
+            follows_latest
+        );
         assert_eq!(
             std::fs::read_to_string(root.join("auto-update-version")).ok(),
             follows_latest.then(|| selected.file_name().unwrap().to_string_lossy().into_owned())
@@ -372,4 +383,85 @@ async fn broken_selection_is_not_a_missing_installation() {
         std::fs::read_link(current).unwrap(),
         PathBuf::from("missing-release")
     );
+}
+
+#[tokio::test]
+async fn latest_cli_refreshes_the_whole_daemon_package_without_pinning_it() {
+    for pinned in [false, true] {
+        let temp = tempfile::TempDir::new().unwrap();
+        let home = temp.path().join("home");
+        let settings = DaemonSettings::default();
+        let source = temp.path().join("old");
+        let bin = package(&source, "0.152.0");
+        prepare_from_package(
+            &daemon(&home),
+            &settings,
+            InstallMode::Missing,
+            Some(&source),
+            &bin,
+            |_| Ok(true),
+        )
+        .await
+        .unwrap();
+        let root = home.join("packages/app-server-daemon");
+        let original = root.join("current").canonicalize().unwrap();
+        if pinned {
+            std::fs::remove_file(root.join("auto-update-version")).unwrap();
+        }
+        let standalone = home.join("packages/standalone");
+        let new_source = standalone.join("releases/dkropachev-0.153.0-local-target");
+        let new_bin = package(&new_source, "0.153.0");
+        std::fs::write(new_source.join("bin/codex-code-mode-host"), "new helper").unwrap();
+        std::os::unix::fs::symlink(&new_source, standalone.join("current")).unwrap();
+        std::fs::write(
+            standalone.join("auto-update-version"),
+            "dkropachev-0.153.0-local-target",
+        )
+        .unwrap();
+        let refreshed = prepare_from_package(
+            &daemon(&home),
+            &settings,
+            InstallMode::RefreshLatest,
+            Some(&new_source),
+            &new_bin,
+            |_| panic!("automatic synchronization must not ask to pin the package"),
+        )
+        .await
+        .unwrap();
+        let selected = root.join("current").canonicalize().unwrap();
+        assert_eq!(
+            (
+                refreshed,
+                selected == original,
+                std::fs::read_to_string(selected.join("bin/codex-code-mode-host")).unwrap(),
+                crate::managed_install::is_stable_standalone_release(
+                    &home,
+                    &selected.join("bin/codex")
+                )
+            ),
+            (
+                !pinned,
+                pinned,
+                if pinned { "runtime" } else { "new helper" }.to_string(),
+                !pinned
+            )
+        );
+        assert!(!home.join("app-server-daemon/daemon.pid").exists());
+        if !pinned {
+            // Reinstalling the same CLI is idempotent and retains the selected package.
+            assert!(
+                prepare_from_package(
+                    &daemon(&home),
+                    &settings,
+                    InstallMode::RefreshLatest,
+                    Some(&new_source),
+                    &new_bin,
+                    |_| panic!("no confirmation"),
+                )
+                .await
+                .unwrap()
+            );
+            assert_eq!(root.join("current").canonicalize().unwrap(), selected);
+        }
+    }
 }

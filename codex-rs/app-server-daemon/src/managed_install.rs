@@ -105,8 +105,12 @@ pub(crate) fn is_stable_standalone_release(codex_home: &Path, codex_bin: &Path) 
     else {
         return false;
     };
-    let Some(version) = version.strip_prefix("dkropachev-") else {
-        return false;
+    // Older package seeding omitted the fork prefix. Keep those dedicated
+    // daemon selections eligible so their next update can repair the layout.
+    let version = match version.strip_prefix("dkropachev-") {
+        Some(version) => version,
+        None if standalone.ends_with("app-server-daemon") => version,
+        None => return false,
     };
     let components: Vec<_> = version.split('.').collect();
     components.len() == 3

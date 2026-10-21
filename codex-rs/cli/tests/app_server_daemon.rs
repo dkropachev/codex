@@ -808,7 +808,7 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
         assert_eq!(standalone.join("current").canonicalize()?, cli_selection);
     }
     if action == "bootstrap" {
-        assert_eq!(output["autoUpdateEnabled"], false);
+        assert_eq!(output["autoUpdateEnabled"], true);
     }
     Ok(())
 }
@@ -832,3 +832,6 @@ fn packaged_daemon_bootstrap_seeds_local_package() -> Result<()> {
 fn packaged_daemon_explicit_replacement_migrates_running_legacy() -> Result<()> {
     packaged_daemon_launch("start", InitialDaemon::Legacy)
 }
+
+#[path = "app_server_daemon/sync_tests.rs"]
+mod sync_tests;

@@ -8,6 +8,9 @@ pub use backend::windows::DetachedLaunchRestricted;
 pub use backend::windows::is_elevated;
 #[cfg(windows)]
 use backend::windows::try_lock_file;
+mod cli_update;
+pub use cli_update::CliUpdatePolicy;
+pub use cli_update::update_from_cli;
 mod client;
 mod diagnostics;
 mod install_lock;
@@ -17,7 +20,6 @@ pub use launch::start_with_features;
 mod managed_install;
 mod prepare_install;
 pub use prepare_install::InstallRequest;
-pub use prepare_install::update_from_cli;
 mod remote_control_client;
 mod settings;
 pub mod telemetry;

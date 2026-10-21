@@ -653,7 +653,7 @@ release_install_lock() {
   if [ "$lock_kind" = "mkdir" ]; then
     rm -rf "$LOCK_DIR" 2>/dev/null || true
   elif [ "$lock_kind" = "flock" ] || [ "$lock_kind" = "lockf" ]; then
-    exec 9>&- 2>/dev/null || true
+    exec 9>&- || true
   fi
   lock_kind=""
 }
@@ -1181,6 +1181,20 @@ add_to_path
 verify_visible_command
 release_install_lock
 handle_conflicting_install
+
+# The CLI and daemon own separate packages. Refresh only an existing latest-
+# channel daemon; the daemon command rechecks its selection under both locks.
+if [ "$RELEASE" = "latest" ] &&
+  [ "${CODEX_INSTALL_IF_LATEST:-0}" != "1" ] &&
+  [ "${CODEX_INSTALL_IF_CURRENT:-0}" != "1" ] &&
+  [ "$old_updater_parent" != "true" ]; then
+  step "Refreshing any latest-channel background server; running work may be interrupted"
+  if ! CODEX_HOME="$CODEX_HOME_DIR" "$release_dir/bin/codex" app-server daemon sync-from-cli; then
+    echo "Codex CLI was installed, but its background server could not be updated." >&2
+    echo "Retry with: codex app-server daemon sync-from-cli" >&2
+    exit 1
+  fi
+fi
 
 case "$path_action" in
   added)
