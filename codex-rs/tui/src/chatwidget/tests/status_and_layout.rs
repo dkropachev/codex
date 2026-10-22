@@ -2840,6 +2840,28 @@ async fn status_widget_active_snapshot() {
 }
 
 #[tokio::test]
+async fn capacity_retry_status_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.local_settings.tui.animations = false;
+    handle_turn_started(&mut chat, "turn-1");
+    handle_stream_error(
+        &mut chat,
+        "Model at capacity. Retrying in 10s...",
+        Some("Selected model is at capacity. Please try a different model.".to_string()),
+    );
+    let height = chat.desired_height(/*width*/ 80);
+    let mut terminal =
+        Terminal::new(TestBackend::new(/*width*/ 80, height)).expect("create terminal");
+    terminal
+        .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
+        .expect("render capacity retry status");
+    assert_chatwidget_snapshot!(
+        "capacity_retry_status",
+        normalized_backend_snapshot(terminal.backend())
+    );
+}
+
+#[tokio::test]
 async fn stream_error_updates_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_task_running(/*running*/ true);

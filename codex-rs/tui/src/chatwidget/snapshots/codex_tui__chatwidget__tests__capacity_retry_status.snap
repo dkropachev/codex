@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: normalized_backend_snapshot(terminal.backend())
+---
+"                                                                                "
+"• Model at capacity. Retrying in 10s... (0s • esc to interrupt)                 "
+"  └ Selected model is at capacity. Please try a different model.                "
+"                                                                                "
+"                                                                                "
+"› Ask Codex to do anything                                                      "
+"                                                                                "
+"  GPT-5.6-Sol default · /tmp/project                                            "

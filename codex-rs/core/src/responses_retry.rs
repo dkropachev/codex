@@ -1,6 +1,6 @@
 //! Shared retry and transport fallback decisions for Responses requests.
 //! Content-filter guidance is recorded for sampling requests before retry decisions.
-//! Server advice controls timing without extending configured retry limits.
+//! Capacity errors retry indefinitely; other errors retain configured retry limits.
 
 use std::time::Duration;
 
@@ -22,6 +22,8 @@ use tracing::warn;
 
 const INITIAL_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(5);
 const MAX_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(60);
+const INITIAL_CAPACITY_RETRY_DELAY: Duration = Duration::from_secs(/*secs*/ 10);
+const MAX_CAPACITY_RETRY_DELAY: Duration = Duration::from_secs(/*secs*/ 300);
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ResponsesStreamRequest {
@@ -33,6 +35,8 @@ pub(crate) struct ResponsesStreamRetryState {
     retries: u64,
     connection_retries: u64,
     connection_retry_delay: Duration,
+    capacity_retries: u64,
+    capacity_retry_delay: Duration,
 }
 
 impl Default for ResponsesStreamRetryState {
@@ -41,6 +45,8 @@ impl Default for ResponsesStreamRetryState {
             retries: 0,
             connection_retries: 0,
             connection_retry_delay: INITIAL_CONNECTION_RETRY_DELAY,
+            capacity_retries: 0,
+            capacity_retry_delay: INITIAL_CAPACITY_RETRY_DELAY,
         }
     }
 }
@@ -84,6 +90,33 @@ pub(crate) async fn handle_response_stream_error(
         ResponsesStreamRequest::Sampling => RetryOperation::Sampling,
         ResponsesStreamRequest::RemoteCompactionV2 => RetryOperation::RemoteCompactionV2,
     };
+    if matches!(err.details(), CodexErrorDetails::ServerOverloaded) {
+        let delay = retry_state.capacity_retry_delay;
+        let delay = err
+            .server_retry_delay()
+            .unwrap_or(delay)
+            .max(delay)
+            .min(MAX_CAPACITY_RETRY_DELAY);
+        retry_state.capacity_retries = retry_state.capacity_retries.saturating_add(/*rhs*/ 1);
+        warn!(
+            turn_id = %turn_context.sub_id,
+            retries = retry_state.capacity_retries,
+            ?delay,
+            "model at capacity; waiting to retry"
+        );
+        sess.notify_stream_error(
+            turn_context,
+            format!("Model at capacity. Retrying in {}s...", delay.as_secs()),
+            err,
+        )
+        .await;
+        codex_client::record_retry!(retry_state.capacity_retries, delay, operation);
+        tokio::time::sleep(delay).await;
+        retry_state.capacity_retry_delay = delay
+            .saturating_mul(/*rhs*/ 2)
+            .min(MAX_CAPACITY_RETRY_DELAY);
+        return Ok(());
+    }
     let retry_count = retry_state.retries.saturating_add(1);
     let Some(delay) = err.retry_delay(retry_count) else {
         return Err(err);
