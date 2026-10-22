@@ -82,6 +82,8 @@ where
         let telemetry = telemetry.clone();
         let send = send.clone();
         async move {
+            let is_responses_request =
+                url::Url::parse(&req.url).is_ok_and(|url| url.path().ends_with("/responses"));
             let start = Instant::now();
             let result = send(req).await;
             if let Some(t) = telemetry.as_ref() {
@@ -91,8 +93,22 @@ where
                 };
                 t.on_request(attempt, status, err, start.elapsed());
             }
-            result
+            // Let the Responses loop own capacity retries, including their minimum delay
+            // and unbounded retry budget, instead of retrying immediately at the HTTP layer.
+            if let Err(TransportError::Http {
+                status,
+                body: Some(body),
+                ..
+            }) = &result
+                && is_responses_request
+                && *status == StatusCode::SERVICE_UNAVAILABLE
+                && let Ok(body) = serde_json::from_str::<serde_json::Value>(body)
+                && body["error"]["code"].as_str() == Some("server_is_overloaded")
+            {
+                return Ok(result);
+            }
+            result.map(Ok)
         }
     })
-    .await
+    .await?
 }

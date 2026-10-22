@@ -7,11 +7,72 @@ use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use codex_http_client::RetryAfter;
 use codex_protocol::error::CodexErr;
+use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tracing_test::internal::MockWriter;
+
+#[tokio::test]
+async fn capacity_retries_back_off_indefinitely_without_consuming_stream_budget() {
+    let (session, turn_context) = make_session_and_context().await;
+    let step_context = StepContext::for_test(Arc::new(turn_context));
+    let mut client_session = session.services.model_client.new_session();
+    let mut retry_state = ResponsesStreamRetryState::default();
+    tokio::time::pause();
+
+    for seconds in [10, 20, 40, 80, 160, 300, 300, 300] {
+        let start = Instant::now();
+        let retry = handle_response_stream_error(
+            &mut retry_state,
+            /*max_retries*/ 0,
+            CodexErr::ServerOverloaded,
+            &mut client_session,
+            &session,
+            &step_context,
+            ResponsesStreamRequest::Sampling,
+        );
+        tokio::pin!(retry);
+        assert!(futures::poll!(&mut retry).is_pending());
+        tokio::time::advance(Duration::from_secs(seconds - 1)).await;
+        assert!(futures::poll!(&mut retry).is_pending());
+        retry.await.expect("capacity retry should remain allowed");
+        let elapsed = Instant::now() - start;
+        let expected = Duration::from_secs(seconds);
+        assert!((expected..=expected + Duration::from_millis(/*millis*/ 1)).contains(&elapsed));
+    }
+    assert_eq!((retry_state.retries, retry_state.capacity_retries), (0, 8));
+}
+
+#[tokio::test]
+async fn capacity_retry_advice_stays_within_backoff_bounds() {
+    let (session, turn_context) = make_session_and_context().await;
+    let step_context = StepContext::for_test(Arc::new(turn_context));
+    let mut client_session = session.services.model_client.new_session();
+    tokio::time::pause();
+    for (advised_seconds, expected_seconds) in [(0, 10), (1, 10), (30, 30), (600, 300)] {
+        let mut retry_state = ResponsesStreamRetryState::default();
+        let start = Instant::now();
+        let advice = RetryAfter::from_delay(Duration::from_secs(advised_seconds))
+            .expect("valid retry deadline");
+        handle_response_stream_error(
+            &mut retry_state,
+            /*max_retries*/ 0,
+            CodexErr::ServerOverloaded.with_retry_after(advice),
+            &mut client_session,
+            &session,
+            &step_context,
+            ResponsesStreamRequest::RemoteCompactionV2,
+        )
+        .await
+        .expect("capacity retry should remain allowed");
+        let elapsed = Instant::now() - start;
+        // Tokio rounds timer deadlines up to the next millisecond.
+        let expected = Duration::from_secs(expected_seconds);
+        assert!((expected..=expected + Duration::from_millis(/*millis*/ 1)).contains(&elapsed));
+    }
+}
 
 #[tokio::test]
 async fn sampling_retry_logs_stream_error_context() {
