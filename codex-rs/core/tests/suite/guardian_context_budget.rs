@@ -231,9 +231,10 @@ enum ReviewerResponse {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(1, ReviewerResponse::Decision; "required_context_fails_closed")]
-#[test_case(4_500, ReviewerResponse::ToolContinuation; "oversized_tool_continuation_compacts")]
+// Admit the initial tool schemas while oversized continuations still require recovery.
+#[test_case(6_000, ReviewerResponse::ToolContinuation; "oversized_tool_continuation_compacts")]
 #[test_case(7_000, ReviewerResponse::CachedCompactionContinuation; "cached_compaction_fits_reviewer_budget")]
-#[test_case(4_500, ReviewerResponse::FileImageContinuation; "uploaded_original_image_history_compacts")]
+#[test_case(6_000, ReviewerResponse::FileImageContinuation; "uploaded_original_image_history_omits_oversized_image")]
 #[test_case(5_000, ReviewerResponse::UncompactableContinuation; "ineffective_compaction_fails_closed")]
 #[test_case(5_000, ReviewerResponse::CompactionError; "compaction_service_error_does_not_request_user_approval")]
 #[test_case(6_000, ReviewerResponse::NextReview; "incoming_review_compacts_existing_history")]
@@ -365,7 +366,7 @@ async fn review_respects_complete_context_budget(
                         "text('inspection-output'.repeat(600));",
                     ),
                     // A tiny inline image fits before upload. Its opaque original-detail file
-                    // reference must reserve 10k tokens in reviewer history and force compaction.
+                    // reference reserves 10k tokens and is omitted from the bounded continuation.
                     ReviewerResponse::FileImageContinuation => ev_custom_tool_call(
                         "reviewer-inspect",
                         "exec",
@@ -542,11 +543,16 @@ async fn review_respects_complete_context_budget(
                 );
             }
             let recovered = guardian_requests[1].body_json();
-            assert!(
-                recovered["input"]
-                    .to_string()
-                    .contains("Previous review evidence")
-            );
+            if matches!(
+                reviewer_response,
+                ReviewerResponse::ToolContinuation | ReviewerResponse::CachedCompactionContinuation
+            ) {
+                assert!(
+                    recovered["input"]
+                        .to_string()
+                        .contains("Previous review evidence")
+                );
+            }
             if matches!(
                 reviewer_response,
                 ReviewerResponse::CachedCompactionContinuation

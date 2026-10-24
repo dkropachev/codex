@@ -106,7 +106,12 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::oneshot;
 
+use executor_skills::ScenarioExecutorSkills;
+
 const ONE_PIXEL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+
+#[path = "scenarios_executor_skills.rs"]
+mod executor_skills;
 
 #[path = "scenarios_retained_tool_outputs.rs"]
 mod retained_tool_outputs;
@@ -1511,12 +1516,12 @@ async fn skill_read_recovers_omitted_installation_and_reads_selected_environment
         &mut extensions,
         SkillProviders::new()
             .with_cloud_provider(Arc::new(InstallationSkills(catalog)))
-            .with_executor_provider(Arc::new(
+            .with_executor_provider(Arc::new(ScenarioExecutorSkills(
                 ExecutorSkillProvider::new_with_restriction_product(
                     Arc::new(EnvironmentManager::default_for_tests()),
                     /*restriction_product*/ None,
                 ),
-            )),
+            ))),
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,

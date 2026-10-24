@@ -255,7 +255,7 @@ async fn oversized_base_instructions_are_lossless_bounded_and_stable(
         .iter()
         .take_while(|item| {
             item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
-                == serde_json::json!(["model.base_instructions"])
+                == serde_json::json!(["model.base_instructions.part"])
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -295,7 +295,7 @@ async fn oversized_base_instructions_are_lossless_bounded_and_stable(
                 "role": "developer",
                 "content": [{"type": "input_text", "text": text}],
                 "internal_chat_message_metadata_passthrough": {
-                    "content_item_kinds": ["model.base_instructions"],
+                    "content_item_kinds": ["model.base_instructions.part"],
                 },
             })
         );
