@@ -36,6 +36,7 @@ use std::sync::atomic::Ordering;
 mod tool_metadata;
 
 use crate::CodexResponsesHeaders;
+use crate::PromptCacheKey;
 use crate::tools::ExecutedToolCalls;
 use async_channel::Sender;
 use codex_api::AgentIdentityTelemetry;
@@ -285,7 +286,8 @@ impl RequestRouteTelemetry {
 pub struct ModelClient {
     state: Arc<ModelClientState>,
     agent_identity_policy: AgentIdentityAuthPolicy,
-    prompt_cache_key_override: Option<String>,
+    prompt_cache_key_policy: PromptCacheKey,
+    session_id_override: Option<String>,
     codex_responses_headers: Option<Arc<CodexResponsesHeaders>>,
     event_sender: Option<Sender<ProtocolEvent>>,
     http_client_factory: HttpClientFactory,
@@ -566,10 +568,12 @@ pub(crate) struct RealtimeWebrtcCallStart {
 /// API-key sessions send that API bearer. ChatGPT-auth sessions send their bearer plus account id;
 /// transceiver is responsible for accepting that same call-create identity on the direct
 /// `api.openai.com` sideband path.
-fn sideband_websocket_auth_headers(api_auth: &dyn AuthProvider) -> ApiHeaderMap {
+fn sideband_websocket_auth_headers(
+    api_auth: &dyn AuthProvider,
+) -> std::result::Result<ApiHeaderMap, ApiError> {
     let mut headers = ApiHeaderMap::new();
-    api_auth.add_auth_headers(&mut headers);
-    headers
+    api_auth.add_auth_headers(&mut headers)?;
+    Ok(headers)
 }
 
 impl ModelClient {
@@ -642,7 +646,8 @@ impl ModelClient {
                 last_inference_tools: StdMutex::new(None),
             }),
             agent_identity_policy,
-            prompt_cache_key_override: None,
+            prompt_cache_key_policy: PromptCacheKey::default(),
+            session_id_override: None,
             codex_responses_headers: None,
             event_sender: None,
             http_client_factory,
@@ -672,36 +677,56 @@ impl ModelClient {
 
     pub(crate) fn with_session_context(
         mut self,
-        prompt_cache_key_override: Option<String>,
+        prompt_cache_key: PromptCacheKey,
+        session_id_override: Option<String>,
         event_sender: Sender<ProtocolEvent>,
         codex_responses_headers: Option<Arc<CodexResponsesHeaders>>,
         api_key_cyber_access_programs: cyber_access_program::ApiKeyCyberAccessPrograms,
     ) -> Self {
-        self.prompt_cache_key_override = prompt_cache_key_override;
+        self.prompt_cache_key_policy = prompt_cache_key;
+        self.session_id_override = session_id_override;
         self.event_sender = Some(event_sender);
         self.codex_responses_headers = codex_responses_headers;
         self.api_key_cyber_access_programs = api_key_cyber_access_programs;
         self
     }
 
-    fn prompt_cache_key(&self, responses_metadata: &CodexResponsesMetadata) -> String {
-        if let Some(prompt_cache_key) = &self.prompt_cache_key_override {
-            return prompt_cache_key.clone();
+    pub(crate) fn prompt_cache_key_policy(&self) -> PromptCacheKey {
+        self.prompt_cache_key_policy.clone()
+    }
+
+    /// The caller's policy controls the request body independently of the session-id header.
+    fn prompt_cache_key(&self, metadata: &CodexResponsesMetadata) -> Option<String> {
+        match &self.prompt_cache_key_policy {
+            PromptCacheKey::SessionDerived => Some(self.session_derived_cache_key(metadata)),
+            PromptCacheKey::Custom(key) => Some(key.clone()),
+            PromptCacheKey::Omit => None,
+        }
+    }
+
+    fn session_derived_cache_key(&self, metadata: &CodexResponsesMetadata) -> String {
+        if let Some(session_id) = &self.session_id_override {
+            return session_id.clone();
         }
 
         if let SessionSource::Internal(source) = &self.state.session_source
-            && let Some(parent_thread_id) = responses_metadata.parent_thread_id
+            && let Some(parent_thread_id) = metadata.parent_thread_id
         {
             return format!("{source}:{parent_thread_id}");
         }
 
-        responses_metadata.session_id.clone()
+        metadata.session_id.clone()
     }
 
     fn account_pool_affinity_key(&self) -> String {
-        self.prompt_cache_key_override
-            .clone()
-            .unwrap_or_else(|| self.state.thread_id.to_string())
+        match &self.prompt_cache_key_policy {
+            PromptCacheKey::Custom(key) => key.clone(),
+            PromptCacheKey::SessionDerived => self
+                .session_id_override
+                .clone()
+                .unwrap_or_else(|| self.state.thread_id.to_string()),
+            PromptCacheKey::Omit => self.state.thread_id.to_string(),
+        }
     }
 
     fn account_pool_operation_kind(
@@ -721,7 +746,7 @@ impl ModelClient {
         if self.state.session_source.is_non_root_agent() {
             metadata.session_id.clone()
         } else {
-            self.prompt_cache_key(metadata)
+            self.session_derived_cache_key(metadata)
         }
     }
 
@@ -780,7 +805,8 @@ impl ModelClient {
             self.state.workspace_routing.clone(),
             self.request_contributors.clone(),
         );
-        client.prompt_cache_key_override = self.prompt_cache_key_override.clone();
+        client.prompt_cache_key_policy = self.prompt_cache_key_policy.clone();
+        client.session_id_override = self.session_id_override.clone();
         client.codex_responses_headers = self.codex_responses_headers.clone();
         client.event_sender = self.event_sender.clone();
         client.restored_history = self.restored_history;
@@ -857,9 +883,10 @@ impl ModelClient {
             extra_headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
         }
         let mut sideband_headers = extra_headers.clone();
-        sideband_headers.extend(sideband_websocket_auth_headers(
-            client_setup.api_auth.as_ref(),
-        ));
+        sideband_headers.extend(
+            sideband_websocket_auth_headers(client_setup.api_auth.as_ref())
+                .map_err(|error| self.state.provider.map_api_error(error))?,
+        );
         let api_provider = api_provider_override.unwrap_or(client_setup.api_provider);
         let transport = self.build_api_transport(
             &api_provider,
@@ -894,9 +921,10 @@ impl ModelClient {
         if let Some(header_value) = self.generate_attestation_header_for().await {
             extra_headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
         }
-        extra_headers.extend(sideband_websocket_auth_headers(
-            client_setup.api_auth.as_ref(),
-        ));
+        extra_headers.extend(
+            sideband_websocket_auth_headers(client_setup.api_auth.as_ref())
+                .map_err(|error| self.state.provider.map_api_error(error))?,
+        );
         Ok(extra_headers)
     }
 
@@ -939,7 +967,8 @@ impl ModelClient {
                 client_setup.api_auth.as_ref(),
                 client_setup.agent_identity_telemetry.clone(),
                 PendingUnauthorizedRetry::default(),
-            ),
+            )
+            .map_err(|error| self.state.provider.map_api_error(error))?,
             RequestRouteTelemetry::for_endpoint(MEMORIES_SUMMARIZE_ENDPOINT),
             self.state.auth_env_telemetry.clone(),
         );
@@ -1092,6 +1121,18 @@ impl ModelClient {
             // Unsupported models and disabled overrides must also accept saved history.
             // Filter only the request copy; persisted history remains unchanged.
             input.retain(|item| !matches!(item, ResponseItem::ConfigurationUpdate { .. }));
+        } else {
+            input.dedup_by(|next, previous| {
+                if matches!(next, ResponseItem::ConfigurationUpdate { .. })
+                    && matches!(previous, ResponseItem::ConfigurationUpdate { .. })
+                {
+                    // Keep the latest update; dedup_by removes `next`.
+                    std::mem::swap(previous, next);
+                    true
+                } else {
+                    false
+                }
+            });
         }
         let is_openai = self.state.provider.info().is_openai();
         // These prompt-only items are rebuilt on every request. Hash their visible payloads
@@ -1110,7 +1151,7 @@ impl ModelClient {
                         Uuid::new_v5(&prefix_namespace, &serde_json::to_vec(&tools)?),
                     )),
                     role: "developer".to_string(),
-                    tools,
+                    tools: Arc::from(tools),
                 });
             }
             None
@@ -1124,6 +1165,12 @@ impl ModelClient {
             );
         }
         input.splice(0..0, prefix);
+        if !model_info.use_responses_lite {
+            // Only RLite accepts per-content attribution until the Responses API schema expands.
+            for item in &mut input {
+                item.clear_content_item_metadata();
+            }
+        }
         if !is_openai {
             for item in &mut input {
                 item.clear_internal_chat_message_metadata_passthrough();
@@ -1171,7 +1218,6 @@ impl ModelClient {
             &prompt.output_schema,
             prompt.output_schema_strict,
         );
-        let prompt_cache_key = Some(self.prompt_cache_key(responses_metadata));
         let service_tier = model_info
             .service_tier_for_request(service_tier)
             .filter(|tier| {
@@ -1201,7 +1247,7 @@ impl ModelClient {
             stream_options,
             include,
             service_tier,
-            prompt_cache_key,
+            prompt_cache_key: self.prompt_cache_key(responses_metadata),
             text,
             client_metadata: Some(client_metadata),
             access_programs: None,
@@ -1791,7 +1837,9 @@ impl ModelClientSession {
             auth_owner_generation: owner,
         }
     }
+}
 
+impl ModelClientSession {
     /// Checks whether the current request is an incremental extension of the previous request.
     /// We only reuse an incremental input delta when non-input request fields are unchanged and
     /// `input` extends or equals the previous known input. Server-returned output items
@@ -1879,7 +1927,10 @@ impl ModelClientSession {
             .map(AuthManager::unauthorized_recovery);
         let mut provider_auth_recovery_attempted = false;
         let mut pending_retry = PendingUnauthorizedRetry::default();
-        let affinity_key = self.client.prompt_cache_key(responses_metadata);
+        let affinity_key = self
+            .client
+            .prompt_cache_key(responses_metadata)
+            .unwrap_or_else(|| self.client.account_pool_affinity_key());
         loop {
             let client_setup = self
                 .client
@@ -1901,7 +1952,8 @@ impl ModelClientSession {
                 client_setup.api_auth.as_ref(),
                 client_setup.agent_identity_telemetry.clone(),
                 pending_retry,
-            );
+            )
+            .map_err(|error| provider.map_api_error(error))?;
             let responses_headers = self
                 .client
                 .responses_headers(client_setup.auth.as_ref(), &model_info.slug);
@@ -2095,7 +2147,10 @@ impl ResponsesHttpExecutor<'_> {
         let mut provider_auth_recovery_attempted = false;
         let mut pending_retry = PendingUnauthorizedRetry::default();
         let mut pinned_selection = None;
-        let affinity_key = self.client.prompt_cache_key(responses_metadata);
+        let affinity_key = self
+            .client
+            .prompt_cache_key(responses_metadata)
+            .unwrap_or_else(|| self.client.account_pool_affinity_key());
         let operation_kind = ModelClient::account_pool_operation_kind(responses_metadata);
         loop {
             let client_setup = self
@@ -2153,7 +2208,8 @@ impl ResponsesHttpExecutor<'_> {
                 client_setup.api_auth.as_ref(),
                 client_setup.agent_identity_telemetry.clone(),
                 pending_retry,
-            );
+            )
+            .map_err(|error| self.client.state.provider.map_api_error(error))?;
             let (request_telemetry, sse_telemetry) = ModelClientSession::build_streaming_telemetry(
                 session_telemetry,
                 request_auth_context,
@@ -2205,9 +2261,6 @@ impl ResponsesHttpExecutor<'_> {
             )?;
             self.client
                 .prepare_response_items_for_request(&mut request.input);
-            if crate::guardian::is_basic_session_source(&self.client.state.session_source) {
-                crate::guardian::observe_guardian_request(session_telemetry, &request);
-            }
             let request_session_telemetry =
                 session_telemetry_for_request(session_telemetry, &request);
             options.extra_headers.extend(responses_headers);
@@ -2327,7 +2380,10 @@ impl ModelClientSession {
         let mut provider_auth_recovery_attempted = false;
         let mut pending_retry = PendingUnauthorizedRetry::default();
         let mut pinned_selection = None;
-        let affinity_key = self.client.prompt_cache_key(responses_metadata);
+        let affinity_key = self
+            .client
+            .prompt_cache_key(responses_metadata)
+            .unwrap_or_else(|| self.client.account_pool_affinity_key());
         loop {
             let operation_kind = if warmup {
                 AccountPoolOperationKind::Prewarm
@@ -2367,7 +2423,8 @@ impl ModelClientSession {
                 client_setup.api_auth.as_ref(),
                 client_setup.agent_identity_telemetry.clone(),
                 pending_retry,
-            );
+            )
+            .map_err(|error| self.client.state.provider.map_api_error(error))?;
             let mut request = self.client.build_responses_request(
                 prompt,
                 model_info,
@@ -2442,12 +2499,6 @@ impl ModelClientSession {
                 Err(err) => return Err(provider.map_api_error(err)),
             }
 
-            // Measure the complete logical request, not only the websocket delta.
-            if !warmup
-                && crate::guardian::is_basic_session_source(&self.client.state.session_source)
-            {
-                crate::guardian::observe_guardian_request(session_telemetry, &request);
-            }
             let mut client_metadata = self.client.build_ws_client_metadata(
                 responses_metadata,
                 include_internal,
@@ -3085,9 +3136,9 @@ impl AuthRequestTelemetryContext {
         api_auth: &dyn AuthProvider,
         agent_identity_telemetry: Option<AgentIdentityTelemetry>,
         retry: PendingUnauthorizedRetry,
-    ) -> Self {
-        let auth_telemetry = auth_header_telemetry(api_auth);
-        Self {
+    ) -> std::result::Result<Self, ApiError> {
+        let auth_telemetry = auth_header_telemetry(api_auth)?;
+        Ok(Self {
             auth_mode: auth_mode.map(|mode| match mode {
                 AuthMode::ApiKey | AuthMode::BedrockApiKey | AuthMode::BedrockAccessKeys => {
                     "ApiKey"
@@ -3104,7 +3155,7 @@ impl AuthRequestTelemetryContext {
             retry_after_unauthorized: retry.retry_after_unauthorized,
             recovery_mode: retry.recovery_mode,
             recovery_phase: retry.recovery_phase,
-        }
+        })
     }
 
     fn agent_identity_telemetry(&self) -> Option<&AgentIdentityTelemetry> {

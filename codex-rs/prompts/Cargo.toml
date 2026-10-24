@@ -28,5 +28,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 codex-utils-absolute-path = { workspace = true }
+codex-protocol-test-support = { workspace = true }
 pretty_assertions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }

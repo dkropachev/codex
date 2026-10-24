@@ -413,11 +413,17 @@ def codex_rust_crate(
             crate_root = main,
             deps = all_crate_deps() + maybe_deps + deps_extra,
             edition = crate_edition,
-            # Keep per-binary Cargo link behavior scoped to the matching
-            # generated rust_binary instead of leaking it to sibling binaries.
-            compile_data = compile_data + binary_compile_data_extra.get(binary, []),
+            # Scope each binary's compile data and linker flags to its generated
+            # rust_binary so they do not affect sibling binaries.
+            compile_data = compile_data + binary_compile_data_extra.get(binary, []) + select({
+                "@platforms//os:macos": ["//bazel/tools:dsymutil"],
+                "//conditions:default": [],
+            }),
             rustc_flags = rustc_flags_extra + binary_rustc_flags_extra.get(binary, []) + WINDOWS_RUSTC_LINK_FLAGS,
-            rustc_env = rustc_env,
+            rustc_env = select({
+                "@platforms//os:macos": rustc_env | {"PATH": "$${pwd}/bazel/tools:/bin:/usr/bin:/usr/local/bin"},
+                "//conditions:default": rustc_env,
+            }),
             # Keep stamp = 0: rules_rust otherwise makes stable-status.txt and
             # volatile-status.txt compiler inputs, even though we only consume
             # STABLE_GIT_COMMIT. BUILD_USER and BUILD_HOST vary across developers

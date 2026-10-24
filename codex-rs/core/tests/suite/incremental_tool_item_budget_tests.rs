@@ -275,6 +275,7 @@ async fn incremental_metadata_refresh_does_not_merge_with_realtime() -> Result<(
             realtime_end_instructions: None,
             prompt: Some(Some("backend".to_string())),
             realtime_session_id: None,
+            voice_session_id: None,
             transport: None,
             version: Some(RealtimeConversationVersion::V3),
             voice: None,

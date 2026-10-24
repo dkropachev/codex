@@ -1,3 +1,5 @@
+mod refresh;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -1757,7 +1759,7 @@ mod tests {
         assert_eq!(remaining_from_rate_limit(Some(&json!({}))), None);
     }
 
-    async fn pool_manager(
+    pub(super) async fn pool_manager(
         codex_home: &Path,
         policy: AccountPoolPolicyToml,
         accounts: Vec<&str>,
@@ -1830,7 +1832,7 @@ mod tests {
         }
     }
 
-    fn write_chatgpt_auth(codex_home: &Path, account_id: &str, email: &str) {
+    pub(super) fn write_chatgpt_auth(codex_home: &Path, account_id: &str, email: &str) {
         let account_home = codex_home.join("accounts").join(account_id);
         fs::create_dir_all(&account_home).expect("create account home");
         let jwt = fake_jwt(json!({

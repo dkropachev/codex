@@ -1,5 +1,7 @@
 use codex_git_utils::PullRequestMetadata;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::input_text;
 use codex_utils_string::take_bytes_at_char_boundary;
 
 use super::ContextualUserFragment;
@@ -59,8 +61,8 @@ impl ContextualUserFragment for PullRequestContext {
         (CONTEXT_START_MARKER, CONTEXT_END_MARKER)
     }
 
-    fn body(&self) -> String {
-        self.body.clone()
+    fn body(&self) -> ContentItem {
+        input_text(self.body.clone())
     }
 }
 

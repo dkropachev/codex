@@ -48,6 +48,10 @@ pub(super) struct TranscriptState {
     /// Latest `/status` card and fields, retained across copying until a later turn or command.
     pub(super) last_status_copy_targets: Option<StatusCopySource>,
     pub(super) last_completed_agent_message: Option<(String, String)>,
+    /// Turn and item IDs for the agent message currently supplying streamed deltas.
+    pub(super) active_streamed_agent_message: Option<(String, String)>,
+    /// Turn/item identity and raw source of the latest interleaved stream flush.
+    pub(super) last_flushed_agent_message: Option<((String, String), String)>,
     /// Raw markdown of the most recently completed proposed plan.
     pub(super) latest_proposed_plan_markdown: Option<String>,
     /// Exact latest completed Plan item and the turn that owns it. Display fallback must not
@@ -111,6 +115,8 @@ impl TranscriptState {
     pub(super) fn reset_turn_flags(&mut self) {
         self.saw_copy_source_this_turn = false;
         self.last_completed_agent_message = None;
+        self.active_streamed_agent_message = None;
+        self.last_flushed_agent_message = None;
         self.saw_plan_update_this_turn = false;
         self.latest_proposed_plan_markdown = None;
         self.invalidate_plan_authority();
