@@ -133,21 +133,28 @@ async fn base_instructions_use_input_items(responses_lite: bool) -> Result<()> {
             .as_str()
             .is_some_and(|id| id.starts_with("msg_"))
     );
-    assert_eq!(
-        instructions,
-        &serde_json::json!({
-            "id": instructions["id"],
-            "type": "message",
-            "role": "developer",
-            "content": [{
-                "type": "input_text",
-                "text": "test instructions",
-            }],
-            "internal_chat_message_metadata_passthrough": {
-                "content_item_kinds": ["model.base_instructions"],
-            },
-        })
-    );
+    let mut expected_instructions = serde_json::json!({
+        "id": instructions["id"],
+        "type": "message",
+        "role": "developer",
+        "content": [{
+            "type": "input_text",
+            "text": "test instructions",
+        }],
+        "internal_chat_message_metadata_passthrough": {
+            "content_item_kinds": ["model.base_instructions"],
+        },
+    });
+    let mut actual_instructions = instructions.clone();
+    if responses_lite {
+        expected_instructions["internal_chat_message_metadata_passthrough"]["content_item_metadata"] =
+            serde_json::json!([{"provenance": {"type": "harness", "hook": false}}]);
+        actual_instructions["internal_chat_message_metadata_passthrough"]
+            .as_object_mut()
+            .context("base instructions should carry content metadata")?
+            .retain(|key, _| !matches!(key.as_str(), "turn_id" | "create_time"));
+    }
+    assert_eq!(actual_instructions, expected_instructions);
 
     let tools = if responses_lite {
         assert!(body.get("tools").is_none());
@@ -213,6 +220,7 @@ async fn base_instructions_use_input_items(responses_lite: bool) -> Result<()> {
 }
 
 #[test_case::test_case("x ".repeat(/*n*/ 40_000); "ascii")]
+#[test_case::test_case("123".repeat(/*n*/ 10_001); "token_dense_digits")]
 #[test_case::test_case("\u{0000}".repeat(/*n*/ 10_000); "escaping_dominated")]
 #[test_case::test_case("🦀é\u{301}漢\"\\\n\u{0000}".repeat(/*n*/ 5_000); "unicode_and_escaping")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -248,7 +256,7 @@ async fn oversized_base_instructions_are_lossless_bounded_and_stable(
         .iter()
         .take_while(|item| {
             item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
-                == serde_json::json!(["model.base_instructions"])
+                == serde_json::json!(["model.base_instructions.part"])
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -258,7 +266,7 @@ async fn oversized_base_instructions_are_lossless_bounded_and_stable(
     for (index, item) in prefix.iter().enumerate() {
         let bytes = serde_json::to_vec(item)?.len();
         assert!(
-            bytes <= 40_000,
+            bytes <= 10_000,
             "base instruction item has {bytes} serialized bytes"
         );
         assert!(ids.insert(item["id"].as_str().context("message id")?));
@@ -288,7 +296,7 @@ async fn oversized_base_instructions_are_lossless_bounded_and_stable(
                 "role": "developer",
                 "content": [{"type": "input_text", "text": text}],
                 "internal_chat_message_metadata_passthrough": {
-                    "content_item_kinds": ["model.base_instructions"],
+                    "content_item_kinds": ["model.base_instructions.part"],
                 },
             })
         );

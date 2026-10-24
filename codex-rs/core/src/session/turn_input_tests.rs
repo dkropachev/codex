@@ -8,6 +8,7 @@ use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskResult;
+use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -558,7 +559,8 @@ async fn start_only_rejects_pending_trigger_turn_without_injecting() {
                 Vec::new(),
                 "pending trigger".to_string(),
                 /*trigger_turn*/ true,
-            ),
+            )
+            .into(),
             Default::default(),
         )
         .await;
@@ -578,6 +580,51 @@ async fn start_only_rejects_pending_trigger_turn_without_injecting() {
     assert!(session.active_turn.lock().await.is_none());
     assert!(session.input_queue.has_trigger_turn_mailbox_items().await);
     assert_eq!(session.collaboration_mode().await.mode, ModeKind::Plan);
+}
+
+/// Queue-only agent mail respects stop, Plan mode, and inherited child configuration.
+#[test_case(SessionSource::Exec, true, ModeKind::Default; "interrupted_root")]
+#[test_case(SessionSource::Exec, false, ModeKind::Plan; "plan_root")]
+#[test_case(SessionSource::SubAgent(SubAgentSource::Review), false, ModeKind::Default; "inherited_child_flag")]
+#[tokio::test]
+async fn agent_message_wake_reservation_preserves_existing_boundaries(
+    source: SessionSource,
+    interrupted: bool,
+    mode: ModeKind,
+) {
+    let (mut session, _turn_context) = make_session_and_context().await;
+    session
+        .features
+        .enable(Feature::WakeOnAgentMessages)
+        .expect("enable agent-message wakes");
+    {
+        let mut state = session.state.lock().await;
+        state.session_configuration.session_source = source;
+        Arc::make_mut(&mut state.session_configuration.step_settings)
+            .collaboration_mode
+            .mode = mode;
+    }
+    if interrupted {
+        session.mark_interrupted();
+    }
+    let communication = InterAgentCommunication::new(
+        AgentPath::try_from("/root/worker").expect("valid worker path"),
+        AgentPath::root(),
+        Vec::new(),
+        "late worker update".to_string(),
+        /*trigger_turn*/ false,
+    );
+    session
+        .input_queue
+        .enqueue_mailbox_communication(communication.clone().into(), Default::default())
+        .await;
+
+    assert!(session.reserve_pending_work_turn().await.is_none());
+    assert!(session.active_turn.lock().await.is_none());
+    assert_eq!(
+        session.input_queue.drain_mailbox_input_items().await.0,
+        vec![TurnInput::InterAgentCommunication(communication.into())]
+    );
 }
 
 #[tokio::test]
@@ -653,7 +700,7 @@ async fn explicit_user_turn_can_reserve_with_trigger_mail_pending() {
     );
     session
         .input_queue
-        .enqueue_mailbox_communication(communication, Default::default())
+        .enqueue_mailbox_communication(communication.into(), Default::default())
         .await;
 
     let reservation = idle_turn::reserve_for_user_turn(&session)
@@ -678,7 +725,7 @@ async fn compact_task_keeps_trigger_mail_arriving_after_reservation() {
     );
     session
         .input_queue
-        .enqueue_mailbox_communication(communication, Default::default())
+        .enqueue_mailbox_communication(communication.into(), Default::default())
         .await;
     let turn_context = session
         .new_turn_with_default_settings("compact-turn".to_string(), Default::default())

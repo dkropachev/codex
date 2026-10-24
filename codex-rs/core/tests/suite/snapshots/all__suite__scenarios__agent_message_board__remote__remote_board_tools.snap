@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios_agent_message_board_remote.rs
+assertion_line: 198
 expression: "context_snapshot::format_context_snapshot(\"Remote board tools and active-turn notifications share the existing session identity.\",\n&bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
 Scenario: Remote board tools and active-turn notifications share the existing session identity.
@@ -8,15 +9,19 @@ Scenario: Remote board tools and active-turn notifications share the existing se
 -- request 1 (request) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
-01:message/user:
-    This turn will be interrupted during notification setup.
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
 02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/user:
+    This turn will be interrupted during notification setup.
+04:message/developer:
     <turn_aborted>
     The previous turn was interrupted on purpose. Any running unified exec processes may still be running in...mands were aborted, they may have partially executed. [hash=cee256d92b55ad65]
     </turn_aborted>
-03:message/developer:
+05:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-04:message/developer:
+06:message/developer:
     You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
 
     At the start of your turn, you are the active agent.
@@ -34,15 +39,15 @@ Scenario: Remote board tools and active-turn notifications share the existing se
     There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
 
     Full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model and reasoning effort and d...uctions; when doing so, set `fork_turns` to `"none"`. [hash=18ccf7e93ecabab9]
-05:message/developer:
+07:message/developer:
     <MULTI_AGENT_MODE>
-06:message/user:
+08:message/user:
     <ENVIRONMENT_CONTEXT>
-07:message/user:
+09:message/user:
     Post the remote decision.
 -- request 2 (request) --
-08:function_call/collaboration.post:{"new_channel_name":"design","text":"A remote decision."}
-09:function_call/collaboration.wait_agent:{}
-10:function_call_output:{"author":"/root","channel_name":"design","created_at":"2026-09-18T12:00:00Z","message_id":"<UUID 1>","thread_id":"<UUID 1>"}
-11:function_call_output:{"message":"Wait completed.","timed_out":false}
-12:agent_message
+10:function_call/collaboration.post:{"new_channel_name":"design","text":"A remote decision."}
+11:function_call/collaboration.wait_agent:{}
+12:function_call_output:{"author":"/root","channel_name":"design","created_at":"2026-09-18T12:00:00Z","message_id":"<UUID 1>","thread_id":"<UUID 1>"}
+13:function_call_output:{"message":"Wait completed.","timed_out":false}
+14:agent_message

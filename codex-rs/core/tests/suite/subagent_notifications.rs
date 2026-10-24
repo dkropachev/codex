@@ -41,6 +41,7 @@ use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_tool_search_call;
 use core_test_support::responses::mount_response_once_match;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::namespace_child_tool;
@@ -82,6 +83,9 @@ mod spawn_settings_tests;
 
 #[path = "guardian_subagent_notification_tests.rs"]
 mod guardian_subagent_notification_tests;
+
+#[path = "code_mode_agent_message_tests.rs"]
+mod code_mode_agent_message_tests;
 
 const SPAWN_CALL_ID: &str = "spawn-call-1";
 const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
@@ -1268,7 +1272,7 @@ async fn grandchild_full_fork_preserves_context_baseline(
             &server,
             |req: &wiremock::Request| {
                 body_contains(req, CHILD_TASK)
-                    && !body_contains(req, ROOT_CALL)
+                    && body_contains(req, r#"\"agent_name\":\"/root/child\""#)
                     && !body_contains(req, PRELUDE_CALL)
                     && !body_contains(req, COMPACT_SUMMARY)
             },
@@ -1305,7 +1309,7 @@ async fn grandchild_full_fork_preserves_context_baseline(
                     CHILD_TASK
                 },
             ) && !body_contains(req, GRANDCHILD_TASK)
-                && !body_contains(req, ROOT_CALL)
+                && body_contains(req, r#"\"agent_name\":\"/root/child\""#)
                 && !body_contains(req, CHILD_CALL)
                 && !body_contains(req, COMPACT_PROMPT)
         },
@@ -1324,7 +1328,8 @@ async fn grandchild_full_fork_preserves_context_baseline(
     let grandchild_log = mount_sse_once_match(
         &server,
         |req: &wiremock::Request| {
-            body_contains(req, GRANDCHILD_TASK) && !body_contains(req, CHILD_CALL)
+            body_contains(req, GRANDCHILD_TASK)
+                && body_contains(req, r#"\"agent_name\":\"/root/child/grandchild\""#)
         },
         sse(vec![
             ev_response_created("baseline-grandchild"),
@@ -1358,6 +1363,34 @@ async fn grandchild_full_fork_preserves_context_baseline(
             config.model = Some(V2_DEFAULT_MODEL.to_string());
             config.agent_default_subagent_model = Some(V2_DEFAULT_MODEL.to_string());
             config.developer_instructions = Some(INSTRUCTIONS.to_string());
+            if matches!(parent_context, GrandchildParentContext::FullHistory) {
+                config
+                    .features
+                    .enable(Feature::IncrementalTools)
+                    .expect("enable incremental tools");
+                let catalog = config.model_catalog.get_or_insert_with(|| {
+                    bundled_models_response().expect("bundled model catalog")
+                });
+                let model = catalog
+                    .models
+                    .iter_mut()
+                    .find(|model| model.slug == V2_DEFAULT_MODEL)
+                    .expect("default model in catalog");
+                model.use_responses_lite = true;
+                model
+                    .model_messages
+                    .as_mut()
+                    .expect("default model message template")
+                    .instructions_template = Some("123".repeat(/*n*/ 10_001));
+                let mut updated = model.clone();
+                updated.slug = "bounded-fork-model".to_string();
+                updated
+                    .model_messages
+                    .as_mut()
+                    .expect("updated model message template")
+                    .instructions_template = Some("456".repeat(/*n*/ 10_001));
+                catalog.models.push(updated);
+            }
             if compact_parent {
                 config.update_plan_enabled = true;
                 // Use local compaction so the test controls the replacement history.
@@ -1370,8 +1403,26 @@ async fn grandchild_full_fork_preserves_context_baseline(
         .build_with_auto_env(&server)
         .await?;
 
+    if matches!(parent_context, GrandchildParentContext::FullHistory) {
+        let seed = mount_sse_once(&server, sse(vec![ev_completed("bounded-seed")])).await;
+        test.submit_text_turn("Establish bounded base instructions.")
+            .await?;
+        assert_eq!(seed.requests().len(), 1);
+        test.codex
+            .update_thread_settings(ThreadSettingsOverrides {
+                model: Some("bounded-fork-model".to_string()),
+                ..Default::default()
+            })
+            .await?;
+    }
     submit_turn_with_trigger(&test, ROOT_PROMPT, "automation_heartbeat_scheduled").await?;
-    let root_request = root_log.single_request();
+    let mut root_requests = root_log
+        .requests()
+        .into_iter()
+        .filter(|request| request.body_contains_text(ROOT_PROMPT))
+        .collect::<Vec<_>>();
+    assert_eq!(root_requests.len(), 1);
+    let root_request = root_requests.pop().expect("single root request");
     let mut descendant_requests = Vec::new();
     for (mock, agent_name) in [
         (&child_log, "/root/child"),
@@ -1446,7 +1497,54 @@ async fn grandchild_full_fork_preserves_context_baseline(
         [(1, 1); 3],
         "Initial context should appear once per agent: {parent_context:?}, {history_mode:?}"
     );
-    assert!(!descendant_requests[1].body_contains_text(CHILD_TASK));
+    if matches!(parent_context, GrandchildParentContext::FullHistory) {
+        let parent_input = root_request.input();
+        let parts = parent_input
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item["internal_chat_message_metadata_passthrough"]["content_item_kinds"][0]
+                        .as_str(),
+                    Some("model.base_instructions.part" | "model.instructions.part")
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for kind in ["model.base_instructions.part", "model.instructions.part"] {
+            assert!(parts.iter().filter(|item| item["internal_chat_message_metadata_passthrough"]["content_item_kinds"] == json!([kind])).count() > 1);
+        }
+        for part in &parts {
+            assert!(serde_json::to_vec(part)?.len() <= 10_000);
+        }
+        for descendant in &descendant_requests {
+            let input = descendant.input();
+            let retained = input
+                .iter()
+                .filter(|item| {
+                    matches!(
+                        item["internal_chat_message_metadata_passthrough"]["content_item_kinds"][0]
+                            .as_str(),
+                        Some("model.base_instructions.part" | "model.instructions.part")
+                    )
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(&retained[..parts.len()], parts.as_slice());
+        }
+        assert_eq!(
+            strip_response_item_ids_from_json(json!(
+                &descendant_requests[0].input()[..parent_input.len()]
+            )),
+            strip_response_item_ids_from_json(json!(parent_input))
+        );
+    }
+    let child_input = descendant_requests[0].input();
+    assert_eq!(
+        strip_response_item_ids_from_json(json!(
+            &descendant_requests[1].input()[..child_input.len()]
+        )),
+        strip_response_item_ids_from_json(json!(child_input))
+    );
     Ok(())
 }
 
@@ -1465,9 +1563,9 @@ enum FullHistoryV2ModelSelection {
 #[test_case(FullHistoryV2ModelSelection::ExplicitOverride("1"); "legacy one turn forks full history with explicit override")]
 #[test_case(FullHistoryV2ModelSelection::ExplicitOverride("3"); "legacy three turns forks full history with explicit override")]
 #[test_case(FullHistoryV2ModelSelection::WorldStateIdentity; "world state appends context window when agent identity changes")]
-#[test_case(FullHistoryV2ModelSelection::CurrentTimeReminders; "full fork drops inherited current-time reminders")]
-#[test_case(FullHistoryV2ModelSelection::MultiAgentModeInstructions; "full fork drops inherited multi-agent mode instructions")]
-#[test_case(FullHistoryV2ModelSelection::MultiAgentModeTransitions; "full fork restores explicit policy after proactive transition")]
+#[test_case(FullHistoryV2ModelSelection::CurrentTimeReminders; "full fork appends current-time reminders after inherited notices")]
+#[test_case(FullHistoryV2ModelSelection::MultiAgentModeInstructions; "full fork appends child multi-agent mode instructions")]
+#[test_case(FullHistoryV2ModelSelection::MultiAgentModeTransitions; "full fork retains explicit policy after proactive transition")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_context(
     selection: FullHistoryV2ModelSelection,
@@ -1558,7 +1656,8 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
     let child_request_log = mount_sse_once_match(
         &server,
         |req: &wiremock::Request| {
-            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
+            body_contains(req, CHILD_PROMPT)
+                && body_contains(req, r#"\"agent_name\":\"/root/worker\""#)
         },
         sse(vec![
             ev_response_created("resp-child-1"),
@@ -1569,7 +1668,9 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
     .await;
     let _turn1_followup = mount_sse_once_match(
         &server,
-        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
+        |req: &wiremock::Request| {
+            body_contains(req, SPAWN_CALL_ID) && body_contains(req, r#"\"agent_name\":\"/root\""#)
+        },
         sse(vec![
             ev_response_created("resp-turn1-2"),
             ev_assistant_message("msg-turn1-2", "parent done"),
@@ -1761,6 +1862,15 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
 
     let child_request = wait_for_request_with_model(&child_request_log, expected_model).await?;
     assert!(child_request.body_contains_text(TURN_0_FORK_PROMPT));
+    // Models encode tool declarations and provenance differently; compare inherited messages.
+    let parent_input = parent_request.inputs_of_type("message");
+    let child_input = child_request.inputs_of_type("message");
+    assert_eq!(
+        strip_metadata_from_json(strip_response_item_ids_from_json(json!(
+            &child_input[..parent_input.len()]
+        ))),
+        strip_metadata_from_json(strip_response_item_ids_from_json(json!(parent_input)))
+    );
     let misaligned_child_messages = child_request
         .inputs_of_type("message")
         .into_iter()
@@ -1775,7 +1885,14 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
         })
         .collect::<Vec<_>>();
     assert_eq!(misaligned_child_messages, Vec::<Value>::new());
-    let child_developer_messages = child_request.message_input_texts("developer");
+    // Inherited instructions stay in the prefix; child-specific guidance is appended after it.
+    let child_developer_messages = child_input[parent_input.len()..]
+        .iter()
+        .filter(|item| item["role"] == "developer")
+        .flat_map(|item| item["content"].as_array().into_iter().flatten())
+        .filter(|part| part["type"] == "input_text")
+        .filter_map(|part| part["text"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
     if matches!(selection, FullHistoryV2ModelSelection::ConfiguredDefault) {
         assert_eq!(
             (
@@ -1810,17 +1927,16 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
         selection,
         FullHistoryV2ModelSelection::MultiAgentModeInstructions
     ) {
-        let mode_instruction_count = |request: &ResponsesRequest| {
-            request
-                .message_input_texts("developer")
-                .into_iter()
+        let mode_instruction_count = |messages: &[String]| {
+            messages
+                .iter()
                 .filter(|text| text.starts_with(MULTI_AGENT_MODE_OPEN_TAG))
                 .count()
         };
         assert_eq!(
             (
-                mode_instruction_count(&parent_request),
-                mode_instruction_count(&child_request),
+                mode_instruction_count(&parent_request.message_input_texts("developer")),
+                mode_instruction_count(&child_developer_messages),
             ),
             (1, 1)
         );
@@ -1829,6 +1945,14 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
         selection,
         FullHistoryV2ModelSelection::MultiAgentModeTransitions
     ) {
+        let latest_child_policy = child_request
+            .message_input_texts("developer")
+            .into_iter()
+            .rfind(|message| message.starts_with(MULTI_AGENT_MODE_OPEN_TAG))
+            .expect("inherited delegation policy");
+        assert!(latest_child_policy.contains(FULL_HISTORY_EXPLICIT_POLICY));
+        assert!(!latest_child_policy.contains(FULL_HISTORY_PROACTIVE_POLICY));
+        // The current policy is already inherited, so only the child's usage hint is appended.
         assert_eq!(
             (
                 child_developer_messages
@@ -1848,27 +1972,33 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
                     .filter(|message| message.contains(FULL_HISTORY_SHARED_USAGE_HINT))
                     .count(),
             ),
-            (1, 1, 0, 1)
+            (0, 0, 0, 1)
         );
     }
     if matches!(selection, FullHistoryV2ModelSelection::CurrentTimeReminders) {
-        let notice_count = |request: &ResponsesRequest, marker: &str| {
-            request
-                .message_input_texts("developer")
-                .into_iter()
+        let notice_count = |messages: &[String], marker: &str| {
+            messages
+                .iter()
                 .filter(|text| text.starts_with(marker))
                 .count()
         };
+        let parent_developer_messages = parent_request.message_input_texts("developer");
         assert_eq!(
-            notice_count(&parent_request, "<current_time_unavailable>"),
+            notice_count(&parent_developer_messages, "<current_time_unavailable>"),
             1
         );
-        assert_eq!(notice_count(&parent_request, "<current_time_reminder>"), 1);
         assert_eq!(
-            notice_count(&child_request, "<current_time_unavailable>"),
+            notice_count(&parent_developer_messages, "<current_time_reminder>"),
+            1
+        );
+        assert_eq!(
+            notice_count(&child_developer_messages, "<current_time_unavailable>"),
             0
         );
-        assert_eq!(notice_count(&child_request, "<current_time_reminder>"), 1);
+        assert_eq!(
+            notice_count(&child_developer_messages, "<current_time_reminder>"),
+            1
+        );
     }
     let child_body = child_request.body_json();
     if matches!(selection, FullHistoryV2ModelSelection::WorldStateIdentity) {
@@ -1900,8 +2030,9 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
             vec![json!("/root"), json!("/root/worker")]
         );
         let context_windows = child_request
-            .message_input_texts("developer")
+            .message_input_text_groups("developer")
             .into_iter()
+            .map(|parts| parts.concat())
             .filter(|text| text.starts_with("<context_window>\n"))
             .collect::<Vec<_>>();
         let identities = context_windows
@@ -1946,10 +2077,9 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
         );
         assert!(
             child_request.has_message_with_input_texts("developer", |message| {
-                matches!(
-                    message,
-                    [text] if text.starts_with("<context_window>\nAgent name: /root/worker\n")
-                )
+                message
+                    .concat()
+                    .starts_with("<context_window>\nAgent name: /root/worker\n")
             })
         );
     }
@@ -2419,13 +2549,40 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
         })])
     );
     if model.is_some() {
+        let declares_collaboration = |tools: &Value| {
+            tools.as_array().is_some_and(|tools| {
+                tools
+                    .iter()
+                    .any(|tool| tool["name"] == MULTI_AGENT_V2_NAMESPACE)
+            })
+        };
         assert!(
-            !child_request
-                .body_json()
-                .to_string()
-                .contains("\"name\":\"collaboration\""),
-            "leaf workers must not receive collaboration tools",
+            !declares_collaboration(&child_body["tools"]),
+            "leaf workers must not receive top-level collaboration tools",
         );
+        let input = child_request.input();
+        if let Some(last_declaration) = input.iter().rposition(|item| {
+            item["type"] == "additional_tools" && declares_collaboration(&item["tools"])
+        }) {
+            let removed_namespace = format!("- {MULTI_AGENT_V2_NAMESPACE}");
+            let collaboration_removed = input[last_declaration + 1..]
+                .iter()
+                .filter(|item| item["role"] == "developer")
+                .filter_map(|item| {
+                    let kinds =
+                        item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                            .as_array()?;
+                    let index = kinds
+                        .iter()
+                        .position(|kind| kind == "tools.removed_definition")?;
+                    item["content"][index]["text"].as_str()
+                })
+                .any(|text| text.lines().any(|line| line == removed_namespace));
+            assert!(
+                collaboration_removed,
+                "leaf workers must mark inherited collaboration tools unavailable",
+            );
+        }
     }
     if plaintext {
         let parent_request = parent_request_log

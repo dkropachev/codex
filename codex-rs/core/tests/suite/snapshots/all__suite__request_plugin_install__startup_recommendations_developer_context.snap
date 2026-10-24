@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/request_plugin_install.rs
+assertion_line: 552
 expression: "context_snapshot::format_request_history_snapshot(\"Startup recommendations share the developer message with other context.\",\n&model_response.requests(),\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
 Scenario: Startup recommendations share the developer message with other context.
@@ -8,7 +9,11 @@ Scenario: Startup recommendations share the developer message with other context
 -- request 1 (turn) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
-01:message/developer[3]:
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer[3]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <APPS_INSTRUCTIONS>
     [03] <recommended_plugins>
@@ -16,7 +21,7 @@ Scenario: Startup recommendations share the developer message with other context
 
         - GitHub (github@openai-curated-remote)
         </recommended_plugins>
-02:message/user:
+04:message/user:
     <ENVIRONMENT_CONTEXT>
-03:message/user:
+05:message/user:
     suggest a plugin

@@ -5,7 +5,10 @@ use crate::context::ContextualUserFragment;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::ContentItemMetadata;
+use codex_protocol::models::ContentItemNamespace;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::input_text;
 use codex_utils_string::take_bytes_at_char_boundary;
 
 pub(super) const MAX_ITEM_BYTES: usize = 40_000;
@@ -15,11 +18,16 @@ const CONTENT_KIND: &str = "tools.namespace_instructions";
 pub(super) struct ToolInstructions {
     text: String,
     part: Option<(usize, usize)>,
+    namespace: ContentItemNamespace,
 }
 
 impl ToolInstructions {
-    pub(super) fn new(text: String) -> Self {
-        Self { text, part: None }
+    pub(super) fn new(text: String, namespace: ContentItemNamespace) -> Self {
+        Self {
+            text,
+            part: None,
+            namespace,
+        }
     }
 }
 
@@ -36,16 +44,19 @@ impl ContextualUserFragment for ToolInstructions {
     fn type_markers() -> (&'static str, &'static str) {
         ("", "")
     }
-    fn body(&self) -> String {
+    fn content_metadata(&self) -> ContentItemMetadata {
+        ContentItemMetadata::tool(Some(self.namespace.clone()))
+    }
+    fn body(&self) -> ContentItem {
         let Some((part, parts)) = self.part else {
-            return self.text.clone();
+            return input_text(self.text.clone());
         };
         let payload = &self.text;
         let bytes = payload.len();
         // Fixed-width counts make sizing independent of the final number of parts.
-        format!(
+        input_text(format!(
             "Tool namespace instructions, part {part:020}/{parts:020}. Join these {parts:020} consecutive payloads without separators to recover the complete instruction.\nPayload ({bytes:020} UTF-8 bytes):\n{payload}"
-        )
+        ))
     }
 }
 
@@ -60,8 +71,11 @@ fn part_item(template: &ResponseItem, text: &str, part: usize, parts: usize) -> 
             text: ToolInstructions {
                 text: text.to_string(),
                 part: Some((part, parts)),
+                namespace: ContentItemNamespace::Functions,
             }
-            .render(),
+            .render()
+            .into_text()
+            .unwrap_or_default(),
         }];
     }
     item

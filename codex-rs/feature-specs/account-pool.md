@@ -170,7 +170,9 @@ When account pooling is enabled and a default pool exists:
 - Model requests use pool auth instead of default single-account auth.
 - Request auth and request headers are derived from the same selected member.
 - WebSocket prewarm and the normal request attempt each pin one selected member for that operation.
-- Unauthorized recovery and token refresh refresh the selected member, not the default account.
+- Unauthorized recovery and token refresh refresh the credential owner captured by the request,
+  even when another member has since become active. Guarded refresh skips credentials that have
+  already changed and leaves pool selection unchanged.
 - Non-model calls that require the same ChatGPT backend auth use the same auth manager path unless
   they explicitly need the default account.
 

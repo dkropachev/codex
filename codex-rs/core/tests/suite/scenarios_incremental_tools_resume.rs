@@ -3,6 +3,7 @@
 use anyhow::Result;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -101,15 +102,23 @@ async fn incremental_history_survives_standard_responses_resume() -> Result<()> 
             .collect::<Vec<_>>(),
         Vec::<serde_json::Value>::new(),
     );
+    // Standard Responses omits RLite-only content attribution on the wire.
     let original_messages = original
         .into_iter()
         .filter(|item| item["type"] != "additional_tools")
-        .collect::<Vec<_>>();
+        .map(|item| {
+            let mut item: ResponseItem = serde_json::from_value(item)?;
+            item.clear_content_item_metadata();
+            serde_json::to_value(item)
+        })
+        .collect::<serde_json::Result<Vec<_>>>()?;
     assert!(
         request
             .input()
             .windows(original_messages.len())
-            .any(|items| items == original_messages)
+            .any(|items| items == original_messages),
+        "original: {original_messages:#?}\nresumed: {:#?}",
+        request.input(),
     );
 
     let lite_mock = responses::mount_sse_once(

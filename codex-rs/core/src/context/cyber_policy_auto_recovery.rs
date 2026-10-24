@@ -1,5 +1,7 @@
 use super::ContextualUserFragment;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::input_text;
 
 pub(crate) const CYBER_POLICY_AUTO_RECOVERY_OPEN_TAG: &str = "<cyber_policy_auto_recovery>";
 
@@ -26,8 +28,8 @@ impl ContextualUserFragment for CyberPolicyAutoRecovery {
         )
     }
 
-    fn body(&self) -> String {
-        concat!(
+    fn body(&self) -> ContentItem {
+        input_text(concat!(
             "\nPrevious sampling request was blocked by cyber safety checks. Continue the turn ",
             "without repeating the blocked approach. Choose a policy-compliant path that advances ",
             "the user's underlying goal, limiting content to benign, defensive, educational, or ",
@@ -35,6 +37,6 @@ impl ContextualUserFragment for CyberPolicyAutoRecovery {
             "to bypass safeguards. If no compliant path can complete the request, explain the ",
             "limitation and offer the closest safe alternative.\n"
         )
-        .to_string()
+        .to_string())
     }
 }

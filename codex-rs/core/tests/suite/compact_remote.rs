@@ -123,6 +123,7 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
             realtime_end_instructions: None,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
+            voice_session_id: None,
             transport: None,
             version: None,
             voice: None,
@@ -958,7 +959,9 @@ async fn remote_compact_v2_enforces_aggregate_image_budget_across_messages() -> 
         .message_input_image_urls("user");
     assert_eq!(compact_images.len(), 40);
     let prepared_images = compact_images
-        .chunks_exact(5)
+        .as_chunks::<5>()
+        .0
+        .iter()
         .map(|images| images[0].clone())
         .collect::<Vec<_>>();
 

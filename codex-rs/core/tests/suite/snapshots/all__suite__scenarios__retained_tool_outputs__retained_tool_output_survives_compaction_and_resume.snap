@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios_retained_tool_outputs.rs
-assertion_line: 193
+assertion_line: 201
 expression: "context_snapshot::format_request_history_snapshot(if enabled\n{\n    \"Individually bounded retained outputs exceed the shared 64K-token budget. Emergency trimming preserves them, compaction evicts the oldest whole outputs, and cold resume keeps the seven newest details and latest instruction unchanged.\"\n} else\n{\n    \"With retention disabled, the client can still send retain=true. Tool outputs use ordinary emergency trimming and are not retained after compaction and cold resume.\"\n}, &requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
 Scenario: Individually bounded retained outputs exceed the shared 64K-token budget. Emergency trimming preserves them, compaction evicts the oldest whole outputs, and cold resume keeps the seven newest details and latest instruction unchanged.
@@ -24,57 +24,61 @@ Scenario: Individually bounded retained outputs exceed the shared 64K-token budg
           - function/wait_agent
 01:message/developer:
     <MODEL_INSTRUCTIONS>
-02:message/developer[2]:
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
+    <MODEL_INSTRUCTIONS>
+04:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <COLLABORATION_MODE>
-03:message/developer:
+05:message/developer:
     <MULTI_AGENT_ROLE>
-04:message/developer:
+06:message/developer:
     <MULTI_AGENT_MODE>
-05:message/user:
+07:message/user:
     <ENVIRONMENT_CONTEXT>
-06:function_call_output/codex_app.send_message_to_thread:Investigate the failing tests; report your findings without changing files.
+08:function_call_output/codex_app.send_message_to_thread:Investigate the failing tests; report your findings without changing files.
 -- request 2 (turn) --
-07:message/assistant:
-    I will investigate the tests.
-08:function_call_output/codex_app.task_details:Task detail 0: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=2adfe7c98f8a06cb]
--- request 3 (turn) --
 09:message/assistant:
-    I will use those task details.
-10:function_call_output/codex_app.task_details:Task detail 1: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=b15ecd089df41c4e]
--- request 4 (turn) --
+    I will investigate the tests.
+10:function_call_output/codex_app.task_details:Task detail 0: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=2adfe7c98f8a06cb]
+-- request 3 (turn) --
 11:message/assistant:
     I will use those task details.
-12:function_call_output/codex_app.task_details:Task detail 2: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=9de9dbc035af49f5]
--- request 5 (turn) --
+12:function_call_output/codex_app.task_details:Task detail 1: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=b15ecd089df41c4e]
+-- request 4 (turn) --
 13:message/assistant:
     I will use those task details.
-14:function_call_output/codex_app.task_details:Task detail 3: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=bfbdd1f0268e2dd0]
--- request 6 (turn) --
+14:function_call_output/codex_app.task_details:Task detail 2: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=9de9dbc035af49f5]
+-- request 5 (turn) --
 15:message/assistant:
     I will use those task details.
-16:function_call_output/codex_app.task_details:Task detail 4: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=17d753edf7d62137]
--- request 7 (turn) --
+16:function_call_output/codex_app.task_details:Task detail 3: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=bfbdd1f0268e2dd0]
+-- request 6 (turn) --
 17:message/assistant:
     I will use those task details.
-18:function_call_output/codex_app.task_details:Task detail 5: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=2ec26696ed1d3f7a]
--- request 8 (turn) --
+18:function_call_output/codex_app.task_details:Task detail 4: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=17d753edf7d62137]
+-- request 7 (turn) --
 19:message/assistant:
     I will use those task details.
-20:function_call_output/codex_app.task_details:Task detail 6: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=029e2e3c487ba8e1]
--- request 9 (turn) --
+20:function_call_output/codex_app.task_details:Task detail 5: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=2ec26696ed1d3f7a]
+-- request 8 (turn) --
 21:message/assistant:
     I will use those task details.
-22:function_call_output/codex_app.task_details:Task detail 7: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=54822422ce8aa65c]
--- request 10 (turn) --
+22:function_call_output/codex_app.task_details:Task detail 6: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=029e2e3c487ba8e1]
+-- request 9 (turn) --
 23:message/assistant:
     I will use those task details.
-24:function_call_output/codex_app.send_message_to_thread:Report your findings without changing files.
+24:function_call_output/codex_app.task_details:Task detail 7: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=54822422ce8aa65c]
+-- request 10 (turn) --
+25:message/assistant:
+    I will use those task details.
+26:function_call_output/codex_app.send_message_to_thread:Report your findings without changing files.
 -- request 11 (compaction) --
-25:function_call_output/example.progress:Output exceeded the available model context and was truncated
-26:compaction_trigger
+27:function_call_output/example.progress:Output exceeded the available model context and was truncated
+28:compaction_trigger
 
-## Window 2 (after request 11: input diverged at item 02)
+## Window 2 (after request 11: input diverged at item 01)
 -- request 12 (turn) --
 00:additional_tools/developer (3; hash=68d6cf1d20dc114e):
         - namespace/functions; hash=e1875bbf8d39f064
@@ -93,25 +97,29 @@ Scenario: Individually bounded retained outputs exceed the shared 64K-token budg
           - function/wait_agent
 01:message/developer:
     <MODEL_INSTRUCTIONS>
-02:function_call_output/codex_app.task_details:Task detail 1: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=b15ecd089df41c4e]
-03:function_call_output/codex_app.task_details:Task detail 2: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=9de9dbc035af49f5]
-04:function_call_output/codex_app.task_details:Task detail 3: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=bfbdd1f0268e2dd0]
-05:function_call_output/codex_app.task_details:Task detail 4: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=17d753edf7d62137]
-06:function_call_output/codex_app.task_details:Task detail 5: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=2ec26696ed1d3f7a]
-07:function_call_output/codex_app.task_details:Task detail 6: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=029e2e3c487ba8e1]
-08:function_call_output/codex_app.task_details:Task detail 7: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=54822422ce8aa65c]
-09:message/developer[2]:
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
+    <MODEL_INSTRUCTIONS>
+04:function_call_output/codex_app.task_details:Task detail 1: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=b15ecd089df41c4e]
+05:function_call_output/codex_app.task_details:Task detail 2: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=9de9dbc035af49f5]
+06:function_call_output/codex_app.task_details:Task detail 3: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=bfbdd1f0268e2dd0]
+07:function_call_output/codex_app.task_details:Task detail 4: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=17d753edf7d62137]
+08:function_call_output/codex_app.task_details:Task detail 5: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=2ec26696ed1d3f7a]
+09:function_call_output/codex_app.task_details:Task detail 6: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=029e2e3c487ba8e1]
+10:function_call_output/codex_app.task_details:Task detail 7: Investigate the failing tests carefully. Investigate the failing tests carefully. Investi...s carefully. Investigate the failing tests carefully. [hash=54822422ce8aa65c]
+11:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <COLLABORATION_MODE>
-10:message/developer:
+12:message/developer:
     <MULTI_AGENT_ROLE>
-11:message/developer:
+13:message/developer:
     <MULTI_AGENT_MODE>
-12:message/user:
+14:message/user:
     <ENVIRONMENT_CONTEXT>
-13:function_call_output/codex_app.send_message_to_thread:Report your findings without changing files.
-14:compaction:encrypted=true; chars=31; hash=dc1cfb1784ca88e3
-15:message/user:
+15:function_call_output/codex_app.send_message_to_thread:Report your findings without changing files.
+16:compaction:encrypted=true; chars=31; hash=dc1cfb1784ca88e3
+17:message/user:
     <ENVIRONMENT_CONTEXT>
-16:message/user:
+18:message/user:
     What request are you working on?

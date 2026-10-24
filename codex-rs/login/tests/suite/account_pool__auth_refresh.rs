@@ -68,6 +68,8 @@ async fn refresh_token_uses_active_account_pool_member() -> Result<()> {
         },
         access_token: INITIAL_ACCESS_TOKEN.to_string(),
         refresh_token: INITIAL_REFRESH_TOKEN.to_string(),
+        oauth_provenance: None,
+        login_owner_id: None,
         account_id: Some(account_id.to_string()),
     };
     let initial_auth = AuthDotJson {

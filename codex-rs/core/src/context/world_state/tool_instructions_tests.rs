@@ -7,7 +7,10 @@ use std::collections::HashSet;
 fn continuations_preserve_escaped_unicode_payload_metadata_and_identity() {
     let text = "prefix\n\"\\\0é🦀suffix".repeat(/*n*/ 5_000);
     for turn_id_bytes in [36, 38_900, 39_600, 40_100] {
-        let mut original = ContextualUserFragment::into(ToolInstructions::new(text.clone()));
+        let mut original = ContextualUserFragment::into(ToolInstructions::new(
+            text.clone(),
+            codex_protocol::models::ContentItemNamespace::Functions,
+        ));
         original.set_id(Some(ResponseItemId::new("msg")));
         if let ResponseItem::Message {
             internal_chat_message_metadata_passthrough: metadata,

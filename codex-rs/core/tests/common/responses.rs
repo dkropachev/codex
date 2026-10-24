@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -228,10 +229,34 @@ impl ResponsesRequest {
     }
 
     pub fn instructions_text(&self) -> String {
-        self.message_input_texts("developer")
-            .into_iter()
-            .next()
-            .expect("base instructions developer message")
+        crate::instruction_parts::prefix(&self.input()).1
+    }
+
+    /// Number of rebuilt prompt-only items, excluding stamped conversation history.
+    pub fn request_prefix_len(&self) -> usize {
+        crate::instruction_parts::rebuilt_prefix_len(&self.input())
+    }
+
+    /// Complete logical model-switch messages, joining only validated continuation groups.
+    pub fn model_switch_texts(&self) -> Vec<String> {
+        let input = self.input();
+        let mut switches = Vec::new();
+        let mut index = 0;
+        while index < input.len() {
+            let text = input[index]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default();
+            if input[index]["role"] == "developer" && text.starts_with("<model_switch>") {
+                if let Some((count, text)) = crate::instruction_parts::logical(&input[index..]) {
+                    switches.push(text);
+                    index += count;
+                    continue;
+                }
+                switches.push(text.to_string());
+            }
+            index += 1;
+        }
+        switches
     }
 
     /// Returns all `input_text` spans from `message` inputs for the provided role.
@@ -493,6 +518,28 @@ mod tests {
     }
 
     #[test]
+    fn logical_instructions_preserve_physical_prefix_boundaries() {
+        let part = |ordinal, payload: &str| serde_json::json!({"id": format!("msg_00000000-0000-5000-8000-{ordinal:012}"), "type": "message", "role": "developer", "content": [{"type": "input_text", "text": format!("Base instructions, part {ordinal}. Concatenate consecutive payloads without separators to obtain the complete instructions.\nPayload ({} UTF-8 bytes):\n{payload}", payload.len())}]});
+        let request = request_with_input(
+            serde_json::json!([{"type": "additional_tools", "id": "at_00000000-0000-5000-8000-000000000001"}, part(/*ordinal*/ 1, "first"), part(/*ordinal*/ 2, "é"), {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}]),
+        );
+        assert_eq!(
+            (request.instructions_text(), request.request_prefix_len()),
+            ("firsté".to_string(), 3)
+        );
+        let mut literal = part(/*ordinal*/ 1, "raw");
+        let text = literal["content"][0]["text"].as_str().unwrap();
+        let wrapped = format!(
+            "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n{text}\n</model_switch>"
+        );
+        literal["content"][0]["text"] = serde_json::json!(wrapped);
+        assert_eq!(
+            request_with_input(serde_json::json!([literal])).model_switch_texts(),
+            vec![wrapped]
+        );
+    }
+
+    #[test]
     fn call_output_content_and_success_returns_only_single_text_content_item() {
         let single_text = request_with_input(serde_json::json!([
             {
@@ -547,6 +594,16 @@ pub struct WebSocketRequest {
 }
 
 impl WebSocketRequest {
+    pub fn instructions_text(&self) -> String {
+        crate::instruction_parts::prefix(self.body["input"].as_array().expect("request input")).1
+    }
+
+    pub fn request_prefix_len(&self) -> usize {
+        crate::instruction_parts::rebuilt_prefix_len(
+            self.body["input"].as_array().expect("request input"),
+        )
+    }
+
     pub fn body_json(&self) -> Value {
         self.body.clone()
     }
@@ -589,6 +646,7 @@ pub struct WebSocketConnectionConfig {
 
 pub struct WebSocketTestServer {
     uri: String,
+    response_gates: Arc<Mutex<HashMap<String, oneshot::Receiver<()>>>>,
     connections: Arc<Mutex<Vec<Vec<WebSocketRequest>>>>,
     handshakes: Arc<Mutex<Vec<WebSocketHandshake>>>,
     request_log_updated: Arc<Notify>,
@@ -598,6 +656,20 @@ pub struct WebSocketTestServer {
 }
 
 impl WebSocketTestServer {
+    /// Pause before the next matching event until the sender is released.
+    /// Install the gate before submitting the request that produces the event.
+    pub fn gate_response_event(&self, event: &Value) -> oneshot::Sender<()> {
+        let (release, gate) = oneshot::channel();
+        assert!(
+            self.response_gates
+                .lock()
+                .unwrap()
+                .insert(event.to_string(), gate)
+                .is_none()
+        );
+        release
+    }
+
     pub fn uri(&self) -> &str {
         &self.uri
     }
@@ -1245,6 +1317,8 @@ pub async fn start_websocket_server_with_headers(
     let connections_log = Arc::new(Mutex::new(Vec::new()));
     let handshakes_log = Arc::new(Mutex::new(Vec::new()));
     let request_log_updated = Arc::new(Notify::new());
+    let response_gates = Arc::new(Mutex::new(HashMap::new()));
+    let gates = Arc::clone(&response_gates);
     let (closed_tx, closed_connections) = watch::channel(0);
     let logged_connections = Arc::clone(&connections_log);
     let logged_handshakes = Arc::clone(&handshakes_log);
@@ -1340,14 +1414,22 @@ pub async fn start_websocket_server_with_headers(
                     let request_log = Arc::clone(&request_log);
                     let mut shutdown_signal = shutdown_signal_rx.clone();
                     let closed_tx = closed_tx.clone();
+                    let gates = Arc::clone(&gates);
 
                     connection_tasks.spawn(async move {
                         let close_after_requests = connection.close_after_requests;
-                        for request_events in connection.requests {
-                            let Some(Ok(message)) = ws_stream.next().await else {
+                        let mut response_complete = false;
+                        let mut batches = connection.requests.into_iter().peekable();
+                        while let Some(request_events) = batches.peek() {
+                            let message = tokio::select! {
+                                _ = shutdown_signal.changed() => return,
+                                message = ws_stream.next() => message,
+                            };
+                            let Some(Ok(message)) = message else {
                                 break;
                             };
                             if let Some(body) = parse_ws_request_body(message) {
+                                let late_interrupt = response_complete && body["type"] == "response.interrupt";
                                 let mut log = requests.lock().unwrap();
                                 if let Some(connection_log) = log.get_mut(connection_index) {
                                     connection_log.push(WebSocketRequest { body });
@@ -1381,6 +1463,10 @@ pub async fn start_websocket_server_with_headers(
                                     );
                                 }
                                 request_log.notify_waiters();
+                                // A late interrupt must not consume the next response's script.
+                                if late_interrupt {
+                                    continue;
+                                }
                             }
 
                             eprintln!(
@@ -1396,14 +1482,26 @@ pub async fn start_websocket_server_with_headers(
                                     .iter()
                                     .find_map(|event| event.get("delta").and_then(Value::as_str)),
                             );
-                            for event in &request_events {
+                            for event in request_events {
                                 let Ok(payload) = serde_json::to_string(event) else {
                                     continue;
                                 };
+                                let gate = gates.lock().unwrap().remove(&payload);
+                                if let Some(gate) = gate {
+                                    tokio::select! {
+                                        _ = shutdown_signal.changed() => return,
+                                        _ = gate => {},
+                                    }
+                                }
                                 if ws_stream.send(Message::Text(payload.into())).await.is_err() {
                                     break;
                                 }
+                                response_complete = matches!(
+                                    event["type"].as_str(),
+                                    Some("response.completed" | "response.incomplete" | "response.failed")
+                                );
                             }
+                            batches.next();
                         }
 
                         if close_after_requests {
@@ -1423,6 +1521,7 @@ pub async fn start_websocket_server_with_headers(
 
     WebSocketTestServer {
         uri,
+        response_gates,
         connections: connections_log,
         handshakes: handshakes_log,
         request_log_updated,

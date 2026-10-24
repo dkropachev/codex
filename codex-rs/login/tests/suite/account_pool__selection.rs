@@ -457,6 +457,8 @@ fn write_chatgpt_auth_to_store(
         },
         access_token: fake_jwt(json!({ "exp": Utc::now().timestamp() + 3600 }))?,
         refresh_token: format!("refresh-{account_id}"),
+        oauth_provenance: None,
+        login_owner_id: None,
         account_id: Some(account_id.to_string()),
     };
     save_auth(

@@ -204,10 +204,15 @@ async fn remote_compact_v2_trim_estimate_uses_session_base_instructions(
         let mut instruction_text = request.instructions_text();
         if instruction_text.starts_with("Base instructions, part 1.") {
             instruction_text.clear();
-            for item in request.input().into_iter().take_while(|item| {
-                item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
-                    == json!(["model.base_instructions"])
-            }) {
+            for item in request
+                .input()
+                .into_iter()
+                .skip_while(|item| item["type"] == "additional_tools")
+                .take_while(|item| {
+                    item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                        == json!(["model.base_instructions.part"])
+                })
+            {
                 assert!(serde_json::to_vec(&item)?.len() <= 40_000);
                 let text = item["content"][0]["text"]
                     .as_str()
@@ -233,11 +238,19 @@ async fn remote_compact_v2_trim_estimate_uses_session_base_instructions(
     Ok(())
 }
 
-#[test_case(false; "declarations_without_instructions")]
-#[test_case(true; "declarations_with_instructions")]
+#[derive(Clone, Copy)]
+enum RecordedBaseInstructions {
+    Missing,
+    Configured,
+    Empty,
+}
+
+#[test_case(RecordedBaseInstructions::Missing; "declarations_without_instructions")]
+#[test_case(RecordedBaseInstructions::Configured; "declarations_with_instructions")]
+#[test_case(RecordedBaseInstructions::Empty; "declarations_with_empty_instructions")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_v2_injected_tools_preserve_base_instructions(
-    recorded_instructions: bool,
+    recorded_instructions: RecordedBaseInstructions,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -271,10 +284,14 @@ async fn remote_compact_v2_injected_tools_preserve_base_instructions(
         json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "compact this history"}]}),
         tools.clone(),
     ];
-    if recorded_instructions {
+    let expected_instructions = match recorded_instructions {
+        RecordedBaseInstructions::Missing | RecordedBaseInstructions::Configured => instructions,
+        RecordedBaseInstructions::Empty => "",
+    };
+    if !matches!(recorded_instructions, RecordedBaseInstructions::Missing) {
         history.push(json!({
             "type": "message", "role": "developer",
-            "content": [{"type": "input_text", "text": instructions}],
+            "content": [{"type": "input_text", "text": expected_instructions}],
             "internal_chat_message_metadata_passthrough": {
                 "content_item_kinds": ["model.base_instructions"],
             },
@@ -305,7 +322,7 @@ async fn remote_compact_v2_injected_tools_preserve_base_instructions(
         .collect::<Vec<_>>();
     assert_eq!(
         base_instructions,
-        vec![json!([{"type": "input_text", "text": instructions}])]
+        vec![json!([{"type": "input_text", "text": expected_instructions}])]
     );
     assert_eq!(request.inputs_of_type("additional_tools"), vec![tools]);
     assert_eq!(

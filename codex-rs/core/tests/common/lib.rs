@@ -30,6 +30,7 @@ pub mod code_mode_host;
 pub mod context_snapshot;
 pub mod exec_server;
 pub mod hooks;
+mod instruction_parts;
 pub mod process;
 pub mod responses;
 pub mod startup;

@@ -443,7 +443,7 @@ async fn openai_stateless_responses_requests_preserve_item_turn_metadata_across_
     let first_input = first["input"].as_array().expect("first input");
     let second_input = second["input"].as_array().expect("second input");
     assert_eq!(&second_input[..first_input.len()], first_input.as_slice());
-    for item in &first_input[1..] {
+    for item in &first_input[requests[0].request_prefix_len()..] {
         assert_eq!(
             item["internal_chat_message_metadata_passthrough"]["turn_id"].as_str(),
             Some(first_turn_id)
@@ -729,7 +729,7 @@ async fn synthetic_call_output_id_is_stable_across_resumes() -> anyhow::Result<(
         RolloutLine {
             timestamp: "2024-01-01T00:00:00.000Z".to_string(),
             ordinal: None,
-            item: RolloutItem::SessionMeta(SessionMetaLine {
+            item: RolloutItem::SessionMeta(Box::new(SessionMetaLine {
                 meta: SessionMeta {
                     session_id: thread_id.into(),
                     id: thread_id,
@@ -742,7 +742,7 @@ async fn synthetic_call_output_id_is_stable_across_resumes() -> anyhow::Result<(
                     ..Default::default()
                 },
                 git: None,
-            }),
+            })),
         },
         RolloutLine {
             timestamp: "2024-01-01T00:00:01.000Z".to_string(),
@@ -1243,7 +1243,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
         RolloutLine {
             timestamp: "2024-01-01T00:00:00.000Z".to_string(),
             ordinal: None,
-            item: RolloutItem::SessionMeta(SessionMetaLine {
+            item: RolloutItem::SessionMeta(Box::new(SessionMetaLine {
                 meta: SessionMeta {
                     session_id: thread_id.into(),
                     id: thread_id,
@@ -1256,7 +1256,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
                     ..Default::default()
                 },
                 git: None,
-            }),
+            })),
         },
         RolloutLine {
             timestamp: "2024-01-01T00:00:01.000Z".to_string(),
@@ -1387,7 +1387,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
         RolloutLine {
             timestamp: "2024-01-01T00:00:00.000Z".to_string(),
             ordinal: None,
-            item: RolloutItem::SessionMeta(SessionMetaLine {
+            item: RolloutItem::SessionMeta(Box::new(SessionMetaLine {
                 meta: SessionMeta {
                     session_id: thread_id.into(),
                     id: thread_id,
@@ -1400,7 +1400,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
                     ..Default::default()
                 },
                 git: None,
-            }),
+            })),
         },
         RolloutLine {
             timestamp: "2024-01-01T00:00:01.000Z".to_string(),
@@ -2141,8 +2141,12 @@ async fn includes_user_instructions_message_in_request() {
         "expected permissions message to mention sandbox_mode, got {developer_texts:?}"
     );
 
-    assert_message_role(&request_body["input"][2], "user");
-    let user_context_texts = message_input_texts(&request_body["input"][2]);
+    assert_message_role(
+        &request_body["input"][request.request_prefix_len() + 1],
+        "user",
+    );
+    let user_context_texts =
+        message_input_texts(&request_body["input"][request.request_prefix_len() + 1]);
     assert!(
         user_context_texts
             .iter()
@@ -3399,8 +3403,12 @@ async fn includes_developer_instructions_message_in_request() {
         "expected developer instructions in a developer message, got {developer_texts:?}"
     );
 
-    assert_message_role(&request_body["input"][2], "user");
-    let user_context_texts = message_input_texts(&request_body["input"][2]);
+    assert_message_role(
+        &request_body["input"][request.request_prefix_len() + 1],
+        "user",
+    );
+    let user_context_texts =
+        message_input_texts(&request_body["input"][request.request_prefix_len() + 1]);
     assert!(
         user_context_texts
             .iter()
@@ -3684,7 +3692,7 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
     let input = body["input"].as_array().expect("request input");
     assert_eq!(input[0]["role"], "developer");
-    let input = &input[1..];
+    let input = &input[request.request_prefix_len()..];
     assert_eq!(input.len(), 10);
     assert_eq!(input[0]["id"].as_str(), Some("rs_reasoning-id"));
     assert_eq!(input[1]["id"].as_str(), Some("msg_message-id"));

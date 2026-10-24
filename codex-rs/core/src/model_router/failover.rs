@@ -131,6 +131,7 @@ pub(crate) fn model_router_failure_scope(err: &CodexErr) -> Option<ModelRouterFa
         | CodexErrorDetails::Fatal(_)
         | CodexErrorDetails::InvalidImageRequest()
         | CodexErrorDetails::InvalidPrompt { .. }
+        | CodexErrorDetails::GatewayLoginRequired(_)
         | CodexErrorDetails::RefreshTokenFailed(_)
         | CodexErrorDetails::UnsupportedOperation(_)
         | CodexErrorDetails::Sandbox(_)

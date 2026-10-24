@@ -2,7 +2,7 @@
 //! Missing state starts a fresh catalog; this section does not migrate legacy history.
 //! One developer notice precedes each incremental namespace batch; catalog hashes are unchanged.
 //! Whole namespace removals subsume their members in the removal notice.
-//! Metrics count rendered tool redefinitions, excluding namespace headers and initial catalogs.
+//! Metrics count rendered tool deltas and measure replacement description bytes.
 
 use super::PreviousSectionState;
 use super::SectionTransition;
@@ -13,11 +13,15 @@ use super::tool_instructions::ToolInstructions;
 use crate::context::ContextualUserFragment;
 use codex_extension_api::ExtensionMetrics;
 use codex_otel::TOOL_INCREMENTAL_UPDATES_METRIC;
+use codex_otel::TOOL_SPEC_DESCRIPTION_BYTES_METRIC;
+use codex_otel::TOOL_SPEC_DESCRIPTION_BYTES_METRIC_BUCKETS;
 use codex_prompts::ResolvedIncrementalToolMessages;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::input_text;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -91,47 +95,37 @@ fn definition_name(definition: &Value) -> &str {
         .unwrap_or_else(|| definition["type"].as_str().expect("serialized tool type"))
 }
 
-/// Accumulates callable changes during rendering without retaining tool definitions.
-#[derive(Default)]
-struct ToolUpdateMetrics {
-    count_added: usize,
-    count_removed: usize,
-    count_schema_changed: usize,
-}
+fn record_changed_tool_metrics(
+    name: &str,
+    definition: &Value,
+    previous: Option<&BTreeMap<String, WorldStateHash>>,
+    metrics: Option<&dyn ExtensionMetrics>,
+) {
+    const ACTION_TAG: &str = "action";
+    const TOOL_TAG: &str = "tool";
 
-impl ToolUpdateMetrics {
-    fn count_changed_tool(
-        &mut self,
-        name: &str,
-        previous: Option<&BTreeMap<String, WorldStateHash>>,
-    ) {
-        if let Some(previous) = previous {
-            if previous.contains_key(name) {
-                // The existing hash covers the entire definition, including descriptions.
-                self.count_schema_changed += 1;
-            } else {
-                self.count_added += 1;
-            }
-        }
-    }
-
-    fn record(self, metrics: Option<&dyn ExtensionMetrics>) {
-        let Some(metrics) = metrics else {
-            return;
-        };
-        for (action, count) in [
-            (ACTION_ADDED, self.count_added),
-            (ACTION_REMOVED, self.count_removed),
-            (ACTION_SCHEMA_CHANGED, self.count_schema_changed),
-        ] {
-            if count > 0 {
-                metrics.counter(
-                    TOOL_INCREMENTAL_UPDATES_METRIC,
-                    i64::try_from(count).unwrap_or(i64::MAX),
-                    &[("action", action)],
-                );
-            }
-        }
+    let (Some(previous), Some(metrics)) = (previous, metrics) else {
+        return;
+    };
+    let action = if previous.contains_key(name) {
+        ACTION_SCHEMA_CHANGED
+    } else {
+        ACTION_ADDED
+    };
+    metrics.counter(
+        TOOL_INCREMENTAL_UPDATES_METRIC,
+        /*inc*/ 1,
+        &[(ACTION_TAG, action), (TOOL_TAG, name)],
+    );
+    if action == ACTION_SCHEMA_CHANGED
+        && let Some(description) = definition["description"].as_str()
+    {
+        metrics.histogram_with_boundaries(
+            TOOL_SPEC_DESCRIPTION_BYTES_METRIC,
+            i64::try_from(description.len()).unwrap_or(i64::MAX),
+            TOOL_SPEC_DESCRIPTION_BYTES_METRIC_BUCKETS.as_slice(),
+            &[(TOOL_TAG, name)],
+        );
     }
 }
 
@@ -149,14 +143,18 @@ impl WorldStateSection for TopLevelToolsState {
         };
         let changed =
             |name: &str| previous.and_then(|previous| previous.get(name)) != self.hashes.get(name);
-        let mut counts = ToolUpdateMetrics::default();
         let mut namespace_updates = Vec::new();
         let mut tools = Vec::new();
         for definition in &self.definitions {
             let name = definition_name(definition);
             let Some(members) = definition["tools"].as_array() else {
                 if changed(name) {
-                    counts.count_changed_tool(name, previous);
+                    record_changed_tool_metrics(
+                        name,
+                        definition,
+                        previous,
+                        self.metrics.as_deref(),
+                    );
                     tools.push(definition.clone());
                 }
                 continue;
@@ -165,7 +163,12 @@ impl WorldStateSection for TopLevelToolsState {
             for tool in members {
                 let tool_name = format!("{name}.{}", definition_name(tool));
                 if changed(&tool_name) {
-                    counts.count_changed_tool(&tool_name, previous);
+                    record_changed_tool_metrics(
+                        &tool_name,
+                        tool,
+                        previous,
+                        self.metrics.as_deref(),
+                    );
                     changed_members.push(tool.clone());
                 }
             }
@@ -190,8 +193,13 @@ impl WorldStateSection for TopLevelToolsState {
                     text
                 };
                 if !text.is_empty() {
-                    namespace_updates
-                        .push(WorldStateUpdate::fragment(ToolInstructions::new(text)).standalone());
+                    namespace_updates.push(
+                        WorldStateUpdate::fragment(ToolInstructions::new(
+                            text,
+                            name.to_string().into(),
+                        ))
+                        .standalone(),
+                    );
                 }
             }
         }
@@ -209,7 +217,7 @@ impl WorldStateSection for TopLevelToolsState {
                 ResponseItem::AdditionalTools {
                     id: None,
                     role: "developer".to_string(),
-                    tools,
+                    tools: Arc::from(tools),
                 },
             ));
         }
@@ -228,9 +236,15 @@ impl WorldStateSection for TopLevelToolsState {
                 .keys()
                 .filter(|key| !self.hashes.contains_key(*key))
                 .filter(|key| !namespaces.contains(key.as_str()))
-                .inspect(|_| {
+                .inspect(|name| {
                     // Count members even when the notice collapses their removed namespace.
-                    counts.count_removed += 1;
+                    if let Some(metrics) = self.metrics.as_deref() {
+                        metrics.counter(
+                            TOOL_INCREMENTAL_UPDATES_METRIC,
+                            /*inc*/ 1,
+                            &[("action", ACTION_REMOVED), ("tool", name.as_str())],
+                        );
+                    }
                 })
                 .filter(|key| {
                     !key.split_once('.')
@@ -249,7 +263,6 @@ impl WorldStateSection for TopLevelToolsState {
                 );
             }
         }
-        counts.record(self.metrics.as_deref());
         // Persist the empty map too: it is a known empty catalog, not missing state.
         (Some(self.hashes.clone()), updates)
     }
@@ -279,8 +292,8 @@ impl ContextualUserFragment for IncrementalToolsHint {
         ("", "")
     }
 
-    fn body(&self) -> String {
-        self.0.clone()
+    fn body(&self) -> ContentItem {
+        input_text(self.0.clone())
     }
 }
 
@@ -421,7 +434,7 @@ impl ContextualUserFragment for RemovedIdentityPart {
         ("", "")
     }
 
-    fn body(&self) -> String {
+    fn body(&self) -> ContentItem {
         let (kind, instruction) = match self.kind {
             RemovedIdentityKind::Namespace => (
                 "namespace",
@@ -436,9 +449,9 @@ impl ContextualUserFragment for RemovedIdentityPart {
             ..
         } = self;
         let bytes = payload.len();
-        format!(
+        input_text(format!(
             "Removed {kind} name, part {part}/{parts}. Join these {parts} consecutive payloads without separators to obtain its exact name. {instruction}\nPayload ({bytes} UTF-8 bytes):\n{payload}"
-        )
+        ))
     }
 }
 
@@ -460,7 +473,7 @@ impl ContextualUserFragment for RemovedTools {
     }
 
     /// Lists removed namespaces and individual tools in separate sections of one notice.
-    fn body(&self) -> String {
+    fn body(&self) -> ContentItem {
         let sections = [
             (
                 self.messages.removed_namespaces_header.as_str(),
@@ -482,7 +495,7 @@ impl ContextualUserFragment for RemovedTools {
                 body.push_str(name);
             }
         }
-        body
+        input_text(body)
     }
 }
 

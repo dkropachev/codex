@@ -586,7 +586,7 @@ pub(crate) fn backtrack_revert_before_turn_id(
         }
     }
 
-    bail!("the selected prompt was not found in the persisted thread")
+    bail!("the selected prompt was not found in the persisted thread");
 }
 
 /// Detects a reconstructed inline-review child with duplicate prompt inputs.

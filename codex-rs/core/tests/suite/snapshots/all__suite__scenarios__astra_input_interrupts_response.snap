@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
+assertion_line: 2036
 expression: snapshot
 ---
 Scenario: Astra receives new user input after its unfinished response is interrupted.
@@ -23,19 +24,23 @@ Scenario: Astra receives new user input after its unfinished response is interru
           - function/wait_agent
 01:message/developer:
     <MODEL_INSTRUCTIONS>
-02:message/developer[2]:
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
+    <MODEL_INSTRUCTIONS>
+04:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <COLLABORATION_MODE>
-03:message/developer:
+05:message/developer:
     <MULTI_AGENT_ROLE>
-04:message/developer:
+06:message/developer:
     <MULTI_AGENT_MODE>
-05:message/user:
+07:message/user:
     <ENVIRONMENT_CONTEXT>
-06:message/user:
+08:message/user:
     Draft a launch update.
 -- request 2 (request) --
-07:message/assistant:
+09:message/assistant:
     I will draft the update.
-08:message/user:
+10:message/user:
     Make it a customer update.

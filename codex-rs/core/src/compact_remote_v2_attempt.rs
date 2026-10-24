@@ -92,7 +92,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
             let input_goal_ids = UserGoalUpdate::message_ids(history.raw_items());
             let base_instructions = if history
                 .raw_items()
-                .any(BaseInstructionsFragment::matches_item)
+                .any(|item| BaseInstructionsFragment::text_from_item(item).is_some())
             {
                 BaseInstructions {
                     text: String::new(),
@@ -241,7 +241,7 @@ pub(crate) fn capture_background_input(
 ) -> BackgroundCompactionInput {
     let base_instructions = if snapshot
         .raw_items()
-        .any(BaseInstructionsFragment::matches_item)
+        .any(|item| BaseInstructionsFragment::text_from_item(item).is_some())
     {
         BaseInstructions {
             text: String::new(),
