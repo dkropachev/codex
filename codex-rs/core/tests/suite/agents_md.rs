@@ -2366,7 +2366,13 @@ async fn fork_injects_changed_agents_md_once() -> Result<()> {
     let parent_input = requests[0].input();
     let mut fork_input = requests[1].input();
     // The request prefix has a thread-scoped ID; retained history IDs stay unchanged.
-    fork_input[0]["id"] = parent_input[0]["id"].clone();
+    assert_eq!(
+        requests[0].request_prefix_len(),
+        requests[1].request_prefix_len()
+    );
+    for index in 0..requests[0].request_prefix_len() {
+        fork_input[index]["id"] = parent_input[index]["id"].clone();
+    }
     assert_eq!(
         fork_input.get(..parent_input.len()),
         Some(parent_input.as_slice()),
@@ -2554,7 +2560,13 @@ async fn run_subagent_global_instruction_case(fork_context: bool) -> Result<()> 
         let seed_input = seed_request.input();
         let mut child_input = child_request.input();
         // The request prefix has a thread-scoped ID; retained history IDs stay unchanged.
-        child_input[0]["id"] = seed_input[0]["id"].clone();
+        assert_eq!(
+            seed_request.request_prefix_len(),
+            child_request.request_prefix_len()
+        );
+        for index in 0..seed_request.request_prefix_len() {
+            child_input[index]["id"] = seed_input[index]["id"].clone();
+        }
         assert_eq!(
             child_input.get(..seed_input.len()),
             Some(seed_input.as_slice()),

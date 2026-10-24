@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/pending_input.rs
+assertion_line: 948
 expression: snapshot
 ---
 Scenario: /responses POST bodies with pending input
@@ -9,11 +10,15 @@ Scenario: /responses POST bodies with pending input
 00:message/developer:
     <MODEL_INSTRUCTIONS>
 01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-02:message/user:
+04:message/user:
     <ENVIRONMENT_CONTEXT>
-03:message/user:
+05:message/user:
     first prompt
 -- request 2 (request; Second request) --
-04:reasoning:summary=thinking:encrypted=true
-05:agent_message
+06:reasoning:summary=thinking:encrypted=true
+07:agent_message

@@ -44,19 +44,23 @@ Settings:
 -- request 1 (turn) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
-01:message/developer[2]:
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <COLLABORATION_MODE>
-02:message/developer:
+04:message/developer:
     <MULTI_AGENT_ROLE>
-03:message/developer:
+05:message/developer:
     <MULTI_AGENT_MODE>
-04:message/user:
+06:message/user:
     <ENVIRONMENT_CONTEXT>
-05:message/user:
+07:message/user:
     List my calendar events.
 -- request 2 (turn) --
-06:function_call/mcp__ordinary.calendar_list_events:{}
-07:function_call_output:Wall time: <DURATION> seconds
+08:function_call/mcp__ordinary.calendar_list_events:{}
+09:function_call_output:Wall time: <DURATION> seconds
     Output:
     {"_codex_apps":null}

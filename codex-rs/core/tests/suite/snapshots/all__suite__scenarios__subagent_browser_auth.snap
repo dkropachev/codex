@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 913
+assertion_line: 2446
 expression: snapshot
 ---
 Scenario: A subagent waits for an MCP browser sign-in prompt, then receives the accepted response and continues.
@@ -31,12 +31,16 @@ Settings:
 00:message/developer:
     <MODEL_INSTRUCTIONS>
 01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-02:message/user:
+04:message/user:
     <ENVIRONMENT_CONTEXT>
-03:message/user:
+05:message/user:
     Run the input tool.
 -- request 2 (turn) --
-04:function_call/mcp__elicitation.request_input:{}
-05:function_call_output:Wall time: <DURATION> seconds
+06:function_call/mcp__elicitation.request_input:{}
+07:function_call_output:Wall time: <DURATION> seconds
     Output: | {"action": "accept", "content": {}}

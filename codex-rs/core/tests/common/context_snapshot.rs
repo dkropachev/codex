@@ -146,7 +146,12 @@ fn capture_request(number: usize, entry: &SnapshotEntry<'_>) -> CapturedRequest 
                 .into_iter()
                 .flatten()
                 .enumerate()
-                .filter(|(_, kind)| **kind == "model.base_instructions")
+                .filter(|(_, kind)| {
+                    **kind == "model.base_instructions"
+                        || (**kind == "model.base_instructions.part"
+                            && item["internal_chat_message_metadata_passthrough"]["content_item_kinds"].as_array().is_some_and(|kinds| kinds.len() == 1)
+                            && item["content"].as_array().is_some_and(|content| content.len() == 1))
+                })
                 .map(move |(part_index, _)| (item_index, part_index))
         })
         .collect();
@@ -166,6 +171,25 @@ fn capture_request(number: usize, entry: &SnapshotEntry<'_>) -> CapturedRequest 
         && is_bundled_model_instructions(text)
     {
         model_instruction_parts.push((instructions_index, 0));
+    }
+    if model_instruction_parts.is_empty()
+        && let Some((count, text)) = crate::instruction_parts::decode(
+            &input.as_array().expect("request input should be an array")[instructions_index..],
+        )
+        && count > 1
+        && is_bundled_model_instructions(&text)
+        && input.as_array().expect("request input should be an array")
+            [instructions_index..instructions_index + count]
+            .iter()
+            .all(|item| {
+                item["internal_chat_message_metadata_passthrough"]["content_item_kinds"].is_null()
+                    && item["content"][0]["text"]
+                        .as_str()
+                        .is_some_and(|text| text.starts_with("Base instructions, part "))
+            })
+    {
+        model_instruction_parts
+            .extend((instructions_index..instructions_index + count).map(|index| (index, 0)));
     }
     let input = strip_metadata_from_json(strip_response_item_ids_from_json(input));
     CapturedRequest {

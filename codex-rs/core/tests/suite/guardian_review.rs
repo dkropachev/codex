@@ -1052,8 +1052,9 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
         Duration::from_secs(5),
         server.wait_for_request(/*connection_index*/ 3, /*request_index*/ 0),
     )
-    .await?
-    .body_json();
+    .await?;
+    let guardian_review_request = guardian_review;
+    let guardian_review = guardian_review_request.body_json();
     let parent_request = server.connections()[2][0].body_json();
     let parent_turn_id = parent_request["client_metadata"]["turn_id"]
         .as_str()
@@ -1104,13 +1105,15 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
         assert_eq!(input[0]["role"].as_str(), Some("developer"));
         assert_eq!(input[1]["type"].as_str(), Some("message"));
         assert_eq!(input[1]["role"].as_str(), Some("developer"));
-        input[1]["content"][0]["text"]
-            .as_str()
-            .expect("Responses Lite Guardian developer instructions")
+        guardian_review_request.instructions_text()
     } else {
-        guardian_prewarm["input"][0]["content"][0]["text"]
-            .as_str()
-            .expect("Guardian instructions")
+        [first.clone(), second.clone()]
+            .into_iter()
+            .find(|request| {
+                request.body_json()["client_metadata"]["x-openai-subagent"] == "guardian"
+            })
+            .expect("Guardian prewarm")
+            .instructions_text()
     };
     assert!(guardian_instructions.starts_with(expected_guardian_policy.trim_end()));
     assert!(

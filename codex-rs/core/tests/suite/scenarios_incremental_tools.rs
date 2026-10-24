@@ -146,11 +146,13 @@ async fn prediction_fork_appends_mcp_removal_without_rewriting_history() -> Resu
     Ok(())
 }
 
-#[test_case(true; "responses_lite")]
-#[test_case(false; "responses_api")]
+#[test_case(true, "Review results before responding.".to_string(); "responses_lite")]
+#[test_case(false, "Review results before responding.".to_string(); "responses_api")]
+#[test_case(true, "123".repeat(/*n*/ 10_001); "token_dense_model_update")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn incremental_tools_append_changed_catalog_without_rewriting_history(
     use_responses_lite: bool,
+    updated_instructions: String,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
@@ -183,6 +185,7 @@ async fn incremental_tools_append_changed_catalog_without_rewriting_history(
         )
         .with_runtime_reader(),
     )?;
+    let updated_template = updated_instructions.clone();
     let mut test = test_codex()
         .with_model_info_override("gpt-5.4", move |model| {
             model.use_responses_lite = use_responses_lite;
@@ -215,7 +218,7 @@ async fn incremental_tools_append_changed_catalog_without_rewriting_history(
                     .model_messages
                     .as_mut()
                     .expect("model messages")
-                    .instructions_template = Some("Review results before responding.".to_string());
+                    .instructions_template = Some(updated_template);
             }
             updated
                 .model_messages
@@ -360,10 +363,47 @@ async fn incremental_tools_append_changed_catalog_without_rewriting_history(
             );
         }
         assert!(!requests[5].body_contains_text("Use the available tools to help the user."));
-        assert_eq!(
-            requests[5].instructions_text(),
-            "Review results before responding."
-        );
+        if updated_instructions.len() > 10_000 {
+            let reconstruct =
+                |request: &responses::ResponsesRequest, kind: &str| -> Result<String> {
+                    let parts = request
+                        .input()
+                        .into_iter()
+                        .filter(|item| {
+                            item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                                == json!([kind])
+                        })
+                        .collect::<Vec<_>>();
+                    assert!(parts.len() > 1);
+                    let mut text = String::new();
+                    for part in parts {
+                        assert!(serde_json::to_vec(&part)?.len() <= 10_000);
+                        let framed = part["content"][0]["text"]
+                            .as_str()
+                            .expect("instruction part");
+                        let (_, payload) = framed.split_once(" UTF-8 bytes):\n").expect("payload");
+                        text.push_str(payload);
+                    }
+                    Ok(text)
+                };
+            assert_eq!(
+                reconstruct(&requests[2], "model.instructions.part")?,
+                format!(
+                    "<model_instructions>\nThe current model is updated-tools-model.\nThe following instructions replace the previous base instructions:\n\n{updated_instructions}\n</model_instructions>"
+                )
+            );
+            assert_eq!(
+                &requests[3].input()[..requests[2].input().len()],
+                requests[2].input()
+            );
+            assert_eq!(
+                reconstruct(&requests[5], "model.base_instructions.part")?,
+                updated_instructions
+            );
+            metrics.shutdown()?;
+            return Ok(());
+        }
+        assert_eq!(requests[5].instructions_text(), updated_instructions);
     }
     insta::assert_snapshot!(
         if use_responses_lite {
@@ -620,7 +660,7 @@ async fn resumed_large_catalog_removal_keeps_notices_separate() -> Result<()> {
             model.tool_mode = Some(ToolMode::Direct);
         })
         .with_config(|config| {
-            config.base_instructions = Some("Keep every instruction: \"診断\"\n".repeat(5_000));
+            config.base_instructions = Some("123".repeat(/*n*/ 10_001));
             config
                 .features
                 .enable(Feature::IncrementalTools)
@@ -683,7 +723,14 @@ async fn resumed_large_catalog_removal_keeps_notices_separate() -> Result<()> {
         "oversized base instructions must be split before persistence"
     );
     for item in &original {
-        assert!(serde_json::to_vec(item)?.len() <= 40_000);
+        let limit = if item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+            == json!(["model.base_instructions.part"])
+        {
+            10_000
+        } else {
+            40_000
+        };
+        assert!(serde_json::to_vec(item)?.len() <= limit);
     }
     test.codex.shutdown_and_wait().await?;
     let history = test

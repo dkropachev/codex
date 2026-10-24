@@ -172,6 +172,22 @@ async fn resume_restores_windows_sandbox_override() -> Result<()> {
     Ok(())
 }
 
+fn expected_fallback_switch(config: &codex_core::config::Config, slug: &str) -> String {
+    let model = codex_models_manager::model_info::with_config_overrides(
+        codex_models_manager::model_info::model_info_from_slug(slug),
+        &config.to_models_manager_config(),
+    );
+    let instructions = codex_prompts::render_model_instructions(&model);
+    let instructions = if config.update_plan_enabled {
+        instructions
+    } else {
+        codex_prompts::without_update_plan_instructions(&instructions)
+    };
+    format!(
+        "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n{instructions}\n</model_switch>"
+    )
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -273,26 +289,17 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
             .iter()
             .any(|text| text == "Record initial instructions")
     );
-    let first_developer_texts = first_resumed.message_input_texts("developer");
-    let first_model_switch_count = first_developer_texts
-        .iter()
-        .filter(|text| text.contains("<model_switch>"))
-        .count();
-    assert!(
-        first_model_switch_count >= 1,
-        "expected model switch message on first post-resume turn"
+    let switches = first_resumed.model_switch_texts();
+    assert_eq!(
+        switches,
+        vec![expected_fallback_switch(&resumed.config, "gpt-5.4")]
     );
-
     let second_resumed = &requests[1];
     assert_eq!(second_resumed.instructions_text(), initial_instructions);
-    let second_developer_texts = second_resumed.message_input_texts("developer");
-    let second_model_switch_count = second_developer_texts
-        .iter()
-        .filter(|text| text.contains("<model_switch>"))
-        .count();
+    assert_eq!(second_resumed.model_switch_texts(), switches);
     assert_eq!(
-        second_model_switch_count, 1,
-        "did not expect duplicate model switch message after first post-resume turn"
+        &second_resumed.input()[..first_resumed.input().len()],
+        first_resumed.input()
     );
 
     Ok(())
@@ -362,12 +369,10 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
     .await;
 
     let request = resumed_mock.single_request();
-    let developer_texts = request.message_input_texts("developer");
-    let model_switch_count = developer_texts
-        .iter()
-        .filter(|text| text.contains("<model_switch>"))
-        .count();
-    assert_eq!(model_switch_count, 1);
+    assert_eq!(
+        request.model_switch_texts(),
+        vec![expected_fallback_switch(&resumed.config, "gpt-5.4")]
+    );
 
     Ok(())
 }

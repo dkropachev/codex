@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/token_budget.rs
+assertion_line: 1943
 expression: snapshot
 ---
 Scenario: New context window tool installs fresh full context before the next follow-up request.
@@ -8,10 +9,14 @@ Scenario: New context window tool installs fresh full context before the next fo
 -- request 1 (turn; Final Follow-Up Request) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
-01:message/developer[2]:
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer[2]:
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
-02:message/developer[3]:
+04:message/developer[3]:
     [01] <context_window>
     [02]
         Agent name: /root
@@ -20,7 +25,7 @@ Scenario: New context window tool installs fresh full context before the next fo
         Previous context window id: <UUID 1>
 
     [03] </context_window>
-03:message/user:
+05:message/user:
     <ENVIRONMENT_CONTEXT>
-04:function_call/update_plan:{"plan":[{"status":"in_progress","step":"Continue in the new context window"}]}
-05:function_call_output:Plan updated
+06:function_call/update_plan:{"plan":[{"status":"in_progress","step":"Continue in the new context window"}]}
+07:function_call_output:Plan updated

@@ -4614,8 +4614,12 @@ async fn manual_compact_retries_after_context_window_error() {
         compact_input.len(),
         retry_input.len()
     );
-    assert_eq!(compact_input.first(), retry_input.first());
-    if let (Some(first_before), Some(first_after)) = (compact_input.get(1), retry_input.get(1)) {
+    let prefix_len = requests[1].request_prefix_len();
+    assert_eq!(&compact_input[..prefix_len], &retry_input[..prefix_len]);
+    assert_eq!(&compact_input[prefix_len + 1..], &retry_input[prefix_len..]);
+    if let (Some(first_before), Some(first_after)) =
+        (compact_input.get(prefix_len), retry_input.get(prefix_len))
+    {
         assert_ne!(
             first_before, first_after,
             "retry should drop the oldest conversation item"

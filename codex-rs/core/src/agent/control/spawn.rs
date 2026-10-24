@@ -1228,7 +1228,10 @@ impl LocalAgentControl {
                 content.retain_mut(|content_item| {
                     if matches!(
                         content_item.kind().as_str(),
-                        BaseInstructionsFragment::KIND | IncrementalToolsHint::KIND
+                        BaseInstructionsFragment::KIND
+                            | "model.base_instructions.part"
+                            | "model.instructions.part"
+                            | IncrementalToolsHint::KIND
                     ) {
                         return preserve_context_baselines;
                     }
