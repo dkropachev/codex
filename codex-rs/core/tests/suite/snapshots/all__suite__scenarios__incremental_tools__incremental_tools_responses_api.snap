@@ -1,7 +1,6 @@
 ---
 source: core/tests/suite/scenarios_incremental_tools.rs
-assertion_line: 224
-expression: "context_snapshot::format_request_history_snapshot(if use_responses_lite\n{\n    \"Tool definitions enter history in one batch; a catalog change appends one developer notice before only the changed exec definition, without modifying namespace descriptions. The next unchanged turn appends only user input.\"\n} else\n{\n    \"Regular Responses requests carry the full current tool catalog without an incremental notice; changed execution instructions replace the catalog on subsequent requests.\"\n}, &requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+expression: "context_snapshot::format_request_history_snapshot(if use_responses_lite\n{\n    \"Tool definitions precede the initial base instructions. A model switch appends one developer notice, changed tools, and replacement instructions without rewriting the prefix; compaction starts a new window with the updated base.\"\n} else\n{\n    \"Regular Responses requests carry the full current tool catalog without an incremental notice; changed execution instructions replace the catalog on subsequent requests.\"\n}, &requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
 Scenario: Regular Responses requests carry the full current tool catalog without an incremental notice; changed execution instructions replace the catalog on subsequent requests.
 

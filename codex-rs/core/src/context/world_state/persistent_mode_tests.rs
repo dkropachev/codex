@@ -1,5 +1,7 @@
 //! Covers persistent-context transitions independently of effort selection.
 
+use codex_protocol_test_support::ContentItemTestExt;
+
 use super::*;
 use crate::context::world_state::WorldState;
 use crate::context::world_state::WorldStateUpdateContent;
@@ -103,6 +105,6 @@ fn oversized_persistent_instructions_are_truncated_below_context_limit() {
         let WorldStateUpdateContent::Fragment(fragment) = update.content else {
             panic!("persistent mode should render a fragment");
         };
-        assert!(approx_token_count(&fragment.render()) <= 10_000);
+        assert!(approx_token_count(&fragment.render().expect_text()) <= 10_000);
     }
 }

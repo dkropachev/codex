@@ -16,7 +16,7 @@ async fn idle_compaction_rejects_pending_trigger_mail_without_consuming_it() {
     );
     session
         .input_queue
-        .enqueue_mailbox_communication(communication, Default::default())
+        .enqueue_mailbox_communication(communication.into(), Default::default())
         .await;
 
     assert_eq!(

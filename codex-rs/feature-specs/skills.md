@@ -175,7 +175,7 @@ disabled state, and toggle view behavior.
 
 #### Test cases
 
-- Skill popup rendering and long-list behavior are covered: codex-rs/tui/src/bottom_pane/skill_popup.rs:filtered_mentions_preserve_results_beyond_popup_height,scrolling_mentions_shifts_rendered_window_snapshot,display_name_match_sorting_beats_worse_secondary_search_term_matches,query_match_score_sorts_before_plugin_rank_bias
+- Skill popup rendering and long-list behavior are covered: codex-rs/tui/src/bottom_pane/skill_popup.rs:filtered_mentions_preserve_results_beyond_popup_height,scrolling_mentions_shifts_rendered_window_snapshot,display_name_match_sorting_beats_worse_secondary_search_term_matches,match_tier_precedes_preference_and_plugin_rank
 - Skill selection and disabled states are covered: codex-rs/tui/src/bottom_pane/skills_toggle_view.rs:renders_basic_popup,footer_hint_uses_list_keymap_accept_and_cancel
 - Long skill display names are preserved in toggle rows and filtered results: codex-rs/tui/src/bottom_pane/skills_toggle_view.rs:build_rows_preserves_full_skill_display_names,filtering_long_skill_names_preserves_the_matching_row
 - Long skill display names render within narrow and available widths: codex-rs/tui/src/bottom_pane/skills_toggle_view.rs:renders_long_names_at_narrow_width,renders_long_names_using_available_width

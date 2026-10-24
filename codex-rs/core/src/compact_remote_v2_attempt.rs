@@ -1,6 +1,5 @@
 //! Builds and sends foreground and speculative remote V2 compaction attempts.
 
-use crate::context::BaseInstructionsFragment;
 use crate::context::UserGoalUpdate;
 use codex_protocol::ResponseItemId;
 use std::collections::HashSet;
@@ -90,10 +89,11 @@ pub(super) async fn run_remote_compact_v2_attempt(
             let model_info = turn_context.model_info();
             let mut history = sess.clone_history().await;
             let input_goal_ids = UserGoalUpdate::message_ids(history.raw_items());
-            let base_instructions = if history
-                .raw_items()
-                .any(BaseInstructionsFragment::matches_item)
-            {
+            let tools_in_history = step_context.settings.model_info.use_responses_lite
+                && history
+                    .raw_items()
+                    .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }));
+            let base_instructions = if tools_in_history {
                 BaseInstructions {
                     text: String::new(),
                     provenance: None,
@@ -239,9 +239,10 @@ pub(crate) fn capture_background_input(
     routing_snapshot: ResponsesRoutingSnapshot,
     window: (String, u64, uuid::Uuid),
 ) -> BackgroundCompactionInput {
-    let base_instructions = if snapshot
-        .raw_items()
-        .any(BaseInstructionsFragment::matches_item)
+    let base_instructions = if step_context.settings.model_info.use_responses_lite
+        && snapshot
+            .raw_items()
+            .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
     {
         BaseInstructions {
             text: String::new(),

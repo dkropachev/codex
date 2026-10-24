@@ -80,9 +80,16 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
         .cloned()
         .expect("accepted goal");
     let (window_number, window_ids) = session.advance_auto_compact_window().await;
+    let base_text = "Keep all compaction instructions: 診断\n".repeat(5_000);
+    let base = crate::context::ContextualUserFragment::into(
+        crate::context::BaseInstructionsFragment(base_text.clone()),
+    );
     session
         .replace_compacted_history(
-            vec![ResponseItemEnvelope::new(user_message("compacted context"))],
+            vec![
+                ResponseItemEnvelope::new(base),
+                ResponseItemEnvelope::new(user_message("compacted context")),
+            ],
             turn_context_baseline.clone(),
             world_state.render_full().0,
             CompactedHistoryMetadata {
@@ -97,7 +104,22 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
         )
         .await;
     let live_history = session.clone_history().await.annotated_items().to_vec();
-    assert_eq!(&live_history[1..], &[accepted_goal]);
+    assert!(live_history.len() > 3);
+    assert_eq!(live_history.last(), Some(&accepted_goal));
+    assert_eq!(
+        crate::context::BaseInstructionsFragment::text_from_items(
+            live_history.iter().map(|envelope| &envelope.item),
+        ),
+        Some(base_text),
+    );
+    for envelope in &live_history {
+        assert!(
+            serde_json::to_vec(&envelope.item)
+                .expect("serialize item")
+                .len()
+                <= 40_000
+        );
+    }
 
     session.flush_rollout().await.expect("flush checkpoints");
     let (items, _, _) = RolloutRecorder::load_rollout_items(&rollout_path)
@@ -116,7 +138,15 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
     else {
         panic!("unexpected compaction records: {compaction_items:#?}");
     };
-    assert_eq!(compacted.replacement_history, Some(live_history));
+    // Checkpoints encode a dense metadata vector: absent slots reload as empty metadata.
+    let persisted_history = live_history
+        .into_iter()
+        .map(|mut envelope| {
+            envelope.metadata.get_or_insert_default();
+            envelope
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(compacted.replacement_history, Some(persisted_history));
     assert_eq!(compacted.resume_metadata.as_ref(), Some(&expected));
     assert_eq!(
         saved_world_state,

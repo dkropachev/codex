@@ -393,6 +393,8 @@ fn plan_type_name(plan_type: PlanType) -> String {
         PlanType::Edu => "edu",
         PlanType::EduPlus => "edu_plus",
         PlanType::EduPro => "edu_pro",
+        PlanType::Sci => "sci",
+        PlanType::SciPlus => "sci_plus",
         PlanType::Unknown => "unknown",
     }
     .to_string()

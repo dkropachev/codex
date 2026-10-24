@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 2072
 expression: "context_snapshot::format_request_history_snapshot(\"A parent pins high request effort, then selects low. Its ephemeral prediction fork inherits the context and baseline, then selects medium on its first turn. Continuing the parent at medium produces the same request.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: A parent pins high request effort, then selects low. Its ephemeral prediction fork inherits the context and baseline, then selects medium on its first turn. Continuing the parent at medium produces the same request.

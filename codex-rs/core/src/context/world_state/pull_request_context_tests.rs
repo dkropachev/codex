@@ -1,5 +1,6 @@
 use codex_git_utils::PullRequestMetadata;
 use codex_protocol::models::ResponseItem;
+use codex_protocol_test_support::ContentItemTestExt;
 use pretty_assertions::assert_eq;
 
 use super::*;
@@ -15,7 +16,7 @@ fn renders_initial_context_and_only_changed_diffs() {
     assert_eq!(initial_rendered.len(), 1);
     assert_eq!(
         render_update(&initial_rendered[0]),
-        initial_context.render()
+        initial_context.render().expect_text()
     );
     let retained: ResponseItem = ContextualUserFragment::into(initial_context.as_ref().clone());
     assert!(
@@ -31,7 +32,7 @@ fn renders_initial_context_and_only_changed_diffs() {
     assert_eq!(changed_rendered.len(), 1);
     assert_eq!(
         render_update(&changed_rendered[0]),
-        changed_context.render()
+        changed_context.render().expect_text()
     );
 }
 
@@ -44,7 +45,7 @@ fn restores_context_only_when_the_fragment_was_not_retained() {
 
     let (_, restored) = state.render_history_diff(Some(&snapshot), &[]);
     assert_eq!(restored.len(), 1);
-    assert_eq!(render_update(&restored[0]), context.render());
+    assert_eq!(render_update(&restored[0]), context.render().expect_text());
     assert!(
         state
             .render_history_diff(Some(&snapshot), &[retained])
@@ -63,7 +64,7 @@ fn render_update(update: &WorldStateUpdate) -> String {
     let WorldStateUpdateContent::Fragment(fragment) = &update.content else {
         panic!("pull request context should render a fragment");
     };
-    fragment.render()
+    fragment.render().expect_text()
 }
 
 fn context(body: &str) -> Arc<PullRequestContext> {

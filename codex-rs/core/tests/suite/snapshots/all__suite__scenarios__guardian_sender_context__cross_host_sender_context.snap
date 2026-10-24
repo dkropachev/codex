@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios_guardian_sender_context.rs
-assertion_line: 194
 expression: snapshot
 ---
 Scenario: Two workers share a thread store. The receiver reads the sender's original instructions and preceding assistant question after compaction and rollback, without loading the sender. Only Guardian receives the evidence.

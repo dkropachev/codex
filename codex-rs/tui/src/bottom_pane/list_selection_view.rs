@@ -239,6 +239,8 @@ pub(crate) struct SelectionViewParams {
     /// Optional non-text key that can toggle a row while printable keys edit the search query.
     pub search_toggle_key: Option<KeyBinding>,
     pub search_mode: SearchMode,
+    /// Use ordinal digits in the gutter; when false, use only each row's explicit shortcut.
+    pub auto_number_shortcuts: bool,
     pub search_placeholder: Option<String>,
     pub col_width_mode: ColumnWidthMode,
     pub row_display: SelectionRowDisplay,
@@ -305,6 +307,7 @@ impl Default for SelectionViewParams {
             is_searchable: false,
             search_toggle_key: None,
             search_mode: SearchMode::default(),
+            auto_number_shortcuts: true,
             search_placeholder: None,
             col_width_mode: ColumnWidthMode::AutoVisible,
             row_display: SelectionRowDisplay::Wrapped,
@@ -354,6 +357,7 @@ pub(crate) struct ListSelectionView {
     search_toggle_key: Option<KeyBinding>,
     search_mode: SearchMode,
     search_active: bool,
+    auto_number_shortcuts: bool,
     search_query: String,
     search_placeholder: Option<String>,
     col_width_mode: ColumnWidthMode,
@@ -511,6 +515,7 @@ impl ListSelectionView {
             search_mode: params.search_mode,
             search_active,
             search_query,
+            auto_number_shortcuts: params.auto_number_shortcuts,
             search_placeholder: if params.is_searchable {
                 params.search_placeholder
             } else {
@@ -747,6 +752,11 @@ impl ListSelectionView {
                         // The number keys don't work when search is enabled (since we let the
                         // numbers be used for the search query).
                         format!("{prefix} ")
+                    } else if !self.auto_number_shortcuts {
+                        item.display_shortcut.map_or_else(
+                            || format!("{prefix} "),
+                            |shortcut| format!("{prefix} {}. ", shortcut.display_label()),
+                        )
                     } else if is_disabled {
                         if let Some(disabled_gutter_marker) = item.disabled_gutter_marker {
                             let marker_width = UnicodeWidthStr::width(disabled_gutter_marker);
@@ -781,7 +791,10 @@ impl ListSelectionView {
                         selection_style: row_selection_style,
                         name: name_with_marker,
                         name_prefix_spans,
-                        display_shortcut: item.display_shortcut,
+                        display_shortcut: self
+                            .auto_number_shortcuts
+                            .then_some(item.display_shortcut)
+                            .flatten(),
                         match_indices: None,
                         description,
                         wrap_indent,
@@ -1054,7 +1067,7 @@ impl ListSelectionView {
             None
         }
         .or_else(|| self.footer_note.clone());
-        let mut lines = note.map(&wrap).unwrap_or_default();
+        let mut lines = note.map(wrap).unwrap_or_default();
         if self.reserve_result_rows && show_selected_description {
             let height = self
                 .items
@@ -1367,10 +1380,11 @@ impl BottomPaneView for ListSelectionView {
                     self.select_shortcut(idx);
                     return;
                 }
-                if let Some(idx) = c
-                    .to_digit(10)
-                    .map(|d| d as usize)
-                    .and_then(|number| self.actual_idx_for_enabled_number(number))
+                if self.auto_number_shortcuts
+                    && let Some(idx) = c
+                        .to_digit(/*radix*/ 10)
+                        .map(|d| d as usize)
+                        .and_then(|number| self.actual_idx_for_enabled_number(number))
                 {
                     self.select_shortcut(idx);
                 }
@@ -1933,6 +1947,39 @@ mod tests {
         }
     }
 
+    #[test]
+    fn searchable_list_honors_configured_printable_accept_alternative() {
+        let (tx, mut rx) = unbounded_channel();
+        let mut keymap = crate::keymap::RuntimeKeymap::defaults().list;
+        keymap.accept = vec![
+            crate::key_hint::plain(KeyCode::Char('z')),
+            crate::key_hint::plain(KeyCode::Enter),
+        ];
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                is_searchable: true,
+                items: vec![SelectionItem {
+                    name: "Selection".into(),
+                    actions: vec![Box::new(|tx| {
+                        tx.send(AppEvent::UpdateModel("accepted".into()))
+                    })],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            AppEventSender::new(tx),
+            keymap,
+        );
+
+        view.handle_key_event(KeyEvent::from(KeyCode::Char('z')));
+
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AppEvent::UpdateModel(model)) if model == "accepted"
+        ));
+        assert_eq!(view.search_query(), Some(""));
+    }
+
     fn make_selection_view(subtitle: Option<&str>) -> ListSelectionView {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -2282,6 +2329,54 @@ mod tests {
                 .is_some_and(|toggle| toggle.is_on)
         );
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn configured_list_binding_takes_precedence_over_search_toggle_key() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut keymap = crate::keymap::RuntimeKeymap::defaults().list;
+        keymap.move_down = vec![crate::key_hint::plain(KeyCode::Tab)];
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                items: vec![
+                    SelectionItem {
+                        name: "Plugin".to_string(),
+                        toggle: Some(SelectionToggle {
+                            is_on: false,
+                            action: Box::new(|_enabled, tx: &_| {
+                                tx.send(AppEvent::OpenApprovalsPopup);
+                            }),
+                        }),
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "Next".to_string(),
+                        ..Default::default()
+                    },
+                ],
+                is_searchable: true,
+                search_toggle_key: Some(crate::key_hint::plain(KeyCode::Tab)),
+                ..Default::default()
+            },
+            tx,
+            keymap,
+        );
+
+        view.handle_key_event(KeyEvent::from(KeyCode::Tab));
+
+        assert_eq!(view.selected_actual_idx(), Some(1));
+        assert!(
+            !view.active_items()[0]
+                .toggle
+                .as_ref()
+                .is_some_and(|toggle| toggle.is_on),
+            "expected the configured move-down binding to leave the toggle unchanged"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "expected the configured move-down binding not to fire the toggle action"
+        );
     }
 
     #[test]

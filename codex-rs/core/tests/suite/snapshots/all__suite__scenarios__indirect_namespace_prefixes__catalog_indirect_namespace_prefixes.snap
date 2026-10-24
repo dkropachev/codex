@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios_indirect_namespace_prefixes.rs
-assertion_line: 244
 expression: "context_snapshot::format_request_history_snapshot(\"Function prefixes annotate direct and indirect tools; namespace prefixes annotate embedded namespace docs, loaded namespaces, and flat indirect entries. A model switch clears both without changing dispatch.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
 Scenario: Function prefixes annotate direct and indirect tools; namespace prefixes annotate embedded namespace docs, loaded namespaces, and flat indirect entries. A model switch clears both without changing dispatch.

@@ -133,6 +133,19 @@ impl Session {
             for envelope in &mut items {
                 Self::assign_missing_response_item_id(&mut envelope.item);
             }
+            // A new compaction window can introduce a fresh model-instruction prefix.
+            // Split it after IDs are present, preserving envelope attribution on every part.
+            items = items
+                .into_iter()
+                .flat_map(|envelope| {
+                    crate::context::bound_model_instruction_items(vec![envelope.item])
+                        .into_iter()
+                        .map(move |item| ResponseItemEnvelope {
+                            item,
+                            metadata: envelope.metadata.clone(),
+                        })
+                })
+                .collect();
             // Goal edits are published outside the running task. Keep edits accepted after
             // the compaction input snapshot, in their original order, after its replacement.
             if complete_replacement {
@@ -197,7 +210,7 @@ impl Session {
         }
         let world_state_item = WorldStateItem::full(world_state_baseline.into_object());
         let rollout_items = [
-            RolloutItem::Compacted(compacted_item),
+            RolloutItem::Compacted(Box::new(compacted_item)),
             RolloutItem::WorldState(world_state_item),
             RolloutItem::TurnContext(reference_context_item),
             // The frozen turn context must not override current settings in persisted metadata.

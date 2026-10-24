@@ -4,6 +4,7 @@ use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::input_text;
 use codex_protocol::user_input::UserInput;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
 use codex_utils_output_truncation::approx_token_count;
@@ -46,8 +47,8 @@ impl ContextualUserFragment for GuardianAuthorizationContext {
         Self::type_markers()
     }
 
-    fn body(&self) -> String {
-        self.0.clone()
+    fn body(&self) -> ContentItem {
+        input_text(self.0.clone())
     }
 
     fn type_markers() -> (&'static str, &'static str) {

@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 853
 expression: "context_snapshot::format_request_history_snapshot(\"Astra sees the permitted calendar plugin and standalone skills, but not the unlisted notes plugin.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Astra sees the permitted calendar plugin and standalone skills, but not the unlisted notes plugin.

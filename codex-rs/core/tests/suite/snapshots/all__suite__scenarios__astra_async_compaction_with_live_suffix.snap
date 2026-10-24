@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 2529
 expression: "context_snapshot::format_context_snapshot(\"Astra compacts a completed launch-notes turn in the background. The user switches to Plan mode while it runs. Adoption restores Default mode at the cutoff, then preserves the Plan update, newer user message, and assistant/tool exchange in their original order.\",\n&entries, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
 Scenario: Astra compacts a completed launch-notes turn in the background. The user switches to Plan mode while it runs. Adoption restores Default mode at the cutoff, then preserves the Plan update, newer user message, and assistant/tool exchange in their original order.
