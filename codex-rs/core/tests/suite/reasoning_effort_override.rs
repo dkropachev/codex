@@ -574,10 +574,13 @@ async fn reasoning_effort_override_capacity_retry_keeps_latest_adjacent_update()
         responses::sse(vec![responses::ev_completed("first")]),
     )
     .await;
+    // Flex capacity is terminal; ordinary overloads retry automatically in this fork.
     let failed = responses::mount_response_once(
         &server,
-        ResponseTemplate::new(503)
-            .set_body_json(serde_json::json!({"error": {"code": "server_is_overloaded"}})),
+        ResponseTemplate::new(/*s*/ 429).set_body_json(serde_json::json!({"error": {
+            "type": "resource_unavailable", "code": "flex_unavailable",
+            "message": "Flex capacity unavailable.",
+        }})),
     )
     .await;
     let retried = responses::mount_sse_once(
@@ -587,6 +590,7 @@ async fn reasoning_effort_override_capacity_retry_keeps_latest_adjacent_update()
     .await;
     let test = override_builder()
         .with_config(|config| {
+            config.service_tier = Some("flex".to_string());
             config.model_provider.supports_websockets = false;
             config.model_provider.request_max_retries = Some(0);
             config.model_provider.stream_max_retries = Some(0);
@@ -619,7 +623,7 @@ async fn reasoning_effort_override_capacity_retry_keeps_latest_adjacent_update()
     };
     assert_eq!(
         completed.error.and_then(|error| error.codex_error_info),
-        Some(CodexErrorInfo::ServerOverloaded)
+        Some(CodexErrorInfo::FlexUnavailable)
     );
 
     // The app's capacity Retry action uses current settings without adding a user message.

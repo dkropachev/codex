@@ -3432,8 +3432,17 @@ GH_TOKEN = "{REAL_GITHUB_TOKEN}"
     let output = responses.requests()[1].function_call_output(call_id);
     if snapshot_unavailable {
         assert!(test.session_configured.network_proxy.is_some());
+        let mut result = parse_result(&output);
+        if cfg!(target_os = "linux") && !test.executor_environment().environment().is_remote() {
+            // Accept only the known local login diagnostic at its exact count and position.
+            let prefix =
+                "Failed to create stream fd: Operation not permitted\n".repeat(/*n*/ 3);
+            if let Some(stdout) = result.stdout.strip_prefix(prefix.as_str()) {
+                result.stdout = stdout.to_string();
+            }
+        }
         assert_eq!(
-            parse_result(&output),
+            result,
             CommandResult {
                 exit_code: Some(0),
                 stdout: format!("west\n{REAL_GITHUB_TOKEN}\n\nproxy-active\nsandbox-denied\n"),
