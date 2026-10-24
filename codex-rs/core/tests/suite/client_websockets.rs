@@ -680,7 +680,10 @@ async fn responses_websocket_resume_prewarm_reuses_and_repairs_connection() -> a
     let connection = server.single_connection();
     assert_eq!(connection.len(), 3);
     let prewarm = connection[0].body_json();
-    assert_eq!(prewarm["input"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        prewarm["input"].as_array().unwrap().len(),
+        connection[0].request_prefix_len()
+    );
     assert_eq!(prewarm["input"][0]["role"], "developer");
     assert_eq!(connection[2].body_json()["previous_response_id"], "resp-1");
     let mut expected_history = connection

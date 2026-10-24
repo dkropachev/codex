@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios_mcp_resource_messages.rs
+assertion_line: 159
 expression: "context_snapshot::format_request_history_snapshot(\"Catalog resource descriptions and parameter guidance accompany discovery and reading through Code Mode.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Catalog resource descriptions and parameter guidance accompany discovery and reading through Code Mode.
@@ -32,15 +33,51 @@ Settings:
     - web_search; hash=e214d4db1bc49e89
 -- request 1 (turn) --
 00:message/developer:
+    Base instructions, part 1. Concatenate consecutive payloads without separators to obtain the complete instructions.
+    Payload (9447 UTF-8 bytes):
     You are Codex, an agent based on GPT-6. You and the user share one workspace, and your job is to collabo...them until their intended goal is completely handled. [hash=efa50f074efa5803]
 
     # When to ask the user for permission
 
     Use your best judgement given task context for when you really need user permission, like a competent co...ork without ending the turn to clarify with the user. [hash=ca7367e658b51388]
 
-    User authorization and preferences persist across turns. Do not request permission again when the user h... any guidelines provided in skills or external files. [hash=911f91c92c72882c]
+    <OMITTED 51 LINES; ~1889 TOKENS; hash=41a7f0d8a39cd137>
 
-    <OMITTED 155 LINES; ~4935 TOKENS; hash=5573869716192298>
+    # Working with the user
+
+    You have two channels for staying in conversation with the user:
+    - You share updates in the `commentary` channel.
+    - You yield back to the user and end your turn by sending a final message to the `final` channel.
+
+    When available, you can use the `functions.request_user_input_async` tool to ask the user for missing in...ot proceed with dependent work until it arrives. Elap [hash=301420c3e8ef3cf0]
+01:message/developer:
+    Base instructions, part 2. Concatenate consecutive payloads without separators to obtain the complete instructions.
+    Payload (9461 UTF-8 bytes):
+    sed time is not an answer or approval.
+
+    The user may send a new message while you are still working. By default, treat it as steering the active...cancels it or requests an incompatible new objective. [hash=3860056b5b5be9a2]
+
+    When you run out of context, the conversation is automatically compacted into a summary, but you will st...cancels it or requests an incompatible new objective. [hash=3cdc10c3b0a1f186]
+
+    <OMITTED 66 LINES; ~1825 TOKENS; hash=24dbe48d71ce3d5b>
+
+    If a skill causes you to ask for permission or confirmation, pause, or leave requested work unfinished, ...ng for confirmation based on an inferred requirement. [hash=5d583cca9d50b69f]
+
+    ## When to use a skill
+
+    If the user names a skill (with $SkillName or plain text) add the usage of that skill to your current wo...the user's task, stop the turn and tell the user why. [hash=ce003eba37390a33]
+
+    If your current task would benefit from a skill, but is not explicitly invoked by the user, use reasonab...ons, tools, or workflows that would improve the outco [hash=2765da1c3f890614]
+02:message/developer:
+    Base instructions, part 3. Concatenate consecutive payloads without separators to obtain the complete instructions.
+    Payload (2520 UTF-8 bytes):
+    me. Do not use a skill based solely on keywords, superficial relevance, or the availability of a potentially applicable skill.
+
+    ## How to use skills
+
+    Open and read the skill according to its location: filesystem skills should be read from the filesystem,...`skills.read`. Avoid re-reading skills when possible. [hash=16f7fc4b5c2b6771]
+
+    <OMITTED 14 LINES; ~269 TOKENS; hash=59b880e226216a9e>
 
     - Skill naming: If a plugin contributes skills, those skill entries are prefixed with plugin_name: in the Skills list.
     - MCP naming: Plugin-provided MCP tools keep standard MCP identifiers such as mcp__server__tool; use tool provenance to tell which plugin they come from.
@@ -49,7 +86,7 @@ Settings:
     - Relevance: Determine what a plugin can help with from explicit user mention or from the plugin-associa..., MCP tools, and apps exposed elsewhere in this turn. [hash=620459a4e7b590f0]
     - Missing/blocked: If the user requests a plugin that does not have relevant callable capabilities for t..., say so briefly and continue with the best fallback. [hash=746b0469a8f6cb3e]
 
-01:message/developer[2]:
+03:message/developer[2]:
     [01] <permissions instructions>
         Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
         Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
@@ -70,7 +107,7 @@ Settings:
 
         Never use the `request_user_input` tool for permission requests or permission-related escalations.
         </collaboration_mode>
-02:message/developer:
+04:message/developer:
     <multi_agent_role>You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
 
     At the start of your turn, you are the active agent.
@@ -88,9 +125,9 @@ Settings:
     There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
 
     Full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model and reasoning effort and d... so, set `fork_turns` to `"none"`.</multi_agent_role> [hash=d5928243dc643bcc]
-03:message/developer:
+05:message/developer:
     <multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. D...elegation, or parallel agent work.</multi_agent_mode> [hash=2b6e037067b4390c]
-04:message/user:
+06:message/user:
     <environment_context>
       <cwd><CWD></cwd>
       <shell><HOST_SHELL></shell>
@@ -98,13 +135,13 @@ Settings:
       <timezone><HOST_TIMEZONE></timezone>
       <filesystem><workspace_roots><root><WORKSPACE_ROOT 1></root></workspace_roots><permission_profile type...e="unrestricted" /></permission_profile></filesystem> [hash=0592734c170299c1]
     </environment_context>
-05:message/user:
+07:message/user:
     List the available resources and templates, then read the example note.
 -- request 2 (turn) --
-06:custom_tool_call/exec:text(await tools.list_mcp_resources({"server":"resources"}));
+08:custom_tool_call/exec:text(await tools.list_mcp_resources({"server":"resources"}));
     text(await tools.list_mcp_resource_templates({"server":"resources"}));
     text(await tools.read_mcp_resource({"server":"resources","uri":"memo://codex/example-note"}));
-07:custom_tool_call_output:Script completed
+09:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
      | {"server":"resources","resources":[{"server":"resources","uri":"memo://codex/example-note","name":"examp...ed for integration tests.","mimeType":"text/plain"}]} [hash=75d187638a7af2d4] | {"server":"resources","resourceTemplates":[{"server":"resources","uriTemplate":"memo://codex/{slug}","na... resources used in tests.","mimeType":"text/plain"}]} [hash=b1c7082eb114fc9b] | {"server":"resources","uri":"memo://codex/example-note","contents":[{"uri":"memo://codex/example-note","...mple MCP resource served by the rmcp test server."}]} [hash=45385fc57640b555]

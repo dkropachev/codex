@@ -1980,7 +1980,15 @@ fn drop_last_n_user_turns_preserves_annotations_for_surviving_developer_fragment
     };
     let mut user_message = user_input_text_msg("turn to roll back");
     user_message.set_turn_id_if_missing(turn_id);
-    let mut history = create_history_with_items(vec![developer_message, user_message]);
+    let mut oversized_switch =
+        ContextualUserFragment::into(ModelSwitchInstructions::new("123".repeat(/*n*/ 10_001)));
+    oversized_switch.set_turn_id_if_missing(turn_id);
+    let parts = crate::context::bound_model_instruction_items(vec![oversized_switch]);
+    assert!(parts.len() > 1);
+    let mut items = vec![developer_message];
+    items.extend(parts);
+    items.push(user_message);
+    let mut history = create_history_with_items(items);
 
     history.drop_last_n_user_turns(/*num_turns*/ 1);
 

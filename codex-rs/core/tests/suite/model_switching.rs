@@ -7,7 +7,6 @@ use codex_core::config::Constrained;
 use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_login::CodexAuth;
-use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_prompts::render_model_instructions;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -172,19 +171,48 @@ fn configure_model_switching_fixture(model: &mut ModelInfo) {
     model.comp_hash = None;
 }
 
-#[test_case(None; "model only")]
-#[test_case(Some(Personality::Pragmatic); "model and personality")]
+fn model_switch_text(request: &core_test_support::responses::ResponsesRequest) -> String {
+    for item in request.input() {
+        if item["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("<model_switch>"))
+        {
+            assert!(
+                serde_json::to_vec(&item)
+                    .expect("serialize instruction item")
+                    .len()
+                    <= 10_000
+            );
+        }
+    }
+    request.model_switch_texts().concat()
+}
+
+#[test_case(None, None; "model only")]
+#[test_case(Some(Personality::Pragmatic), None; "model and personality")]
+#[test_case(None, Some("123".repeat(/*n*/ 10_001)); "token_dense_initial_switch")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn first_turn_model_change_appends_model_instructions_developer_message(
     personality: Option<Personality>,
+    instructions: Option<String>,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
     let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
 
-    let mut builder =
-        test_codex().with_model_info_override("gpt-5.6-terra", configure_model_switching_fixture);
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.6-terra", configure_model_switching_fixture)
+        .with_model_info_override("gpt-5.5", move |model| {
+            if let Some(instructions) = &instructions {
+                model
+                    .model_messages
+                    .as_mut()
+                    .expect("model message template")
+                    .instructions_template = Some(instructions.clone());
+            }
+        })
+        .with_model("gpt-5.6-terra");
     let test = builder.build_with_auto_env(&server).await?;
     let next_model = "gpt-5.5";
 
@@ -201,16 +229,21 @@ async fn first_turn_model_change_appends_model_instructions_developer_message(
     let request = resp_mock.single_request();
     assert_eq!(request.body_json()["model"], next_model);
     let developer_texts = request.message_input_texts("developer");
-    let expected_model = bundled_models_response()?
+    let expected_model = test
+        .config
+        .model_catalog
+        .as_ref()
+        .expect("fixture model catalog")
         .models
-        .into_iter()
+        .iter()
         .find(|model| model.slug == next_model)
         .expect("expected target model in bundled catalog");
-    let expected_instructions = render_model_instructions(&expected_model);
-    assert!(
-        developer_texts.iter().any(|text| {
-            text.contains("<model_switch>") && text.contains(&expected_instructions)
-        })
+    let expected_instructions = render_model_instructions(expected_model);
+    assert_eq!(
+        model_switch_text(&request),
+        format!(
+            "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n{expected_instructions}\n</model_switch>"
+        )
     );
     assert!(
         developer_texts
@@ -279,33 +312,63 @@ async fn first_turn_after_empty_prefix_fork_preserves_inherited_base_instruction
     if let Some(instructions) = custom_base_instructions {
         assert_eq!(request.instructions_text(), instructions);
     }
-    let model_switch_count = request
-        .message_input_texts("developer")
-        .iter()
-        .filter(|text| text.contains("<model_switch>"))
-        .count();
+    let expected_switches = if custom_base_instructions.is_none() && turn_model != initial_model {
+        let model = test
+            .config
+            .model_catalog
+            .as_ref()
+            .expect("fixture model catalog")
+            .models
+            .iter()
+            .find(|model| model.slug == turn_model)
+            .expect("fork target model");
+        vec![format!(
+            "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n{}\n</model_switch>",
+            render_model_instructions(model)
+        )]
+    } else {
+        Vec::new()
+    };
     assert_eq!(
-        model_switch_count,
-        usize::from(custom_base_instructions.is_none() && turn_model != initial_model),
+        request.model_switch_texts(),
+        expected_switches,
         "only inherited model-generated instructions should change models"
     );
 
     Ok(())
 }
 
+#[test_case(None; "default_instructions")]
+#[test_case(Some("123".repeat(/*n*/ 10_001)); "token_dense_later_switch")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn model_change_appends_model_instructions_developer_message() -> Result<()> {
+async fn model_change_appends_model_instructions_developer_message(
+    instructions: Option<String>,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
     let resp_mock = mount_sse_sequence(
         &server,
-        vec![sse_completed("resp-1"), sse_completed("resp-2")],
+        vec![
+            sse_completed("resp-1"),
+            sse_completed("resp-2"),
+            sse_completed("resp-3"),
+        ],
     )
     .await;
 
-    let mut builder =
-        test_codex().with_model_info_override("gpt-5.6-terra", configure_model_switching_fixture);
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.6-terra", configure_model_switching_fixture)
+        .with_model_info_override("gpt-5.5", move |model| {
+            if let Some(instructions) = &instructions {
+                model
+                    .model_messages
+                    .as_mut()
+                    .expect("model message template")
+                    .instructions_template = Some(instructions.clone());
+            }
+        })
+        .with_model("gpt-5.6-terra");
     let test = builder.build(&server).await?;
     let next_model = "gpt-5.5";
 
@@ -342,19 +405,29 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
+    test.submit_text_turn("Continue with the same model.")
+        .await?;
     let requests = resp_mock.requests();
-    assert_eq!(requests.len(), 2, "expected two model requests");
-
-    let second_request = requests.last().expect("expected second request");
-    assert!(second_request.has_content_kinds(&["model_switch.instructions"]));
-    let developer_texts = second_request.message_input_texts("developer");
-    let model_switch_text = developer_texts
+    assert_eq!(requests.len(), 3);
+    let second_request = &requests[1];
+    let target = test
+        .config
+        .model_catalog
+        .as_ref()
+        .expect("fixture model catalog")
+        .models
         .iter()
-        .find(|text| text.contains("<model_switch>"))
-        .expect("expected model switch message in developer input");
-    assert!(
-        model_switch_text.contains("The user was previously using a different model."),
-        "expected model switch preamble, got: {model_switch_text:?}"
+        .find(|model| model.slug == next_model)
+        .expect("target model in catalog");
+    let expected = format!(
+        "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n{}\n</model_switch>",
+        render_model_instructions(target)
+    );
+    assert_eq!(model_switch_text(second_request), expected);
+    assert_eq!(model_switch_text(&requests[2]), expected);
+    assert_eq!(
+        &requests[2].input()[..second_request.input().len()],
+        second_request.input()
     );
 
     test.codex.ensure_rollout_materialized().await;
@@ -381,6 +454,20 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
             next_model.to_string()
         ]
     );
+
+    let resumed_mock = mount_sse_once(&server, sse_completed("resumed-model")).await;
+    let catalog = test.config.model_catalog.clone();
+    let resumed = test_codex()
+        .with_config(move |config| config.model_catalog = catalog)
+        .restart_with_auto_env(&server, &test)
+        .await?;
+    resumed.submit_text_turn("Continue after restart.").await?;
+    let resumed_request = resumed_mock.single_request();
+    assert_eq!(
+        &resumed_request.input()[..requests[2].input().len()],
+        requests[2].input()
+    );
+    assert_eq!(model_switch_text(&resumed_request), expected);
 
     Ok(())
 }

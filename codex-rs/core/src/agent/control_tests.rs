@@ -3701,6 +3701,7 @@ async fn spawn_agent_full_fork_restores_instructions_after_compaction_discards_p
 async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_once(
     preserve_fork_prefix: bool,
 ) {
+    let current_base = format!("Current model instructions.{}", "123".repeat(/*n*/ 10_001));
     let managed_policy = "Managed policy for every agent.";
     let current_managed_fragment = format!(
         "<managed_developer_instructions>\n{managed_policy}\n</managed_developer_instructions>"
@@ -3723,7 +3724,7 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
         parent_config.model_catalog = Some(ModelsResponse {
             models: vec![model],
         });
-        parent_config.base_instructions = Some("Current model instructions.".to_string());
+        parent_config.base_instructions = Some(current_base.clone());
         parent_config.developer_instructions = parent_developer_instructions.map(str::to_string);
         let mut requirements = parent_config.config_layer_stack.requirements().clone();
         requirements.additional_developer_instructions = Some(codex_config::Sourced::new(
@@ -3854,15 +3855,17 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         }));
-        rollout_items.extend([
-            rollout_response_item(ContextualUserFragment::into(BaseInstructionsFragment(
-                "Original model instructions.".to_string(),
-            ))),
-            rollout_response_item(ContextualUserFragment::into(ModelInstructions {
+        let inherited = crate::context::bound_model_instruction_items(vec![
+            ContextualUserFragment::into(BaseInstructionsFragment(
+                "Original model instructions.".repeat(/*n*/ 2_000),
+            )),
+            ContextualUserFragment::into(ModelInstructions {
                 model: None,
-                instructions: Some("Updated model instructions.".to_string()),
-            })),
+                instructions: Some("Updated model instructions.".repeat(/*n*/ 2_000)),
+            }),
         ]);
+        assert!(inherited.len() > 2);
+        rollout_items.extend(inherited.into_iter().map(rollout_response_item));
         rollout_items.push(rollout_response_item(ContextualUserFragment::into(
             IncrementalToolsHint(
                 codex_prompts::ResolvedIncrementalToolMessages::default().tool_update_hint,
@@ -3971,10 +3974,13 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
         let mut managed_instructions = Vec::new();
         let mut model_instructions = Vec::new();
         for item in history.raw_items() {
-            if let Some(base) = BaseInstructionsFragment::text_from_item(item) {
-                model_instructions.push(base);
-            }
-            let ResponseItem::Message { role, content, .. } = item else {
+            let ResponseItem::Message {
+                role,
+                content,
+                internal_chat_message_metadata_passthrough,
+                ..
+            } = item
+            else {
                 continue;
             };
             if role != "developer" {
@@ -3983,7 +3989,11 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
             for content_item in content {
                 if let ContentItem::InputText { text } = content_item {
                     instruction_count += usize::from(text == "Child developer instructions.");
-                    if ModelInstructions::matches_text(text) {
+                    if ModelInstructions::matches_text(text)
+                        || internal_chat_message_metadata_passthrough.as_ref().is_some_and(|metadata| {
+                            matches!(metadata.content_item_kinds.as_deref(), Some([kind]) if kind.as_str() == "model.instructions.part")
+                        })
+                    {
                         model_instructions.push(text.as_str());
                     }
                     if ManagedDeveloperInstructions::matches_text(text) {
@@ -3993,11 +4003,17 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
             }
         }
         assert_eq!(
-            (instruction_count, managed_instructions, model_instructions),
+            (
+                instruction_count,
+                managed_instructions,
+                BaseInstructionsFragment::text_from_items(history.raw_items()),
+                model_instructions
+            ),
             (
                 1,
                 vec![current_managed_fragment.as_str()],
-                vec!["Current model instructions."],
+                Some(current_base.clone()),
+                Vec::<&str>::new(),
             ),
             "{case}: canonical context reconstruction must keep only the current child, managed, and model instructions"
         );

@@ -1,16 +1,18 @@
 //! Initial base instructions, recorded in history for incremental-tools windows.
 
 use super::ContextualUserFragment;
-use crate::context_manager::MAX_MODEL_CONTEXT_ITEM_TOKENS;
 use crate::utils::json::serialized_json_bytes;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::input_text;
-use codex_utils_string::approx_bytes_for_tokens;
 use codex_utils_string::take_bytes_at_char_boundary;
 use uuid::Uuid;
+
+// Ordinary byte-oriented text tokens consume at least one UTF-8 byte. Bound the complete
+// serialized item, including escaping, IDs, metadata and framing; hidden server framing is separate.
+const MAX_INSTRUCTION_ITEM_BYTES: usize = 10_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BaseInstructionsFragment(pub(crate) String);
@@ -23,7 +25,7 @@ impl BaseInstructionsFragment {
         self,
         prefix_namespace: Uuid,
     ) -> serde_json::Result<Vec<ResponseItem>> {
-        let limit = approx_bytes_for_tokens(MAX_MODEL_CONTEXT_ITEM_TOKENS);
+        let limit = MAX_INSTRUCTION_ITEM_BYTES;
         let instruction_namespace = Uuid::new_v5(&prefix_namespace, self.0.as_bytes());
         let mut complete = ContextualUserFragment::into(self.clone());
         complete.set_id(Some(ResponseItemId::with_suffix(
@@ -34,6 +36,8 @@ impl BaseInstructionsFragment {
             return Ok(vec![complete]);
         }
 
+        // Version split policies independently of the unchanged whole-item identity above.
+        let instruction_namespace = Uuid::new_v5(&instruction_namespace, b"serialized-010000-v1");
         let mut items = Vec::new();
         let mut remaining = self.0.as_str();
         let mut part = 1_u64;
@@ -139,7 +143,7 @@ impl BaseInstructionsFragment {
 
 /// Bounds only new model-instruction messages, preserving their stamped metadata and first ID.
 pub(crate) fn bound_model_instruction_items(items: Vec<ResponseItem>) -> Vec<ResponseItem> {
-    let limit = approx_bytes_for_tokens(MAX_MODEL_CONTEXT_ITEM_TOKENS);
+    let limit = MAX_INSTRUCTION_ITEM_BYTES;
     let mut bounded = Vec::new();
     for item in items {
         let ResponseItem::Message {
@@ -158,13 +162,22 @@ pub(crate) fn bound_model_instruction_items(items: Vec<ResponseItem>) -> Vec<Res
         };
         if role != "developer"
             || !matches!(metadata.content_item_kinds.as_deref(), Some([kind])
-                if matches!(kind.as_str(), BaseInstructionsFragment::KIND | "model.instructions"))
+                if matches!(kind.as_str(), BaseInstructionsFragment::KIND | "model.instructions" | "model_switch.instructions"))
             || text.is_empty()
             || serialized_json_bytes(&item).is_ok_and(|bytes| bytes <= limit)
         {
             bounded.push(item);
             continue;
         }
+        // The pinned finite JSON-number formatter uses at most 24 bytes. Charge that
+        // width while splitting so timestamp precision cannot move payload boundaries.
+        let timestamp_padding = metadata
+            .create_time
+            .as_ref()
+            .and_then(|time| serialized_json_bytes(time).ok())
+            .map(|bytes| 24_usize.saturating_sub(bytes))
+            .unwrap_or_default();
+        let limit = limit.saturating_sub(timestamp_padding);
         let part_kind = if metadata.content_item_kinds.as_deref()
             == Some(&[ContentItemKind(BaseInstructionsFragment::KIND.to_string())])
         {
@@ -196,7 +209,12 @@ pub(crate) fn bound_model_instruction_items(items: Vec<ResponseItem>) -> Vec<Res
                     ..
                 } = &mut result
                 {
-                    *content = vec![BaseInstructionsPart { part, payload }.render()];
+                    *content = vec![match (BaseInstructionsPart { part, payload }).render() {
+                        ContentItem::InputText { text } if matches!(metadata.content_item_kinds.as_deref(), Some([kind]) if kind.as_str() == "model_switch.instructions") => {
+                            super::ModelSwitchInstructions::new(text).render()
+                        }
+                        fragment => fragment,
+                    }];
                     metadata.content_item_kinds =
                         Some(vec![ContentItemKind(part_kind.to_string())]);
                 }

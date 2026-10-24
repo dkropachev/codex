@@ -229,10 +229,34 @@ impl ResponsesRequest {
     }
 
     pub fn instructions_text(&self) -> String {
-        self.message_input_texts("developer")
-            .into_iter()
-            .next()
-            .expect("base instructions developer message")
+        crate::instruction_parts::prefix(&self.input()).1
+    }
+
+    /// Number of rebuilt prompt-only items, excluding stamped conversation history.
+    pub fn request_prefix_len(&self) -> usize {
+        crate::instruction_parts::rebuilt_prefix_len(&self.input())
+    }
+
+    /// Complete logical model-switch messages, joining only validated continuation groups.
+    pub fn model_switch_texts(&self) -> Vec<String> {
+        let input = self.input();
+        let mut switches = Vec::new();
+        let mut index = 0;
+        while index < input.len() {
+            let text = input[index]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default();
+            if input[index]["role"] == "developer" && text.starts_with("<model_switch>") {
+                if let Some((count, text)) = crate::instruction_parts::logical(&input[index..]) {
+                    switches.push(text);
+                    index += count;
+                    continue;
+                }
+                switches.push(text.to_string());
+            }
+            index += 1;
+        }
+        switches
     }
 
     /// Returns all `input_text` spans from `message` inputs for the provided role.
@@ -494,6 +518,28 @@ mod tests {
     }
 
     #[test]
+    fn logical_instructions_preserve_physical_prefix_boundaries() {
+        let part = |ordinal, payload: &str| serde_json::json!({"id": format!("msg_00000000-0000-5000-8000-{ordinal:012}"), "type": "message", "role": "developer", "content": [{"type": "input_text", "text": format!("Base instructions, part {ordinal}. Concatenate consecutive payloads without separators to obtain the complete instructions.\nPayload ({} UTF-8 bytes):\n{payload}", payload.len())}]});
+        let request = request_with_input(
+            serde_json::json!([{"type": "additional_tools", "id": "at_00000000-0000-5000-8000-000000000001"}, part(/*ordinal*/ 1, "first"), part(/*ordinal*/ 2, "é"), {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}]),
+        );
+        assert_eq!(
+            (request.instructions_text(), request.request_prefix_len()),
+            ("firsté".to_string(), 3)
+        );
+        let mut literal = part(/*ordinal*/ 1, "raw");
+        let text = literal["content"][0]["text"].as_str().unwrap();
+        let wrapped = format!(
+            "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n{text}\n</model_switch>"
+        );
+        literal["content"][0]["text"] = serde_json::json!(wrapped);
+        assert_eq!(
+            request_with_input(serde_json::json!([literal])).model_switch_texts(),
+            vec![wrapped]
+        );
+    }
+
+    #[test]
     fn call_output_content_and_success_returns_only_single_text_content_item() {
         let single_text = request_with_input(serde_json::json!([
             {
@@ -548,6 +594,16 @@ pub struct WebSocketRequest {
 }
 
 impl WebSocketRequest {
+    pub fn instructions_text(&self) -> String {
+        crate::instruction_parts::prefix(self.body["input"].as_array().expect("request input")).1
+    }
+
+    pub fn request_prefix_len(&self) -> usize {
+        crate::instruction_parts::rebuilt_prefix_len(
+            self.body["input"].as_array().expect("request input"),
+        )
+    }
+
     pub fn body_json(&self) -> Value {
         self.body.clone()
     }

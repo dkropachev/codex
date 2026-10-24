@@ -220,6 +220,7 @@ async fn base_instructions_use_input_items(responses_lite: bool) -> Result<()> {
 }
 
 #[test_case::test_case("x ".repeat(/*n*/ 40_000); "ascii")]
+#[test_case::test_case("123".repeat(/*n*/ 10_001); "token_dense_digits")]
 #[test_case::test_case("\u{0000}".repeat(/*n*/ 10_000); "escaping_dominated")]
 #[test_case::test_case("🦀é\u{301}漢\"\\\n\u{0000}".repeat(/*n*/ 5_000); "unicode_and_escaping")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -265,7 +266,7 @@ async fn oversized_base_instructions_are_lossless_bounded_and_stable(
     for (index, item) in prefix.iter().enumerate() {
         let bytes = serde_json::to_vec(item)?.len();
         assert!(
-            bytes <= 40_000,
+            bytes <= 10_000,
             "base instruction item has {bytes} serialized bytes"
         );
         assert!(ids.insert(item["id"].as_str().context("message id")?));

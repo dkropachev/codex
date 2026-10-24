@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 429
+assertion_line: 434
 expression: "context_snapshot::format_context_snapshot(\"An MCP discovery call announces a new tool, which is called in the same turn.\",\n&entries,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
 Scenario: An MCP discovery call announces a new tool, which is called in the same turn.
@@ -38,10 +38,14 @@ Settings:
 00:message/developer:
     <MODEL_INSTRUCTIONS>
 01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-02:message/user:
+04:message/user:
     <ENVIRONMENT_CONTEXT>
-03:message/user:
+05:message/user:
     Discover the echo tool, then call it with hello.
 
 ## Window 2 (after request 1)
@@ -54,17 +58,21 @@ Settings: relative to window 1
 00:message/developer:
     <MODEL_INSTRUCTIONS>
 01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-02:message/user:
+04:message/user:
     <ENVIRONMENT_CONTEXT>
-03:message/user:
+05:message/user:
     Discover the echo tool, then call it with hello.
-04:function_call/mcp__discovery.search_tools:{"message":"find echo"}
-05:function_call_output:Wall time: <DURATION> seconds
+06:function_call/mcp__discovery.search_tools:{"message":"find echo"}
+07:function_call_output:Wall time: <DURATION> seconds
     Output:
     {"tools":[{"annotations":{"readOnlyHint":true},"description":"Echo back the provided message and include...ll"}]}},"required":["echo","env"],"type":"object"}}]} [hash=ccb6ffb1e2ec3a2c]
 -- request 3 (request) --
-06:function_call/mcp__discovery.echo:{"message":"hello"}
-07:function_call_output:Wall time: <DURATION> seconds
+08:function_call/mcp__discovery.echo:{"message":"hello"}
+09:function_call_output:Wall time: <DURATION> seconds
     Output:
     {"echo":"ECHOING: hello","env":"discovered"}

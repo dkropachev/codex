@@ -150,7 +150,7 @@ async fn first_request_item_types_roles_and_content_annotations() -> Result<()> 
     let mut guardian_item = request
         .input()
         .into_iter()
-        .nth(1)
+        .nth(request.request_prefix_len())
         .expect("guardian approval should follow the base instructions");
     guardian_item
         .as_object_mut()
@@ -206,7 +206,9 @@ async fn first_request_item_types_roles_and_content_annotations() -> Result<()> 
         .collect::<Vec<_>>()
         .join("\n");
     insta::assert_snapshot!(items, @r#"
-    message developer ["model.base_instructions"]
+    message developer ["model.base_instructions.part"]
+    message developer ["model.base_instructions.part"]
+    message developer ["model.base_instructions.part"]
     message developer ["guardian.approved_action"]
     message developer ["generic.developer_instructions","token_budget.context_window_guidance","permissions.instructions","environments.instructions"]
     message developer ["token_budget.context_window","token_budget.context_window","token_budget.context_window"]

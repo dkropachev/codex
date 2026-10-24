@@ -41,6 +41,7 @@ use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_tool_search_call;
 use core_test_support::responses::mount_response_once_match;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::namespace_child_tool;
@@ -1362,6 +1363,34 @@ async fn grandchild_full_fork_preserves_context_baseline(
             config.model = Some(V2_DEFAULT_MODEL.to_string());
             config.agent_default_subagent_model = Some(V2_DEFAULT_MODEL.to_string());
             config.developer_instructions = Some(INSTRUCTIONS.to_string());
+            if matches!(parent_context, GrandchildParentContext::FullHistory) {
+                config
+                    .features
+                    .enable(Feature::IncrementalTools)
+                    .expect("enable incremental tools");
+                let catalog = config.model_catalog.get_or_insert_with(|| {
+                    bundled_models_response().expect("bundled model catalog")
+                });
+                let model = catalog
+                    .models
+                    .iter_mut()
+                    .find(|model| model.slug == V2_DEFAULT_MODEL)
+                    .expect("default model in catalog");
+                model.use_responses_lite = true;
+                model
+                    .model_messages
+                    .as_mut()
+                    .expect("default model message template")
+                    .instructions_template = Some("123".repeat(/*n*/ 10_001));
+                let mut updated = model.clone();
+                updated.slug = "bounded-fork-model".to_string();
+                updated
+                    .model_messages
+                    .as_mut()
+                    .expect("updated model message template")
+                    .instructions_template = Some("456".repeat(/*n*/ 10_001));
+                catalog.models.push(updated);
+            }
             if compact_parent {
                 config.update_plan_enabled = true;
                 // Use local compaction so the test controls the replacement history.
@@ -1374,8 +1403,26 @@ async fn grandchild_full_fork_preserves_context_baseline(
         .build_with_auto_env(&server)
         .await?;
 
+    if matches!(parent_context, GrandchildParentContext::FullHistory) {
+        let seed = mount_sse_once(&server, sse(vec![ev_completed("bounded-seed")])).await;
+        test.submit_text_turn("Establish bounded base instructions.")
+            .await?;
+        assert_eq!(seed.requests().len(), 1);
+        test.codex
+            .update_thread_settings(ThreadSettingsOverrides {
+                model: Some("bounded-fork-model".to_string()),
+                ..Default::default()
+            })
+            .await?;
+    }
     submit_turn_with_trigger(&test, ROOT_PROMPT, "automation_heartbeat_scheduled").await?;
-    let root_request = root_log.single_request();
+    let mut root_requests = root_log
+        .requests()
+        .into_iter()
+        .filter(|request| request.body_contains_text(ROOT_PROMPT))
+        .collect::<Vec<_>>();
+    assert_eq!(root_requests.len(), 1);
+    let root_request = root_requests.pop().expect("single root request");
     let mut descendant_requests = Vec::new();
     for (mock, agent_name) in [
         (&child_log, "/root/child"),
@@ -1452,6 +1499,38 @@ async fn grandchild_full_fork_preserves_context_baseline(
     );
     if matches!(parent_context, GrandchildParentContext::FullHistory) {
         let parent_input = root_request.input();
+        let parts = parent_input
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item["internal_chat_message_metadata_passthrough"]["content_item_kinds"][0]
+                        .as_str(),
+                    Some("model.base_instructions.part" | "model.instructions.part")
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for kind in ["model.base_instructions.part", "model.instructions.part"] {
+            assert!(parts.iter().filter(|item| item["internal_chat_message_metadata_passthrough"]["content_item_kinds"] == json!([kind])).count() > 1);
+        }
+        for part in &parts {
+            assert!(serde_json::to_vec(part)?.len() <= 10_000);
+        }
+        for descendant in &descendant_requests {
+            let input = descendant.input();
+            let retained = input
+                .iter()
+                .filter(|item| {
+                    matches!(
+                        item["internal_chat_message_metadata_passthrough"]["content_item_kinds"][0]
+                            .as_str(),
+                        Some("model.base_instructions.part" | "model.instructions.part")
+                    )
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(&retained[..parts.len()], parts.as_slice());
+        }
         assert_eq!(
             strip_response_item_ids_from_json(json!(
                 &descendant_requests[0].input()[..parent_input.len()]

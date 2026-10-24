@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios_tools_namespace_budget.rs
+assertion_line: 148
 expression: "context_snapshot::format_request_history_snapshot(\"A crowded tool catalog retains every namespace, discovers a late namespace, and stays unchanged on follow-up.\",\n&requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
 Scenario: A crowded tool catalog retains every namespace, discovers a late namespace, and stays unchanged on follow-up.
@@ -8,7 +9,11 @@ Scenario: A crowded tool catalog retains every namespace, discovers a late names
 -- request 1 (turn) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
-01:message/developer[2]:
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <tools>
         Deferred tool namespaces:
@@ -33,15 +38,15 @@ Scenario: A crowded tool catalog retains every namespace, discovers a late names
         - service_18: Find records & retrieve <details> from this service. Search by project, owner, date, or st...r questions with its title, summary, source link, ... [hash=ef78c2b1fa9afde2]
         - zulu_travel: Find records & retrieve <details> from this service. Search by project, owner, date, or s...r questions with its title, summary, source link, ... [hash=8f37122c26e42e38]
         </tools>
-02:message/user:
+04:message/user:
     <ENVIRONMENT_CONTEXT>
-03:message/user:
+05:message/user:
     Find the record search tool for Zulu Travel.
 -- request 2 (turn) --
-04:tool_search_call
-05:tool_search_output
+06:tool_search_call
+07:tool_search_output
 -- request 3 (turn) --
-06:message/assistant:
+08:message/assistant:
     Zulu Travel provides a record search tool.
-07:message/user:
+09:message/user:
     Are the same services still available?

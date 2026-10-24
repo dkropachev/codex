@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/compact.rs
+assertion_line: 5936
 expression: "format_labeled_requests_snapshot(\"Pre-turn compaction during model switch (without pre-sampling model-switch compaction): current behavior strips incoming <model_switch> from the compact request and restores it in the post-compaction follow-up request.\",\n&[(\"Initial Request (Previous Model)\", &requests[0]),\n(\"Local Compaction Request\", &requests[1]),\n(\"Local Post-Compaction History Layout\", &requests[2]),])"
 ---
 Scenario: Pre-turn compaction during model switch (without pre-sampling model-switch compaction): current behavior strips incoming <model_switch> from the compact request and restores it in the post-compaction follow-up request.
@@ -9,10 +10,14 @@ Scenario: Pre-turn compaction during model switch (without pre-sampling model-sw
 00:message/developer:
     <MODEL_INSTRUCTIONS>
 01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-02:message/user:
+04:message/user:
     <ENVIRONMENT_CONTEXT>
-03:message/user:
+05:message/user:
     BEFORE_SWITCH_USER
 
 ## Window 2 (after request 1: settings changed (model, parallel_tool_calls, reasoning, text, tools))
@@ -20,29 +25,74 @@ Scenario: Pre-turn compaction during model switch (without pre-sampling model-sw
 00:message/developer:
     <MODEL_INSTRUCTIONS>
 01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-02:message/user:
+04:message/user:
     <ENVIRONMENT_CONTEXT>
-03:message/user:
-    BEFORE_SWITCH_USER
-04:message/assistant:
-    BEFORE_SWITCH_REPLY
 05:message/user:
+    BEFORE_SWITCH_USER
+06:message/assistant:
+    BEFORE_SWITCH_REPLY
+07:message/user:
     <SUMMARIZATION_PROMPT>
 
-## Window 3 (after request 2: input diverged at item 01, settings changed (parallel_tool_calls, tools))
+## Window 3 (after request 2: input diverged at item 03, settings changed (parallel_tool_calls, tools))
 -- request 3 (turn; Local Post-Compaction History Layout) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
-01:message/developer[2]:
-    [01] <MODEL_SWITCH>
-    [02] <PERMISSIONS_INSTRUCTIONS>
-02:message/user:
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
+    <model_switch>
+    The user was previously using a different model. Please continue the conversation according to the following instructions:
+
+    Base instructions, part 1. Concatenate consecutive payloads without separators to obtain the complete instructions.
+    Payload (9183 UTF-8 bytes):
+    <model_switch>
+    The user was previously using a different model. Please continue the conversation according to the following instructions:
+
+    <OMITTED 136 LINES; ~2095 TOKENS; hash=80010207848d080c>
+    - Avoid unneeded complexity in your solution.
+    - Do not attempt to fix unrelated bugs or broken tests. It is not your responsibility to fix them. (You ...ntion them to the user in your final message though.) [hash=1d7cd9e46427bb3c]
+    - Update documentation as necessary.
+    - Keep changes consistent with the style of the existing codebase. Changes should be minimal and focused on the task.
+    - Use `git log` and `git blame` to search the history of the codebase if additional context is required.
+    - NEVER add copyright or license headers unless specifically requested.
+    - Do not waste tokens by re-reading files after calling `apply_patc
+    </model_switch>
+04:message/developer:
+    <MODEL_SWITCH>
+05:message/developer:
+    <model_switch>
+    The user was previously using a different model. Please continue the conversation according to the following instructions:
+
+    Base instructions, part 3. Concatenate consecutive payloads without separators to obtain the complete instructions.
+    Payload (2634 UTF-8 bytes):
+    ctual — no filler or conversational commentary and avoid unnecessary repetition
+    - Use present tense and active voice (e.g., “Runs tests” not “This will run tests”).
+    - Keep descriptions self-contained; don’t refer to “above” or “below”.
+    <OMITTED 27 LINES; ~437 TOKENS; hash=ae068e81c9977773>
+    To create a new plan, call `update_plan` with a short list of 1‑sentence steps (no more than 5-7 words e...each step (`pending`, `in_progress`, or `completed`). [hash=3c54fbd6da4a42f8]
+
+    When steps have been completed, use `update_plan` to mark each finished step as `completed` and the next...ple items as complete in a single `update_plan` call. [hash=ae7fb7911db8769f]
+
+    If all steps are complete, ensure you call `update_plan` to mark all steps as `completed`.
+
+    </model_switch>
+    </model_switch>
+06:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+07:message/user:
     <ENVIRONMENT_CONTEXT>
-03:message/user:
+08:message/user:
     BEFORE_SWITCH_USER
-04:message/user:
+09:message/user:
     <COMPACTION_SUMMARY>
     PRETURN_SWITCH_SUMMARY
-05:message/user:
+10:message/user:
     AFTER_SWITCH_USER

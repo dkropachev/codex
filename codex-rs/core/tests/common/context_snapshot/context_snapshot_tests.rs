@@ -501,6 +501,86 @@ fn base_instructions_use_the_same_mode_in_settings_and_annotated_developer_conte
     let multipart = rewrite(&multipart);
     assert!(!multipart.contains("<MODEL_INSTRUCTIONS>"));
     assert!(multipart.contains("Keep neighboring guidance"));
+
+    let part = json!({
+        "type": "message", "role": "developer",
+        "content": [{"type": "input_text", "text": "Base instructions, part 1.\nPayload (5 UTF-8 bytes):\nfirst"}],
+        "internal_chat_message_metadata_passthrough": {"content_item_kinds": ["model.base_instructions.part"]}
+    });
+    let mut next_part = part.clone();
+    next_part["content"][0]["text"] =
+        json!("Base instructions, part 2.\nPayload (6 UTF-8 bytes):\nsecond");
+    let split = json!({"input": [part, next_part]});
+    assert_eq!(
+        rewrite(&split),
+        "Scenario: test\n\n## Window 1\n-- request 1 (request) --\n00:message/developer:\n    <MODEL_INSTRUCTIONS>\n01:message/developer:\n    <MODEL_INSTRUCTIONS>"
+    );
+    let mut changed_payload = split.clone();
+    changed_payload["input"][0]["content"][0]["text"] = json!("A different classified payload");
+    let changed = format_context_snapshot(
+        "test",
+        &[
+            SnapshotEntry::body(&split),
+            SnapshotEntry::body(&changed_payload),
+        ],
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
+    );
+    assert_eq!(changed.matches("## Window").count(), 2);
+    let detailed = captured(&split);
+    assert!(detailed.contains("Payload (5 UTF-8 bytes):"));
+    assert!(detailed.contains("first"));
+    assert!(detailed.contains("Payload (6 UTF-8 bytes):"));
+    assert!(detailed.contains("second"));
+    let known_payloads = [&catalog_prompt[..100], &catalog_prompt[100..]];
+    let known_parts = known_payloads.iter().enumerate().map(|(index, payload)| json!({"type": "message", "role": "developer", "content": [{"type": "input_text", "text": format!("Base instructions, part {}. Concatenate consecutive payloads without separators to obtain the complete instructions.\nPayload ({} UTF-8 bytes):\n{payload}", index + 1, payload.len())}]})).collect::<Vec<_>>();
+    let known_split = json!({"input": known_parts});
+    assert_eq!(
+        rewrite(&known_split)
+            .matches("<MODEL_INSTRUCTIONS>")
+            .count(),
+        2
+    );
+    assert!(captured(&known_split).contains("Base instructions, part 1."));
+    for (key, value) in [
+        ("role", json!("user")),
+        (
+            "internal_chat_message_metadata_passthrough",
+            json!({"content_item_kinds": ["foreign"]}),
+        ),
+    ] {
+        let mut foreign = known_split.clone();
+        foreign["input"][1][key] = value;
+        assert!(!rewrite(&foreign).contains("<MODEL_INSTRUCTIONS>"));
+    }
+    let mut wrapped = known_split.clone();
+    for item in wrapped["input"].as_array_mut().unwrap() {
+        let text = item["content"][0]["text"].as_str().unwrap();
+        item["content"][0]["text"] = json!(format!(
+            "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n{text}\n</model_switch>"
+        ));
+    }
+    assert!(!rewrite(&wrapped).contains("<MODEL_INSTRUCTIONS>"));
+    let mut reordered = known_split;
+    reordered["input"].as_array_mut().unwrap().swap(0, 1);
+    assert!(!rewrite(&reordered).contains("<MODEL_INSTRUCTIONS>"));
+    let unclassified_custom = json!({"input": split["input"].as_array().unwrap().iter().cloned().map(|mut item| { item["internal_chat_message_metadata_passthrough"] = Value::Null; item }).collect::<Vec<_>>()});
+    assert!(!rewrite(&unclassified_custom).contains("<MODEL_INSTRUCTIONS>"));
+    let mut lookalike = split.clone();
+    lookalike["input"][0]["internal_chat_message_metadata_passthrough"] = Value::Null;
+    lookalike["input"][1]["role"] = json!("user");
+    assert!(!rewrite(&lookalike).contains("<MODEL_INSTRUCTIONS>"));
+    let mut mixed = split;
+    mixed["input"][0]["internal_chat_message_metadata_passthrough"]["content_item_kinds"] =
+        json!(["model.base_instructions.part", "developer_instructions"]);
+    mixed["input"][1]["content"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"type": "input_text", "text": "Keep neighboring guidance"}));
+    let mixed = rewrite(&mixed);
+    assert!(!mixed.contains("<MODEL_INSTRUCTIONS>"));
+    assert!(mixed.contains("first"));
+    assert!(mixed.contains("second"));
+    assert!(mixed.contains("Keep neighboring guidance"));
 }
 
 #[test]

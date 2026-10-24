@@ -4550,7 +4550,7 @@ impl Session {
                         if fragment.markers().0 == ModelSwitchInstructions::type_markers().0 =>
                     {
                         // New-model instructions must precede the rest of the developer context.
-                        developer_sections.insert(0, fragment.render_fragment());
+                        items.push(fragment.into_boxed_response_item());
                     }
                     "developer" if fragment.markers().0 == MULTI_AGENT_MODE_OPEN_TAG => {
                         initial_multi_agent_mode = Some(fragment);

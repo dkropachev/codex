@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/model_visible_layout.rs
+assertion_line: 599
 expression: "format_labeled_requests_snapshot(\"First post-resume turn where resumed config model differs from rollout and personality changes.\",\n&[(\"Last Request Before Resume\", &initial_request),\n(\"First Request After Resume\", &resumed_request),])"
 ---
 Scenario: First post-resume turn where resumed config model differs from rollout and personality changes.
@@ -8,32 +9,76 @@ Scenario: First post-resume turn where resumed config model differs from rollout
 -- request 1 (turn; Last Request Before Resume) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
-01:message/developer[2]:
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer[2]:
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
-02:message/user:
+04:message/user:
     <ENVIRONMENT_CONTEXT>
-03:message/user:
+05:message/user:
     seed resume history
 
 ## Window 2 (after request 1: settings changed (model))
 -- request 2 (turn; First Request After Resume) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
-01:message/developer[2]:
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer[2]:
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
-02:message/user:
+04:message/user:
     <ENVIRONMENT_CONTEXT>
-03:message/user:
+05:message/user:
     seed resume history
-04:message/assistant:
+06:message/assistant:
     recorded before resume
-05:message/developer:
+07:message/developer:
+    <model_switch>
+    The user was previously using a different model. Please continue the conversation according to the following instructions:
+
+    Base instructions, part 1. Concatenate consecutive payloads without separators to obtain the complete instructions.
+    Payload (9249 UTF-8 bytes):
+    <model_switch>
+    The user was previously using a different model. Please continue the conversation according to the following instructions:
+
+    <OMITTED 49 LINES; ~1840 TOKENS; hash=288f68999a7654cb>
+    - For landing-page heroes, make the H1 the brand/product/place/person name or a literal offer/category; ...ive value props in supporting copy, not the headline. [hash=dc5206ffe4cccaad]
+    - Websites and games must use visual assets. You can use image search, known relevant images, or generat...specific game assets you use custom SVG/Three.js/etc. [hash=73bcc3ec23735236]
+    - For games or interactive tools with well-established rules, physics, parsing, or AI engines, you use a...er explicitly asks for a from-scratch implementation. [hash=61ff530849642482]
+    - You use Three.js for 3D elements, and make the primary 3D scene full-bleed or unframed and not inside ...renced assets render as intended without overlapping. [hash=d3babc719899ea1f]
+    - You do not put UI cards inside other cards. Do not style page sections as floating cards. Only use car...s or unframed layouts with constrained inner content. [hash=1a6ee6f0b8e59e4e]
+    - You do not add discrete orbs, gradient orbs, or bokeh blobs as decoration or backgrounds.
+    - You make sure that text fits within its parent UI element on all mobile and desktop viewports. Move it to a new line if need
+    </model_switch>
+08:message/developer:
     <MODEL_SWITCH>
-06:message/developer:
+09:message/developer:
+    <model_switch>
+    The user was previously using a different model. Please continue the conversation according to the following instructions:
+
+    Base instructions, part 3. Concatenate consecutive payloads without separators to obtain the complete instructions.
+    Payload (3141 UTF-8 bytes):
+    e are only one or two concrete changes, a clean prose close-out is usually the most humane shape.
+
+    - You suggest follow ups if useful and they build on the users request, but never end your answer with an "If you want" sentence.
+    <OMITTED 18 LINES; ~579 TOKENS; hash=6ae2849805839ee4>
+    - When working for a while, you keep updates informative and varied, but you stay concise.
+    - Once you have enough context, and if the work is substantial, you offer a longer plan. This is the onl...at may run past two sentences and include formatting. [hash=a4f9789e757eef2f]
+    - If you create a checklist or task list, you update item statuses incrementally as each item is completed rather than marking every item done only at the end.
+    - Before performing file edits of any kind, you provide updates explaining what edits you are making.
+    - Tone of your updates must match your personality.
+
+    </model_switch>
+    </model_switch>
+10:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-07:message/user:
+11:message/user:
     <ENVIRONMENT_CONTEXT>
-08:message/user:
+12:message/user:
     resume and change personality

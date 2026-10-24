@@ -34,22 +34,26 @@ Settings:
           - function/wait_agent
 01:message/developer:
     <MODEL_INSTRUCTIONS>
-02:message/developer[2]:
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
+    <MODEL_INSTRUCTIONS>
+04:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <COLLABORATION_MODE>
-03:message/developer:
+05:message/developer:
     <MULTI_AGENT_ROLE>
-04:message/developer:
+06:message/developer:
     <MULTI_AGENT_MODE>
-05:message/user:
+07:message/user:
     Ask a worker to check the release, then finish your turn.
 -- request 2 (turn) --
-06:function_call/collaboration.spawn_agent:{"fork_turns":"none","message":"Check whether the release is ready.","task_name":"worker"}
-07:function_call_output:{"task_name":"/root/worker"}
+08:function_call/collaboration.spawn_agent:{"fork_turns":"none","message":"Check whether the release is ready.","task_name":"worker"}
+09:function_call_output:{"task_name":"/root/worker"}
 -- request 3 (turn) --
-08:message/assistant:
+10:message/assistant:
     I have delegated the release check.
-09:agent_message
+11:agent_message
 
 ## Window 2 (after request 3: input diverged at item 00)
 Settings: same as window 1
@@ -70,17 +74,21 @@ Settings: same as window 1
           - function/wait_agent
 01:message/developer:
     <MODEL_INSTRUCTIONS>
-02:message/developer[2]:
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
+    <MODEL_INSTRUCTIONS>
+04:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <COLLABORATION_MODE>
-03:message/developer:
+05:message/developer:
     <MULTI_AGENT_ROLE>
-04:message/developer:
+06:message/developer:
     <MULTI_AGENT_MODE>
-05:agent_message
+07:agent_message
 -- request 5 (turn) --
-06:function_call/check_release:{}
-07:function_call_output:All release checks passed.
+08:function_call/check_release:{}
+09:function_call_output:All release checks passed.
 
 Woken parent mailbox:
 [

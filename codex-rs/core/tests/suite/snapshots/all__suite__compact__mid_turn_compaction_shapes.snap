@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/compact.rs
+assertion_line: 5350
 expression: "format_history_snapshot(\"True mid-turn continuation compaction after tool output: compact request includes tool artifacts, and the continuation request includes the summary in the same turn.\",\n&[first_turn_mock.single_request(), auto_compact_mock.single_request(),\npost_auto_compact_mock.single_request(),])"
 ---
 Scenario: True mid-turn continuation compaction after tool output: compact request includes tool artifacts, and the continuation request includes the summary in the same turn.
@@ -9,10 +10,14 @@ Scenario: True mid-turn continuation compaction after tool output: compact reque
 00:message/developer:
     <MODEL_INSTRUCTIONS>
 01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-02:message/user:
+04:message/user:
     <ENVIRONMENT_CONTEXT>
-03:message/user:
+05:message/user:
     function call limit push
 
 ## Window 2 (after request 1: settings changed (parallel_tool_calls, text, tools))
@@ -20,26 +25,34 @@ Scenario: True mid-turn continuation compaction after tool output: compact reque
 00:message/developer:
     <MODEL_INSTRUCTIONS>
 01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-02:message/user:
+04:message/user:
     <ENVIRONMENT_CONTEXT>
-03:message/user:
+05:message/user:
     function call limit push
-04:function_call/test_tool:{}
-05:function_call_output:unsupported call: test_tool
-06:message/user:
+06:function_call/test_tool:{}
+07:function_call_output:unsupported call: test_tool
+08:message/user:
     <SUMMARIZATION_PROMPT>
 
-## Window 3 (after request 2: input diverged at item 04, settings changed (parallel_tool_calls, text, tools))
+## Window 3 (after request 2: input diverged at item 06, settings changed (parallel_tool_calls, text, tools))
 -- request 3 (turn) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
 01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
     <PERMISSIONS_INSTRUCTIONS>
-02:message/user:
-    <ENVIRONMENT_CONTEXT>
-03:message/user:
-    function call limit push
 04:message/user:
+    <ENVIRONMENT_CONTEXT>
+05:message/user:
+    function call limit push
+06:message/user:
     <COMPACTION_SUMMARY>
     AUTO_SUMMARY
