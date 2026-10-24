@@ -2788,13 +2788,23 @@ enum LiveSuffix {
     OverBudgetRetainedTool,
 }
 
-#[test_case::test_case(LiveSuffix::User; "newer user")]
-#[test_case::test_case(LiveSuffix::Tool; "only assistant and tools")]
-#[test_case::test_case(LiveSuffix::RetainedTool; "retained standalone output")]
-#[test_case::test_case(LiveSuffix::OverBudgetRetainedTool; "ready adoption still over budget")]
+#[derive(Clone, Copy)]
+enum BackgroundBaseInstructions {
+    Default,
+    DeclarationsOnly,
+    RecordedEmpty,
+}
+
+#[test_case::test_case(LiveSuffix::User, BackgroundBaseInstructions::Default; "newer user")]
+#[test_case::test_case(LiveSuffix::Tool, BackgroundBaseInstructions::Default; "only assistant and tools")]
+#[test_case::test_case(LiveSuffix::RetainedTool, BackgroundBaseInstructions::Default; "retained standalone output")]
+#[test_case::test_case(LiveSuffix::OverBudgetRetainedTool, BackgroundBaseInstructions::Default; "ready adoption still over budget")]
+#[test_case::test_case(LiveSuffix::Tool, BackgroundBaseInstructions::DeclarationsOnly; "background declarations preserve configured base")]
+#[test_case::test_case(LiveSuffix::Tool, BackgroundBaseInstructions::RecordedEmpty; "background recorded empty base suppresses fallback")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
     suffix: LiveSuffix,
+    background_base: BackgroundBaseInstructions,
 ) -> Result<()> {
     use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::ModeKind;
@@ -2880,12 +2890,41 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
         }
     };
     let (_config_server, test) = async_compaction_test(streaming.uri(), features, move |config| {
+        if !matches!(background_base, BackgroundBaseInstructions::Default) {
+            config.base_instructions = Some("Configured background instructions.".to_string());
+            config
+                .features
+                .disable(Feature::IncrementalTools)
+                .expect("inject the background instruction prefix explicitly");
+        }
         if over_budget {
             config.async_compaction_threshold_percent = 1;
             config.model_auto_compact_token_limit = Some(5_000);
         }
     })
     .await?;
+    if !matches!(background_base, BackgroundBaseInstructions::Default) {
+        let mut items = vec![json!({
+            "type": "additional_tools", "role": "developer", "tools": [],
+        })];
+        if matches!(background_base, BackgroundBaseInstructions::RecordedEmpty) {
+            items.push(json!({
+                "type": "message", "role": "developer",
+                "content": [{"type": "input_text", "text": ""}],
+                "internal_chat_message_metadata_passthrough": {
+                    "content_item_kinds": ["model.base_instructions"],
+                },
+            }));
+        }
+        test.codex
+            .inject_response_items(
+                items
+                    .into_iter()
+                    .map(serde_json::from_value)
+                    .collect::<serde_json::Result<Vec<ResponseItem>>>()?,
+            )
+            .await?;
+    }
     test.codex.ensure_rollout_materialized().await;
     let compaction_event = |event: &EventMsg| match event {
         EventMsg::ItemStarted(event) if matches!(event.item, TurnItem::ContextCompaction(_)) => {
@@ -2900,6 +2939,60 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
     test.submit_text_turn("Draft the launch notes.").await?;
     let timeout = Duration::from_secs(/*secs*/ 20);
     tokio::time::timeout(timeout, streaming.wait_for_request_count(/*count*/ 2)).await?;
+    if !matches!(background_base, BackgroundBaseInstructions::Default) {
+        // The gated background response cannot replace this captured history yet.
+        let history = test.codex.conversation_history_snapshot().await;
+        assert!(
+            history
+                .items()
+                .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
+        );
+        let recorded = history
+            .items()
+            .filter_map(|item| {
+                let ResponseItem::Message {
+                    content,
+                    internal_chat_message_metadata_passthrough: Some(metadata),
+                    ..
+                } = item else {
+                    return None;
+                };
+                matches!(metadata.content_item_kinds.as_deref(), Some([kind])
+                    if matches!(kind.as_str(), "model.base_instructions" | "model.base_instructions.part"))
+                    .then_some(content.clone())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            serde_json::to_value(recorded)?,
+            match background_base {
+                BackgroundBaseInstructions::DeclarationsOnly => json!([]),
+                BackgroundBaseInstructions::RecordedEmpty => {
+                    json!([[{"type": "input_text", "text": ""}]])
+                }
+                BackgroundBaseInstructions::Default => unreachable!("explicit fixture prefix"),
+            }
+        );
+        let background: serde_json::Value = serde_json::from_slice(&streaming.requests().await[1])?;
+        let input = background["input"].as_array().expect("background input");
+        assert!(input.iter().any(|item| item["type"] == "additional_tools"));
+        let base = input
+            .iter()
+            .filter(|item| {
+                item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                    == json!(["model.base_instructions"])
+            })
+            .map(|item| item["content"].clone())
+            .collect::<Vec<_>>();
+        let expected = match background_base {
+            BackgroundBaseInstructions::DeclarationsOnly => "Configured background instructions.",
+            BackgroundBaseInstructions::RecordedEmpty => "",
+            BackgroundBaseInstructions::Default => unreachable!("explicit fixture prefix"),
+        };
+        assert_eq!(
+            base,
+            vec![json!([{"type": "input_text", "text": expected}])]
+        );
+    }
     let next_input = if matches!(suffix, LiveSuffix::User) {
         TurnInputRequest::user_input(vec![text("Check who can finish the notes.")])
     } else {
