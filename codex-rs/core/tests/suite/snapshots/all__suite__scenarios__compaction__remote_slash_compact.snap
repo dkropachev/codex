@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios_compaction_tests.rs
+assertion_line: 80
 expression: "context_snapshot::format_context_snapshot(\"A user invokes /compact through remote compaction, persists the replacement history, then continues in the new window.\",\n&[SnapshotEntry::captured(&requests[0]).labeled(\"Before /compact\"),\nSnapshotEntry::captured(&requests[1]).labeled(\"Remote /compact request\"),\nSnapshotEntry::items(&replacement).labeled(\"Stored replacement before next turn\"),\nSnapshotEntry::captured(&requests[2]).labeled(\"First turn after /compact\"),],\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: A user invokes /compact through remote compaction, persists the replacement history, then continues in the new window.
@@ -108,15 +109,15 @@ Settings:
 ## Window 2 (after request 2: input diverged at item 07)
 Settings: unavailable (items only)
 -- request 3 (items; Stored replacement before next turn) --
-00:additional_tools/developer (3; hash=bf2e30605ff5dc17):
-        - namespace/functions; hash=fada4a476a3754dd
+00:additional_tools/developer (3; hash=68d6cf1d20dc114e):
+        - namespace/functions; hash=e1875bbf8d39f064
           - custom/exec
           - function/wait
           - function/request_user_input
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=2c8d6295978dbe63
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=8478a08e9ddf9239
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
