@@ -24,11 +24,16 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use test_case::test_case;
 
-#[test_case(true; "metadata enabled")]
-#[test_case(false; "metadata disabled after capture")]
+#[test_case(true, Some("Window A".to_string()); "metadata enabled")]
+#[test_case(false, Some("Window A".to_string()); "metadata disabled after capture")]
+#[test_case(true, Some("123\"\n".repeat(/*n*/ 6001)); "multipart metadata enabled")]
+#[test_case(false, Some("123\"\n".repeat(/*n*/ 6001)); "multipart metadata disabled")]
+#[test_case(true, Some(String::new()); "recorded empty after declarations")]
+#[test_case(true, None; "declarations without recorded base")]
 #[tokio::test]
 async fn local_compaction_retries_preserve_instructions_and_tool_metadata(
     metadata_enabled: bool,
+    recorded_base: Option<String>,
 ) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
@@ -38,6 +43,7 @@ async fn local_compaction_retries_preserve_instructions_and_tool_metadata(
         Vec::new(),
         move |config| {
             config.model = Some("gpt-5.2".to_string());
+            config.base_instructions = Some("Different configured fallback sentinel".to_string());
             config.model_provider = provider;
             config.model_provider.supports_websockets = false;
             config
@@ -49,12 +55,24 @@ async fn local_compaction_retries_preserve_instructions_and_tool_metadata(
     .await;
 
     // Retries trim the original prefix and early user messages.
-    let mut items = vec![
-        ContextualUserFragment::into(BaseInstructionsFragment("Window A".to_string())),
+    let mut items = Vec::new();
+    if recorded_base.as_deref().is_none_or(str::is_empty) {
+        items.push(ResponseItem::AdditionalTools {
+            id: None,
+            role: "developer".to_string(),
+            tools: Arc::from([]),
+        });
+    }
+    if let Some(text) = &recorded_base {
+        items.push(ContextualUserFragment::into(BaseInstructionsFragment(
+            text.clone(),
+        )));
+    }
+    items.extend([
         user_message("First turn"),
         user_message("Rebuilt context"),
         user_message("Update the plan"),
-    ];
+    ]);
     for index in 0..300 {
         let call_id = format!("direct-{index}");
         let arguments = json!({"plan": [{"step": "x".repeat(7 * 1024), "status": "completed"}]});
@@ -121,6 +139,24 @@ async fn local_compaction_retries_preserve_instructions_and_tool_metadata(
         .record_conversation_items(&turn, turn.model_info(), &items)
         .await;
     let live_history = session.clone_history().await;
+    let recorded_carriers = live_history
+        .raw_items()
+        .filter(|item| BaseInstructionsFragment::text_from_item(item).is_some())
+        .cloned()
+        .map(|mut item| {
+            item.clear_content_item_metadata();
+            item
+        })
+        .collect::<Vec<_>>();
+    if recorded_base
+        .as_ref()
+        .is_some_and(|text| text.len() > 10_000)
+    {
+        assert!(
+            recorded_carriers.len() > 1,
+            "recording must actually split the base"
+        );
+    }
     let mut expected_code_mode_output = live_history
         .raw_items()
         .find(|item| matches!(item, ResponseItem::CustomToolCallOutput { .. }))
@@ -194,17 +230,66 @@ async fn local_compaction_retries_preserve_instructions_and_tool_metadata(
     .await?;
 
     let requests = mock.requests();
+    assert_eq!(requests.len(), 3);
     assert_eq!(
         requests
             .iter()
-            .map(|request| request.message_input_texts("developer").into_iter().next())
+            .map(responses::ResponsesRequest::instructions_text)
             .collect::<Vec<_>>(),
-        [
-            Some("Window A".to_string()),
-            Some("Window A".to_string()),
-            Some("Window A".to_string())
-        ],
+        vec![recorded_base.clone().unwrap_or_default(); 3]
     );
+    let mut suffixes = Vec::new();
+    let mut prefixes = Vec::new();
+    for (index, request) in requests.iter().enumerate() {
+        let input: Vec<ResponseItem> =
+            serde_json::from_value(request.body_json()["input"].clone())?;
+        let count = input
+            .iter()
+            .take_while(|item| BaseInstructionsFragment::text_from_item(item).is_some())
+            .count();
+        assert_eq!(
+            count,
+            input
+                .iter()
+                .filter(|item| BaseInstructionsFragment::text_from_item(item).is_some())
+                .count(),
+            "no orphan or duplicate base outside prefix"
+        );
+        for item in &input[..count] {
+            assert!(serde_json::to_vec(item)?.len() <= 10_000);
+        }
+        if !recorded_base.as_deref().unwrap_or_default().is_empty() {
+            assert!(count > 0);
+            assert_eq!(
+                BaseInstructionsFragment::text_from_items(&input[..count]),
+                recorded_base
+            );
+            if index > 0 {
+                assert_eq!(request.request_prefix_len(), count);
+            }
+        }
+        prefixes.push(input[..count].to_vec());
+        suffixes.push(input[count..].to_vec());
+    }
+    assert_eq!(prefixes[0], recorded_carriers);
+    assert_eq!(suffixes[0], suffixes[1]);
+    if recorded_base.as_deref() == Some("") {
+        assert_eq!(
+            prefixes[1], prefixes[0],
+            "complete empty base survives declaration trimming"
+        );
+        assert!(
+            prefixes[2].is_empty(),
+            "empty fallback must not inject configured sentinel"
+        );
+        assert_eq!(suffixes[1], suffixes[2]);
+    } else {
+        assert_eq!(
+            prefixes[1], prefixes[2],
+            "rebuilt prefix is stable on later retry"
+        );
+        assert_eq!(suffixes[0][1..], suffixes[2]);
+    }
     for request in &requests {
         assert!(request.inputs_of_type("compaction_trigger").is_empty());
         assert_eq!(

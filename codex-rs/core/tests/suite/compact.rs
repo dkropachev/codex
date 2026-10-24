@@ -4532,8 +4532,10 @@ async fn auto_compact_persists_rollout_entries() {
     );
 }
 
+#[test_case::test_case(false; "classic")]
+#[test_case::test_case(true; "recorded multipart base")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn manual_compact_retries_after_context_window_error() {
+async fn manual_compact_retries_after_context_window_error(multipart: bool) {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
@@ -4552,24 +4554,46 @@ async fn manual_compact_retries_after_context_window_error() {
         ev_completed("r2"),
     ]);
 
-    let request_log = mount_sse_sequence(
-        &server,
-        vec![
-            user_turn.clone(),
-            compact_failed.clone(),
-            compact_succeeds.clone(),
-        ],
-    )
-    .await;
-
-    let model_provider = non_openai_model_provider(&server);
+    let initial_log = mount_sse_once(&server, user_turn).await;
+    let instructions = "123\"\n".repeat(/*n*/ 6001);
+    let expected_instructions = instructions.clone();
+    let model_provider = if multipart {
+        ModelProviderInfo::create_openai_provider(Some(format!("{}/v1", server.uri())))
+    } else {
+        non_openai_model_provider(&server)
+    };
 
     let mut builder = test_codex().with_config(move |config| {
         config.model_provider = model_provider;
+        config.model_provider.supports_websockets = false;
+        if multipart {
+            // Keep typed OpenAI metadata while exercising public local compaction.
+            config.model_provider.capabilities =
+                Some(codex_model_provider_info::ModelProviderCapabilities {
+                    remote_compaction: Some(
+                        codex_model_provider_info::RemoteCompactionSupport::Unsupported,
+                    ),
+                    ..Default::default()
+                });
+            config.model = Some("gpt-5.2".to_string());
+            config.base_instructions = Some(instructions);
+            config
+                .features
+                .enable(Feature::IncrementalTools)
+                .expect("enable incremental tools");
+        }
         set_test_compact_prompt(config);
         config.model_auto_compact_token_limit = Some(200_000);
     });
-    let codex = builder.build(&server).await.unwrap().codex;
+    if multipart {
+        builder =
+            builder.with_model_info_override("gpt-5.2", |model| model.use_responses_lite = true);
+    }
+    let codex = builder
+        .build_with_auto_env(&server)
+        .await
+        .expect("build retry fixture")
+        .codex;
 
     codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
@@ -4577,18 +4601,101 @@ async fn manual_compact_retries_after_context_window_error() {
             text_elements: Vec::new(),
         }]))
         .await
-        .unwrap();
+        .expect("submit initial turn");
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    codex.submit(Op::Compact).await.unwrap();
+    let initial = initial_log.single_request();
+    let initial_input = initial.input();
+    let base_start = multipart.then(|| {
+        initial_input
+            .iter()
+            .position(|item| {
+                item["internal_chat_message_metadata_passthrough"]["content_item_kinds"][0]
+                    == "model.base_instructions.part"
+            })
+            .expect("freshly recorded multipart base")
+    });
+    let failures = base_start.map_or(/*default*/ 1, |index| index + 2);
+    let mut responses = vec![compact_failed; failures];
+    responses.push(compact_succeeds);
+    let request_log = mount_sse_sequence(&server, responses).await;
+    codex
+        .submit(Op::Compact)
+        .await
+        .expect("submit manual compaction");
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let requests = request_log.requests();
+    let mut requests = vec![initial];
+    requests.extend(request_log.requests());
     assert_eq!(
         requests.len(),
-        3,
-        "expected user turn and two compact attempts"
+        failures + 2,
+        "expected user turn and all compact attempts"
     );
+
+    if let Some(start) = base_start {
+        let attempts = &requests[1..];
+        let first = attempts[0].input();
+        let carriers = first
+            .iter()
+            .filter(|item| {
+                item["internal_chat_message_metadata_passthrough"]["content_item_kinds"][0]
+                    == "model.base_instructions.part"
+            })
+            .count();
+        assert!(
+            carriers > 1,
+            "real recording must produce multipart stimulus"
+        );
+        assert_eq!(
+            attempts[0].request_prefix_len(),
+            0,
+            "initial base is stamped history, not rebuilt fallback"
+        );
+        let rebuilt = attempts
+            .iter()
+            .position(|request| request.request_prefix_len() > 0)
+            .expect("retry must trim actual part 1");
+        assert_eq!(rebuilt, start + 1);
+        assert!(
+            attempts.len() - rebuilt >= 2,
+            "observe stable fallback on later retry"
+        );
+        let prefix = attempts[rebuilt].input();
+        let prefix_len = attempts[rebuilt].request_prefix_len();
+        for (index, request) in attempts.iter().enumerate() {
+            assert_eq!(request.instructions_text(), expected_instructions);
+            let input = request.input();
+            if index < rebuilt {
+                assert_eq!(
+                    input,
+                    first[index..],
+                    "before base trim, retain entire remaining recorded input"
+                );
+            } else {
+                assert_eq!(&input[..prefix_len], &prefix[..prefix_len]);
+                assert_eq!(
+                    &input[prefix_len..],
+                    &first[start + carriers + index - rebuilt..]
+                );
+                assert_eq!(input.iter().filter(|item|
+                    item["internal_chat_message_metadata_passthrough"]["content_item_kinds"][0] == "model.base_instructions.part"
+                ).count(), prefix_len, "no duplicate or orphan base outside rebuilt prefix");
+            }
+            for item in input.iter().filter(|item| {
+                item["internal_chat_message_metadata_passthrough"]["content_item_kinds"][0]
+                    == "model.base_instructions.part"
+            }) {
+                assert!(
+                    serde_json::to_vec(item)
+                        .expect("serialize base carrier")
+                        .len()
+                        <= 10_000
+                );
+            }
+        }
+        return;
+    }
 
     let compact_attempt = requests[1].body_json();
     let retry_attempt = requests[2].body_json();
