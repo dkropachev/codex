@@ -309,6 +309,14 @@ async fn run_compact_task_inner_impl(
                         "Context window exceeded while compacting; removing oldest history item. Error: {e}"
                     );
                     history.remove_first_item();
+                    // A trimmed first part must not leave orphan base continuations.
+                    while history.raw_items().next().is_some_and(|item| {
+                        BaseInstructionsFragment::text_from_item(item).is_some()
+                    }) && BaseInstructionsFragment::text_from_items(history.raw_items())
+                        .is_none()
+                    {
+                        history.remove_first_item();
+                    }
                     retries = 0;
                     continue;
                 }

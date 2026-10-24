@@ -1,5 +1,6 @@
 ---
 source: tui/src/managed_worktree_model_tests.rs
+assertion_line: 249
 expression: "context_snapshot::format_context_snapshot(\"Model request history for creating, polling and listing a task-attached checkout through MCP, without a separate creation confirmation. Separate assertions verify retained cwd/environment roots, not sandbox enforcement.\",\n&entries,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
 Scenario: Model request history for creating, polling and listing a task-attached checkout through MCP, without a separate creation confirmation. Separate assertions verify retained cwd/environment roots, not sandbox enforcement.
@@ -21,15 +22,33 @@ Settings:
       - function/list_worktrees
 -- request 1 (request) --
 00:message/developer:
+    Base instructions, part 1. Concatenate consecutive payloads without separators to obtain the complete instructions.
+    Payload (9432 UTF-8 bytes):
     You are a coding agent running in the Codex CLI, a terminal-based coding assistant. Codex CLI is an open...I. You are expected to be precise, safe, and helpful. [hash=5125daec1ed78d99]
 
     Your capabilities:
 
     - Receive user prompts and other context provided by the harness, such as files in the workspace.
     - Communicate with the user by streaming thinking & responses, and by making & updating plans.
-    - Emit function calls to run terminal commands and apply patches. Depending on how this specific run is ... More on this in the "Sandbox and approvals" section. [hash=31cf026fa7b25d6d]
+    <OMITTED 86 LINES; ~2038 TOKENS; hash=1bee80a9bb758b1a>
 
-    <OMITTED 180 LINES; ~3987 TOKENS; hash=dd34d4527287c62a>
+    ## Ambition vs. precision
+
+    For tasks that have no prior context (i.e. the user is starting something brand new), you should feel fr... and demonstrate creativity with your implementation. [hash=6fa680955d21bb14]
+
+    If you're operating in an existing codebase, you should make sure you do exactly what the user asks with...s and proactive when completing tasks of this nature. [hash=69bb571245c0f458]
+
+    You should use judicious initiative to decide on the right level of detail and complexity to deliver bas...ld-plating. This might be demonstrated by high-value, [hash=1b962bb1917bc35d]
+01:message/developer:
+    Base instructions, part 2. Concatenate consecutive payloads without separators to obtain the complete instructions.
+    Payload (7687 UTF-8 bytes):
+     creative touches when scope of the task is vague; while being surgical and targeted when scope is tightly specified.
+
+    ## Sharing progress updates
+
+    For especially longer tasks that you work on (i.e. requiring many tool calls, or a plan with multiple st...res, subtasks complete), and where you're going next. [hash=204a9e8dfb2a187a]
+
+    <OMITTED 83 LINES; ~1651 TOKENS; hash=ca2071485afbd685>
     ## Shell commands
 
     When using the shell, you must adhere to the following guidelines:
@@ -38,32 +57,32 @@ Settings:
     - Do not use python scripts to attempt to output larger chunks of a file.
 
 
-01:message/developer[2]:
+02:message/developer[2]:
     [01] <SKILLS_INSTRUCTIONS>
     [02] <PERMISSIONS_INSTRUCTIONS>
-02:message/user:
-    <ENVIRONMENT_CONTEXT>
 03:message/user:
+    <ENVIRONMENT_CONTEXT>
+04:message/user:
     Run create_worktree.
 -- request 2 (request) --
-04:function_call/mcp__codex_worktrees.create_worktree:{"allowAsync":true}
-05:function_call_output:Wall time: <DURATION> seconds
+05:function_call/mcp__codex_worktrees.create_worktree:{"allowAsync":true}
+06:function_call_output:Wall time: <DURATION> seconds
     Output: | {"type":"pending","operationId":"<UUID 1>","message":"Creation is running. Poll status; do not repeat creation. Work on independent tasks while waiting."}
 -- request 3 (request) --
-06:message/assistant:
+07:message/assistant:
     Done.
-07:message/user:
+08:message/user:
     Run get_worktree_creation_status.
 -- request 4 (request) --
-08:function_call/mcp__codex_worktrees.get_worktree_creation_status:{"operationId":"<UUID 1>"}
-09:function_call_output:Wall time: <DURATION> seconds
+09:function_call/mcp__codex_worktrees.get_worktree_creation_status:{"operationId":"<UUID 1>"}
+10:function_call_output:Wall time: <DURATION> seconds
     Output: | {"type":"created","worktree":{"root":"<WORKTREE>","workspaceRoot":"<WORKTREE>/","sourceCwd":"<SOURCE>"},...citly and request filesystem permissions if needed."} [hash=b855a2f161fd3a36]
 -- request 5 (request) --
-10:message/assistant:
+11:message/assistant:
     Done.
-11:message/user:
+12:message/user:
     Run list_worktrees.
 -- request 6 (request) --
-12:function_call/mcp__codex_worktrees.list_worktrees:{}
-13:function_call_output:Wall time: <DURATION> seconds
+13:function_call/mcp__codex_worktrees.list_worktrees:{}
+14:function_call_output:Wall time: <DURATION> seconds
     Output: | {"data":[{"id":"<UUID 2>","type":"worktree","root":"<WORKTREE>","workspaceRoot":"<WORKTREE>/","sourceCwd":"<SOURCE>"}],"nextCursor":null}
