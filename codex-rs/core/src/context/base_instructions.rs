@@ -165,8 +165,6 @@ pub(crate) fn bound_model_instruction_items(items: Vec<ResponseItem>) -> Vec<Res
             bounded.push(item);
             continue;
         }
-        let mut remaining = text.as_str();
-        let mut part = 1_u64;
         let part_kind = if metadata.content_item_kinds.as_deref()
             == Some(&[ContentItemKind(BaseInstructionsFragment::KIND.to_string())])
         {
@@ -174,14 +172,23 @@ pub(crate) fn bound_model_instruction_items(items: Vec<ResponseItem>) -> Vec<Res
         } else {
             "model.instructions.part"
         };
+        let mut template = item;
+        let ResponseItem::Message { content, .. } = &mut template else {
+            unreachable!("validated model instruction message");
+        };
+        let Some(ContentItem::InputText { text }) = content.pop() else {
+            unreachable!("validated single instruction text");
+        };
+        let mut remaining = text.as_str();
+        let mut part = 1_u64;
         while !remaining.is_empty() {
             let id = if part == 1 {
-                item.id().cloned()
+                template.id().cloned()
             } else {
                 Some(ResponseItemId::new("msg"))
             };
             let make_item = |payload| {
-                let mut result = item.clone();
+                let mut result = template.clone();
                 result.set_id(id.clone());
                 if let ResponseItem::Message {
                     content,
