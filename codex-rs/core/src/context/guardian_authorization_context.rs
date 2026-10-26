@@ -1,6 +1,7 @@
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::ContentItemMetadata;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -224,6 +225,7 @@ pub(crate) fn guardian_model_input_tokens(items: &[UserInput]) -> usize {
                 // Deliberately longer than a contemporary fractional Unix timestamp.
                 create_time: Some(serde_json::Number::from(999_999_999_999_999_999_i64)),
                 content_item_kinds: Some(content_item_kinds),
+                content_item_metadata: Some(vec![ContentItemMetadata::user(); content.len()]),
                 ..Default::default()
             });
     }

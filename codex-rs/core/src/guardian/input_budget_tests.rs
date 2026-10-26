@@ -210,6 +210,11 @@ async fn finalization_bounds_the_complete_model_visible_item() {
     assert!(!crate::context::guardian_model_context_item_is_bounded(
         &session.response_item_from_user_input(content.clone())
     ));
+    let approval_start = content
+        .iter()
+        .position(|item| matches!(item, UserInput::Text { text, .. } if text.starts_with(">>> APPROVAL REQUEST START\n")))
+        .unwrap();
+    let approval_request = content[approval_start..].to_vec();
     session
         .services
         .thread_extension_data
@@ -222,10 +227,30 @@ async fn finalization_bounds_the_complete_model_visible_item() {
     let [TurnInput::UserInput { content, .. }] = input.as_slice() else {
         panic!("Guardian should retain one user input");
     };
-    let item = session.response_item_from_user_input(content.clone());
+    let mut item = session.response_item_from_user_input(content.clone());
+    Session::stamp_response_item_for_history(&mut item, &step.turn.sub_id);
+    Session::assign_missing_response_item_id(&mut item);
     assert!(crate::context::guardian_model_context_item_is_bounded(
         &item
     ));
+    let ResponseItem::Message {
+        internal_chat_message_metadata_passthrough: Some(metadata),
+        ..
+    } = &item
+    else {
+        panic!("expected an annotated Guardian message");
+    };
+    assert_eq!(
+        metadata.content_item_metadata,
+        Some(vec![
+            codex_protocol::models::ContentItemMetadata::user();
+            content.len()
+        ])
+    );
+    assert_eq!(
+        &content[content.len() - approval_request.len()..],
+        &approval_request
+    );
     let text = content
         .iter()
         .filter_map(|item| match item {
