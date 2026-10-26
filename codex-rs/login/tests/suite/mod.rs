@@ -1,6 +1,8 @@
 // Aggregates all former standalone integration tests as modules.
 #[path = "account_pool__auth_refresh.rs"]
 mod account_pool_auth_refresh;
+#[path = "account_pool_grant_tests.rs"]
+mod account_pool_grant;
 #[path = "account_pool__selection.rs"]
 mod account_pool_selection;
 mod auth_refresh;

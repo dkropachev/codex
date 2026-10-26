@@ -6,6 +6,16 @@ use super::CodexAuth;
 use super::RefreshTokenError;
 
 impl AccountPoolManager {
+    /// Keep the configured member identity alongside its selected credential.
+    pub(in crate::auth) fn cached_auth_with_owner(
+        &self,
+    ) -> Option<(CodexAuth, std::sync::Arc<AuthManager>)> {
+        let pool = self.pools.get(&self.default_pool)?;
+        let (alias, auth) = pool.cached_member_auth(super::AccountPoolUsageBucket::Regular)?;
+        let owner = std::sync::Arc::clone(&pool.member(&alias)?.manager);
+        Some((auth, owner))
+    }
+
     /// Refreshes the credential owner supplied by a request, without switching pool selection.
     pub(crate) async fn refresh_token_if_unchanged(
         &self,

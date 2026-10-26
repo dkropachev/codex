@@ -7,6 +7,7 @@ use sha2::Sha256;
 use std::fmt;
 use std::io;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tokio::sync::OwnedSemaphorePermit;
 
 use super::AuthCredentialsStoreMode;
@@ -22,6 +23,9 @@ use crate::token_data::TokenData;
 /// This does not authorize a destination; consumers must validate the recorded issuer/client.
 pub struct AccountOAuthGrant {
     pub(super) manager: Arc<AuthManager>,
+    owner: Arc<AuthManager>,
+    owner_login_generation: u64,
+    invalidation_generation: u64,
     pub(super) tokens: TokenData,
     pub(super) login_generation: u64,
 }
@@ -62,7 +66,9 @@ impl fmt::Debug for AccountOAuthGrantRevision {
 /// Login and logout remain available and invalidate the grant independently of this lease.
 pub struct AccountOAuthGrantLease {
     pub(super) grant: AccountOAuthGrant,
+    owner_permit: Option<OwnedSemaphorePermit>,
     pub(super) permit: OwnedSemaphorePermit,
+    coordination_permit: tokio::sync::OwnedRwLockWriteGuard<()>,
 }
 
 impl fmt::Debug for AccountOAuthGrant {
@@ -85,7 +91,9 @@ impl AccountOAuthGrantLease {
 
     /// Release refresh exclusion before contacting a resource authorization server.
     pub fn release(self) -> AccountOAuthGrant {
+        drop(self.owner_permit);
         drop(self.permit);
+        drop(self.coordination_permit);
         self.grant
     }
 }
@@ -98,15 +106,30 @@ impl AccountOAuthGrant {
     /// Compare credential revisions without exposing the refresh token to state holders.
     pub fn same_credential(&self, other: &Self) -> bool {
         self.login_generation == other.login_generation
+            && self.invalidation_generation == other.invalidation_generation
+            && Arc::ptr_eq(&self.owner, &other.owner)
+            && self.owner_login_generation == other.owner_login_generation
             && AccountOAuthGrantRevision::from(&self.tokens)
                 == AccountOAuthGrantRevision::from(&other.tokens)
     }
 
     pub(super) fn owner_is_current(&self) -> bool {
-        let Ok(cached) = self.manager.inner.read() else {
+        if self.manager.account_pool.as_ref().is_some_and(|pool| {
+            pool.cached_auth_with_owner()
+                .is_none_or(|(_, owner)| !Arc::ptr_eq(&owner, &self.owner))
+        }) {
+            return false;
+        }
+        let Ok(cached) = self.owner.inner.read() else {
             return false;
         };
-        self.manager.auth_change_state_tx.borrow().login_generation == self.login_generation
+        self.manager
+            .account_grant_invalidation
+            .load(Ordering::SeqCst)
+            == self.invalidation_generation
+            && self.manager.auth_change_state_tx.borrow().login_generation == self.login_generation
+            && self.owner.auth_change_state_tx.borrow().login_generation
+                == self.owner_login_generation
             && cached
                 .auth
                 .as_ref()
@@ -147,23 +170,57 @@ impl AuthManager {
     pub async fn lease_account_oauth_grant(
         self: &Arc<Self>,
     ) -> std::io::Result<Option<AccountOAuthGrantLease>> {
+        // The writer excludes every member, including active, proactive and detached refreshes.
+        let coordination_permit = Arc::clone(&self.pool_refresh_gate).write_owned().await;
         let permit = Arc::clone(&self.refresh_lock)
             .acquire_owned()
             .await
             .map_err(|_| std::io::Error::other("Account refresh coordination is unavailable."))?;
+        let owner = if !self.has_external_auth()
+            && let Some(pool) = &self.account_pool
+        {
+            let Some((_, owner)) = pool.cached_auth_with_owner() else {
+                return Ok(None);
+            };
+            owner
+        } else {
+            Arc::clone(self)
+        };
+        let owner_permit = if Arc::ptr_eq(self, &owner) {
+            None
+        } else {
+            Some(
+                Arc::clone(&owner.refresh_lock)
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| {
+                        std::io::Error::other("Account refresh coordination is unavailable.")
+                    })?,
+            )
+        };
         let login_generation = self.auth_change_state_tx.borrow().login_generation;
+        let owner_login_generation = owner.auth_change_state_tx.borrow().login_generation;
+        let invalidation_generation = self.account_grant_invalidation.load(Ordering::SeqCst);
         let Some(tokens) = self.read_account_grant_tokens().await? else {
             return Ok(None);
         };
         let grant = AccountOAuthGrant {
             manager: Arc::clone(self),
+            owner,
+            owner_login_generation,
+            invalidation_generation,
             tokens,
             login_generation,
         };
         if !grant.owner_is_current() {
             return Ok(None);
         }
-        Ok(Some(AccountOAuthGrantLease { grant, permit }))
+        Ok(Some(AccountOAuthGrantLease {
+            grant,
+            owner_permit,
+            permit,
+            coordination_permit,
+        }))
     }
 
     /// Checks the persisted account owner without requiring an EMA-eligible account grant.
@@ -203,9 +260,20 @@ impl AuthManager {
     }
 
     async fn read_persisted_account_tokens(&self) -> std::io::Result<Option<TokenData>> {
-        let home = self.codex_home.clone();
-        let mode = self.auth_credentials_store_mode;
-        let backend = self.keyring_backend_kind;
+        let owner = if !self.has_external_auth()
+            && let Some(pool) = &self.account_pool
+        {
+            let Some((_, owner)) = pool.cached_auth_with_owner() else {
+                return Ok(None);
+            };
+            Some(owner)
+        } else {
+            None
+        };
+        let owner = owner.as_deref().unwrap_or(self);
+        let home = owner.codex_home.clone();
+        let mode = owner.auth_credentials_store_mode;
+        let backend = owner.keyring_backend_kind;
         let originator = codex_otel::auth_storage::AuthStorageOriginator::current();
         let stored = tokio::task::spawn_blocking(move || {
             originator.sync_scope(|| {
@@ -232,18 +300,29 @@ impl AuthManager {
         let Some(auth @ CodexAuth::Chatgpt(_)) = self.auth_cached() else {
             return Ok(None);
         };
-        let allowed = self.allowed_login_methods();
-        if validate_auth_restrictions(
-            Some(&allowed),
-            self.effective_chatgpt_workspaces().as_deref(),
-            &auth,
-        )
-        .is_err()
-        {
+        let auth_is_allowed = || {
+            validate_auth_restrictions(
+                Some(&self.allowed_login_methods()),
+                self.effective_chatgpt_workspaces().as_deref(),
+                &auth,
+            )
+            .is_ok()
+        };
+        if !auth_is_allowed() {
             return Ok(None);
         }
         let cached = auth.get_token_data()?;
         let stored = self.read_persisted_account_tokens().await?;
+        if self.has_external_auth()
+            || !auth_is_allowed()
+            || self.auth_cached().is_none_or(|current| {
+                !current
+                    .get_token_data()
+                    .is_ok_and(|tokens| same_account_grant(&cached, &tokens))
+            })
+        {
+            return Ok(None);
+        }
         Ok(stored.filter(|tokens| {
             tokens.oauth_provenance.as_ref().is_some_and(|provenance| {
                 !provenance.issuer.trim().is_empty() && !provenance.client_id.trim().is_empty()

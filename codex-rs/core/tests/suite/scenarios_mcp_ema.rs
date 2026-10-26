@@ -141,11 +141,13 @@ http_headers = {{ Authorization = "Bearer ordinary-access" }}
 #[derive(Clone, Copy)]
 enum EnterpriseLifecycle {
     Policy,
+    PooledPolicy,
     Removal,
     RefreshPermissions,
 }
 
 #[test_case::test_case(EnterpriseLifecycle::Policy; "policy")]
+#[test_case::test_case(EnterpriseLifecycle::PooledPolicy; "pooled_policy")]
 #[test_case::test_case(EnterpriseLifecycle::Removal; "removal")]
 #[test_case::test_case(EnterpriseLifecycle::RefreshPermissions; "permission_refresh")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -254,6 +256,13 @@ async fn enterprise_lifecycle_preserves_history_and_ordinary_tools(
         .mount(&mcp)
         .await;
     let home = Arc::new(tempfile::TempDir::new()?);
+    let pooled = matches!(scenario, EnterpriseLifecycle::PooledPolicy);
+    let account_home = if pooled {
+        home.path().join("accounts/work-pro")
+    } else {
+        home.path().to_path_buf()
+    };
+    std::fs::create_dir_all(&account_home)?;
     let id_token = format!("{}.{}.c2lnbmF0dXJl",
         URL_SAFE_NO_PAD.encode(r#"{"alg":"ES256"}"#),
         URL_SAFE_NO_PAD.encode(json!({
@@ -261,7 +270,7 @@ async fn enterprise_lifecycle_preserves_history_and_ordinary_tools(
             "https://api.openai.com/auth": {"chatgpt_user_id":"user","chatgpt_account_id":"workspace","chatgpt_plan_type":"business"},
         }).to_string()));
     std::fs::write(
-        home.path().join("auth.json"),
+        account_home.join("auth.json"),
         serde_json::to_vec(&json!({
             "auth_mode": "chatgpt", "last_refresh": chrono::Utc::now(),
             "tokens": {"id_token": id_token, "access_token":"account-access", "refresh_token":"account-refresh",
@@ -308,7 +317,7 @@ http_headers = {{ Authorization = "Bearer ordinary-access" }}
         config_server: None,
     };
     delivered_policy.publish_snapshot(&mut snapshot);
-    let test = test_codex()
+    let builder = test_codex()
         .with_home(home)
         .with_auth_manager(auth)
         .with_cloud_config_bundle(codex_config::CloudConfigBundleLoader::from_snapshot(
@@ -316,6 +325,27 @@ http_headers = {{ Authorization = "Bearer ordinary-access" }}
         ))
         .with_config(move |config| {
             super::configure_scenario_catalog(config);
+            if pooled {
+                use codex_config::config_toml::AccountPoolDefinitionToml;
+                use codex_config::config_toml::AccountPoolPolicyToml;
+                use codex_config::config_toml::AccountPoolToml;
+                config.forced_login_method =
+                    Some(codex_protocol::config_types::ForcedLoginMethod::Chatgpt);
+                config.cli_auth_credentials_store_mode = AuthCredentialsStoreMode::File;
+                config.account_pool = Some(AccountPoolToml {
+                    enabled: true,
+                    default_pool: Some("enterprise".into()),
+                    pools: [(
+                        "enterprise".into(),
+                        AccountPoolDefinitionToml {
+                            provider: "openai".into(),
+                            policy: AccountPoolPolicyToml::Drain,
+                            accounts: vec!["work-pro".into()],
+                        },
+                    )]
+                    .into(),
+                });
+            }
             if matches!(scenario, EnterpriseLifecycle::RefreshPermissions) {
                 config.permissions.approval_policy = codex_config::Constrained::allow_any(
                     codex_protocol::protocol::AskForApproval::Never,
@@ -330,7 +360,13 @@ http_headers = {{ Authorization = "Bearer ordinary-access" }}
                     .enable(codex_features::Feature::ToolCallMcpElicitation)
                     .expect("MCP approval prompts");
             }
-        })
+        });
+    let builder = if pooled {
+        builder.with_config_auth_manager()
+    } else {
+        builder
+    };
+    let test = builder
         .with_model_info_override("gpt-6-astra", |model| {
             model.tool_mode = Some(ToolMode::Direct);
             model.use_responses_lite = false;
@@ -641,7 +677,7 @@ http_headers = {{ Authorization = "Bearer ordinary-access" }}
     });
     pending_request.wait_until_satisfied().await;
     match scenario {
-        EnterpriseLifecycle::Policy => {
+        EnterpriseLifecycle::Policy | EnterpriseLifecycle::PooledPolicy => {
             let denied =
                 CloudConfigBundleFixture::enterprise_requirement("[features]\nuse_xaa = false\n")
                     .into_bundle();

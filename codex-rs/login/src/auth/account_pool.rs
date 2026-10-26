@@ -127,6 +127,19 @@ pub struct AccountPoolManager {
 
 impl AccountPoolManager {
     pub async fn from_config(config: AccountPoolToml, auth_config: AuthConfig) -> Option<Self> {
+        Self::from_config_with_refresh_gate(
+            config,
+            auth_config,
+            Arc::new(tokio::sync::RwLock::new(())),
+        )
+        .await
+    }
+
+    pub(super) async fn from_config_with_refresh_gate(
+        config: AccountPoolToml,
+        auth_config: AuthConfig,
+        refresh_gate: Arc<tokio::sync::RwLock<()>>,
+    ) -> Option<Self> {
         if !config.enabled {
             return None;
         }
@@ -142,15 +155,15 @@ impl AccountPoolManager {
                 let mut member_auth_config = auth_config.clone();
                 member_auth_config.codex_home =
                     auth_config.codex_home.join("accounts").join(account_id);
+                let mut manager = AuthManager::new_from_auth_config(
+                    member_auth_config,
+                    /*enable_codex_api_key_env*/ false,
+                )
+                .await;
+                manager.pool_refresh_gate = Arc::clone(&refresh_gate);
                 members.push(AccountPoolMember {
                     account_id: account_id.clone(),
-                    manager: Arc::new(
-                        AuthManager::new_from_auth_config(
-                            member_auth_config,
-                            /*enable_codex_api_key_env*/ false,
-                        )
-                        .await,
-                    ),
+                    manager: Arc::new(manager),
                 });
             }
             pools.insert(
@@ -195,8 +208,7 @@ impl AccountPoolManager {
     }
 
     pub fn auth_cached(&self) -> Option<CodexAuth> {
-        let pool = self.pools.get(&self.default_pool)?;
-        pool.select_cached_auth(AccountPoolUsageBucket::Regular)
+        self.cached_auth_with_owner().map(|(auth, _)| auth)
     }
 
     pub fn activate_cached_auth(&self) -> Option<CodexAuth> {
@@ -378,10 +390,6 @@ impl AccountPool {
             });
         }
         None
-    }
-
-    fn select_cached_auth(&self, bucket: AccountPoolUsageBucket) -> Option<CodexAuth> {
-        self.cached_member_auth(bucket).map(|(_, auth)| auth)
     }
 
     fn activate_cached_auth(&self, bucket: AccountPoolUsageBucket) -> Option<CodexAuth> {

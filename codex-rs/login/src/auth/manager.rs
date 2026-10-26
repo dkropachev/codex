@@ -2247,6 +2247,10 @@ pub struct AuthManager {
     chatgpt_base_url: Option<String>,
     agent_identity_authapi_base_url: Option<String>,
     refresh_lock: Arc<Semaphore>,
+    // Explicit logout invalidates grants even when this manager has no cached auth.
+    account_grant_invalidation: AtomicU64,
+    // Always acquire the shared gate before a member refresh semaphore.
+    pub(super) pool_refresh_gate: Arc<tokio::sync::RwLock<()>>,
     agent_identity_lock: Semaphore,
     agent_identity_bootstrap_cooldown: Mutex<AgentIdentityBootstrapCooldown>,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
@@ -2414,6 +2418,8 @@ impl AuthManager {
             chatgpt_base_url,
             agent_identity_authapi_base_url,
             refresh_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
+            account_grant_invalidation: AtomicU64::default(),
+            pool_refresh_gate: Arc::new(tokio::sync::RwLock::new(())),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
@@ -2451,6 +2457,8 @@ impl AuthManager {
             chatgpt_base_url: None,
             agent_identity_authapi_base_url: default_agent_identity_authapi_base_url(),
             refresh_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
+            account_grant_invalidation: AtomicU64::default(),
+            pool_refresh_gate: Arc::new(tokio::sync::RwLock::new(())),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
@@ -2482,6 +2490,8 @@ impl AuthManager {
             chatgpt_base_url: None,
             agent_identity_authapi_base_url: default_agent_identity_authapi_base_url(),
             refresh_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
+            account_grant_invalidation: AtomicU64::default(),
+            pool_refresh_gate: Arc::new(tokio::sync::RwLock::new(())),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
@@ -2521,6 +2531,8 @@ impl AuthManager {
                     .to_string(),
             ),
             refresh_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
+            account_grant_invalidation: AtomicU64::default(),
+            pool_refresh_gate: Arc::new(tokio::sync::RwLock::new(())),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(None),
@@ -2550,6 +2562,8 @@ impl AuthManager {
             chatgpt_base_url: None,
             agent_identity_authapi_base_url: default_agent_identity_authapi_base_url(),
             refresh_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
+            account_grant_invalidation: AtomicU64::default(),
+            pool_refresh_gate: Arc::new(tokio::sync::RwLock::new(())),
             agent_identity_lock: Semaphore::new(/*permits*/ 1),
             agent_identity_bootstrap_cooldown: Mutex::default(),
             external_auth: RwLock::new(Some(Arc::new(BearerTokenRefresher::new(config)))),
@@ -2960,6 +2974,8 @@ impl AuthManager {
 
     fn invalidate_pending_auth_reads(&self) {
         if let Ok(_guard) = self.inner.write() {
+            self.account_grant_invalidation
+                .fetch_add(/*val*/ 1, Ordering::SeqCst);
             self.auth_change_state_tx
                 .send_modify(|state| state.generation += 1);
         }
@@ -3230,10 +3246,13 @@ impl AuthManager {
         if external_auth.is_none()
             && let Some(account_pool_config) = account_pool_config
         {
-            manager.account_pool =
-                AccountPoolManager::from_config(account_pool_config, auth_config)
-                    .await
-                    .map(Arc::new);
+            manager.account_pool = AccountPoolManager::from_config_with_refresh_gate(
+                account_pool_config,
+                auth_config,
+                Arc::clone(&manager.pool_refresh_gate),
+            )
+            .await
+            .map(Arc::new);
         }
         let manager = Arc::new(manager);
         if let Some(external_auth) = external_auth {
@@ -3376,11 +3395,16 @@ impl AuthManager {
             .await
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "grant leases must exclude refresh through authority requests and persistence"
+    )]
     async fn refresh_token_with_reason(
         &self,
         reason: RefreshReason,
         expected_auth: Option<&CodexAuth>,
     ) -> Result<(), RefreshTokenError> {
+        let _pool_refresh_guard = self.pool_refresh_gate.read().await;
         let _refresh_guard = self.refresh_lock.acquire().await.map_err(|_| {
             RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                 RefreshTokenFailedReason::Other,
@@ -3432,10 +3456,24 @@ impl AuthManager {
             .await
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "grant leases must exclude refresh through authority requests and persistence"
+    )]
     async fn refresh_token_from_authority_with_reason(
         &self,
         reason: RefreshReason,
     ) -> Result<(), RefreshTokenError> {
+        if !self.has_external_auth()
+            && self.codex_api_key_env_auth().is_none()
+            && let Some(pool) = self.account_pool.as_ref()
+        {
+            let Some((_, owner)) = pool.cached_auth_with_owner() else {
+                return Ok(());
+            };
+            return Box::pin(owner.refresh_token_from_authority_with_reason(reason)).await;
+        }
+        let _pool_refresh_guard = self.pool_refresh_gate.read().await;
         let _refresh_guard = self.refresh_lock.acquire().await.map_err(|_| {
             RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                 RefreshTokenFailedReason::Other,
