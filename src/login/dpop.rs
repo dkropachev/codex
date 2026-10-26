@@ -20,7 +20,7 @@ use aws_smithy_types::config_bag::ConfigBag;
 use aws_smithy_types::Number;
 use p256::ecdsa::signature::RandomizedSigner;
 use p256::ecdsa::{Signature, SigningKey};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use p256::SecretKey;
 use rand::SeedableRng;
 use std::sync::{Arc, LazyLock};
@@ -69,7 +69,7 @@ impl Payload {
 
 fn header(private_key: &SecretKey) -> Result<Header, LoginTokenError> {
     let public_key = private_key.public_key();
-    let point = public_key.to_encoded_point(false);
+    let point = public_key.to_sec1_point(false);
 
     let x_bytes = point
         .x()
@@ -103,7 +103,8 @@ fn build_message(header: &Header, payload: &Payload) -> String {
 
 fn sign(message: &str, private_key: &SecretKey) -> Result<String, LoginTokenError> {
     let signing_key = SigningKey::from(private_key);
-    let mut rng = rand::rngs::StdRng::from_entropy();
+    let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng)
+        .expect("OS entropy unavailable for AWS login signing");
     let signature: Signature = signing_key.sign_with_rng(&mut rng, message.as_bytes());
     let signature_b64 = base64_simd::URL_SAFE_NO_PAD.encode_to_string(signature.to_bytes());
     Ok(format!("{message}.{signature_b64}"))
@@ -312,6 +313,19 @@ mod tests {
         let dpop = result.unwrap();
         let parts: Vec<&str> = dpop.split('.').collect();
         assert_eq!(parts.len(), 3);
+
+        use p256::ecdsa::signature::Verifier;
+        let signature = Signature::from_slice(
+            &base64_simd::URL_SAFE_NO_PAD
+                .decode_to_vec(parts[2])
+                .unwrap(),
+        )
+        .unwrap();
+        let signed_message = format!("{}.{}", parts[0], parts[1]);
+        SigningKey::from(&private_key)
+            .verifying_key()
+            .verify(signed_message.as_bytes(), &signature)
+            .unwrap();
     }
 
     #[test]

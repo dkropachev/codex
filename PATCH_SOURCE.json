@@ -1,0 +1,13 @@
+{
+  "package": "aws-config",
+  "version": "1.8.12",
+  "published_crate_sha256": "96571e6996817bf3d58f6b569e4b9fd2e9d2fcf9f7424eed07b2ce9bb87535e5",
+  "upstream_revision": "f031610a8cbb4ac2dac3229bfaeaa88182787ab4",
+  "upstream_path": "sdk/aws-config",
+  "changes": [
+    "Upgrade p256 to 0.14 and rand to 0.10 with explicit OS entropy support",
+    "Use the renamed SEC1 API and seed StdRng directly from OS entropy through SysRng",
+    "Verify generated DPoP signatures in the existing login regression test"
+  ],
+  "removal_condition": "Use a published aws-config release whose credentials-login dependency chain uses crypto-bigint >=0.7.6"
+}

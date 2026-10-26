@@ -119,7 +119,7 @@ optional = true
 version = "1.93.0"
 
 [dependencies.p256]
-version = "0.13.2"
+version = "0.14"
 optional = true
 
 [dependencies.sha2]
@@ -141,9 +141,9 @@ version = "1.18.1"
 optional = true
 
 [dependencies.rand]
-version = "0.8.5"
+version = "0.10"
 default-features = false
-features = ["std", "std_rng"]
+features = ["std", "std_rng", "sys_rng"]
 optional = true
 
 [dev-dependencies]

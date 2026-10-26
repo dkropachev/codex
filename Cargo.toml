@@ -167,14 +167,15 @@ optional = true
 version = "1"
 
 [dependencies.p256]
-version = "0.13.2"
+version = "0.14"
 optional = true
 
 [dependencies.rand]
-version = "0.8.5"
+version = "0.10"
 features = [
     "std",
     "std_rng",
+    "sys_rng",
 ]
 optional = true
 default-features = false
