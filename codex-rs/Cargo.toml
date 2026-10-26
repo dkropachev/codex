@@ -575,7 +575,7 @@ windows-sys = "0.61.2"
 winreg = "0.55.0"
 # Preserve the previous compression formats and native bzip2 backend without enabling PPMd.
 zip = { version = "9.0.5", default-features = false, features = ["aes-crypto", "bzip2-rs", "deflate64", "deflate-flate2", "deflate-zopfli", "lzma", "time", "zstd", "xz"] }
-zstd = "0.13"
+zstd = "0.14.3"
 
 wiremock = "0.6"
 zeroize = "1.8.2"

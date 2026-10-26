@@ -284,10 +284,6 @@ async fn guardian_budget_rejects_both_backends_before_sending() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_item_budget_rejects_both_backends_below_aggregate_allowance() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    let fixture = GuardianFailureFixture::with_config(
-        "[features.guardianv2.transcript]\ninclude_images = true\n",
-    )
-    .await?;
     // A valid 45,000-byte 1x1 RGB PNG with a zero-filled private ancillary chunk.
     // The base64 payload is 60,000 bytes, below the image-byte allowance but above
     // the complete serialized-item limit, even though image token accounting fits.
@@ -310,17 +306,28 @@ async fn guardian_item_budget_rejects_both_backends_below_aggregate_allowance() 
             &codex_history::ResponseItemEnvelope::new(evidence.clone())
         )
     );
-    fixture
-        .test
-        .codex
-        .inject_response_items(vec![evidence])
+    for (mode, expected_reason) in [
+        ("snapshot", "input_too_large"),
+        ("conversation", "preparation_failed"),
+    ] {
+        let fixture = GuardianFailureFixture::with_config(&format!(
+            "[features]\nguardianv2_decisions_comparison = true\n[features.guardianv2]\nasync_classifier_mode = \"{mode}\"\n[features.guardianv2.transcript]\ninclude_images = true\n",
+        ))
         .await?;
-    assert_guardian_budget_rejects_both_backends(fixture, allowance).await
+        fixture
+            .test
+            .codex
+            .inject_response_items(vec![evidence.clone()])
+            .await?;
+        assert_guardian_budget_rejects_both_backends(fixture, allowance, expected_reason).await?;
+    }
+    Ok(())
 }
 
 async fn assert_guardian_budget_rejects_both_backends(
     fixture: GuardianFailureFixture,
     max_input_tokens: usize,
+    expected_reason: &str,
 ) -> Result<()> {
     let server = responses::start_mock_server().await;
     let store = fixture.test.codex.thread_extension_data();
@@ -346,6 +353,11 @@ async fn assert_guardian_budget_rejects_both_backends(
     let mut sampler_config = crate::async_scorer::sampler::tests::sampler_config(server.uri());
     sampler_config.max_input_tokens = max_input_tokens;
     store.insert(LunaSampler::new(sampler_config));
+    if store.get::<ConversationBackend>().is_some() {
+        store.insert(ConversationBackend::new(
+            store.get::<LunaSampler>().unwrap(),
+        ));
+    }
     store.insert(DecisionsSampler::new(
         HttpClientBuilder::new().build_direct()?,
         "synthetic-key".into(),
@@ -369,7 +381,7 @@ async fn assert_guardian_budget_rejects_both_backends(
         1,
         vec![
             ("outcome".into(), "skipped".into()),
-            ("reason".into(), "input_too_large".into())
+            ("reason".into(), expected_reason.into())
         ],
     )));
     Ok(())

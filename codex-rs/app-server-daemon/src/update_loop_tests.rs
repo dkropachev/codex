@@ -738,7 +738,7 @@ async fn scheduled_no_op_preserves_daemon_and_hands_off_stale_updater() {
         stale.join("codex-package.json"),
         serde_json::json!({
             "version": "0.8.0",
-            "target": release.strip_prefix("1.0.0-").unwrap(),
+            "target": release.strip_prefix("dkropachev-1.0.0-").unwrap(),
             "entrypoint": "bin/codex"
         })
         .to_string(),

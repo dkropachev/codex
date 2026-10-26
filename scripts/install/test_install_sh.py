@@ -627,7 +627,8 @@ class InstallShTest(unittest.TestCase):
             target = f"{arch}-{'apple-darwin' if system.sysname == 'Darwin' else 'unknown-linux-musl'}"
             packages = root / "codex-home/packages/standalone"
             releases = packages / "releases"
-            versions = ("0.140.0", "0.141.0", VERSION)
+            latest_version = "0.152.0"
+            versions = ("0.150.0", "0.151.0", latest_version)
             install_options = {}
             for version in versions:
                 source = root / version
@@ -646,9 +647,9 @@ class InstallShTest(unittest.TestCase):
                 root, versions[0], **install_options[versions[0]]
             )
             self.assertEqual(first.returncode, 0, first.stderr)
-            oldest = releases / f"{versions[0]}-{target}"
+            oldest = releases / f"dkropachev-{versions[0]}-{target}"
             helper = oldest / "bin/codex-code-mode-host"
-            shutil.copy("/bin/sleep", helper)
+            shutil.copy("/bin/sh", helper)
             if system.sysname == "Darwin":
                 # A copied macOS system binary cannot run with its platform signature.
                 subprocess.run(
@@ -657,7 +658,9 @@ class InstallShTest(unittest.TestCase):
                     capture_output=True,
                 )
             # A helper can outlive its parent CLI; retain its whole release.
-            with subprocess.Popen([str(helper), "300"]) as running:
+            with subprocess.Popen(
+                [str(helper), "-c", "read -r line"], stdin=subprocess.PIPE
+            ) as running:
                 try:
                     second, _ = run_installer_in(
                         root, versions[1], **install_options[versions[1]]
@@ -695,13 +698,13 @@ class InstallShTest(unittest.TestCase):
                     self.assertTrue(oldest.is_dir())
 
                     latest, _ = run_installer_in(
-                        root, "latest", **install_options[VERSION]
+                        root, "latest", **install_options[latest_version]
                     )
                     self.assertEqual(latest.returncode, 0, latest.stderr)
                     self.assertIsNone(running.poll())
                     self.assertTrue(oldest.is_dir(), latest.stderr)
-                    previous = releases / f"{versions[1]}-{target}"
-                    current = releases / f"{VERSION}-{target}"
+                    previous = releases / f"dkropachev-{versions[1]}-{target}"
+                    current = releases / f"dkropachev-{latest_version}-{target}"
                     self.assertEqual((packages / "current").resolve(), current)
                     self.assertTrue(previous.is_dir())
                     self.assertEqual(
@@ -732,7 +735,7 @@ class InstallShTest(unittest.TestCase):
                             )
                             fake_ps.chmod(0o755)
                             retained, _ = run_installer_in(
-                                root, "latest", **install_options[VERSION]
+                                root, "latest", **install_options[latest_version]
                             )
                             self.assertEqual(retained.returncode, 0, retained.stderr)
                             self.assertTrue(oldest.is_dir(), retained.stderr)
@@ -764,7 +767,10 @@ class InstallShTest(unittest.TestCase):
             try:
                 with ThreadPoolExecutor(max_workers=1) as executor:
                     installing = executor.submit(
-                        run_installer_in, root, "latest", **install_options[VERSION]
+                        run_installer_in,
+                        root,
+                        "latest",
+                        **install_options[latest_version],
                     )
                     try:
                         readable, _, _ = select.select([ready_fd], [], [], 30)
@@ -772,7 +778,9 @@ class InstallShTest(unittest.TestCase):
                             readable, "installer did not attempt retirement"
                         )
                         self.assertEqual(os.read(ready_fd, 128), b"ready\n")
-                        with subprocess.Popen([str(helper), "300"]) as late_helper:
+                        with subprocess.Popen(
+                            [str(helper), "-c", "read -r line"], stdin=subprocess.PIPE
+                        ) as late_helper:
                             try:
                                 os.write(resume_fd, b"continue\n")
                                 raced, _ = installing.result(timeout=30)
@@ -792,7 +800,9 @@ class InstallShTest(unittest.TestCase):
 
             # A no-op latest install (also the codex update path) cleans up the
             # now-unused release without rotating previous to current.
-            repeated, _ = run_installer_in(root, "latest", **install_options[VERSION])
+            repeated, _ = run_installer_in(
+                root, "latest", **install_options[latest_version]
+            )
             self.assertEqual(repeated.returncode, 0, repeated.stderr)
             self.assertFalse(oldest.exists(), repeated.stderr)
             self.assertTrue(previous.is_dir())
@@ -1193,7 +1203,12 @@ def run_installer_in(
             "CODEX_INSTALL_DAEMON_ONLY": "1" if daemon_only else "0",
             "CODEX_TEST_ARCHIVE_PATH": str(archive_path or ""),
             "CODEX_TEST_HOST_PATH": str(
-                archive_path.parent / HOST_ASSET if archive_path else ""
+                archive_path.parent
+                / archive_path.name.replace(
+                    "codex-package-", "codex-code-mode-host-"
+                ).removesuffix(".tar.gz")
+                if archive_path
+                else ""
             ),
             "CODEX_TEST_CHECKSUM_PATH": str(checksum_path or ""),
             "CODEX_TEST_METADATA_FAILURE": "1" if metadata_failure else "0",
@@ -1298,19 +1313,20 @@ def create_package_release(
             archive.add(path, arcname=path.name)
 
     archive_digest = file_sha256(archive_path)
-    host_path = root / HOST_ASSET
+    host_asset = f"codex-code-mode-host-{target}"
+    host_path = root / host_asset
     host_path.write_bytes((package_dir / "bin" / "codex-code-mode-host").read_bytes())
     host_digest = file_sha256(host_path)
     checksum_path = root / CHECKSUM_ASSET
     checksum_path.write_text(
-        f"{archive_digest}  {PACKAGE_ASSET}\n{host_digest}  {HOST_ASSET}\n",
+        f"{archive_digest}  {asset}\n{host_digest}  {host_asset}\n",
         encoding="utf-8",
     )
     metadata_json = json.dumps(
         {
             "assets": [
-                {"name": PACKAGE_ASSET, "digest": f"sha256:{archive_digest}"},
-                {"name": HOST_ASSET, "digest": f"sha256:{host_digest}"},
+                {"name": asset, "digest": f"sha256:{archive_digest}"},
+                {"name": host_asset, "digest": f"sha256:{host_digest}"},
                 {
                     "name": CHECKSUM_ASSET,
                     "digest": f"sha256:{file_sha256(checksum_path)}",

@@ -18,4 +18,6 @@ ignore = [
     "RUSTSEC-2026-0372", # zvariant_derive via zbus 4 in codex-tui/keyring 3.6/secret-service 4; remove when credential-store dependencies and TUI migrate to zbus 6
     # Reviewed 2026-10-20: maintenance-only advisory; i18n-config has not released its toml migration.
     "RUSTSEC-2026-0374", # basic-toml via i18n-config 0.4.8/age 0.12.1 in codex-secrets; remove when i18n dependencies adopt toml
+    # Reviewed upstream in openai/codex#57206 on 2026-10-24.
+    "RUSTSEC-2026-0387", # crypto-bigint 0.5.5 via elliptic-curve 0.13.8 in age, AWS login, user verification, and WebRTC; private-key/session-secret timing leakage remains; remove when these paths use crypto-bigint >=0.7.6
 ]

@@ -3,6 +3,7 @@
 //! Instruction and sync-review delivery metadata stay with history. Previously delivered
 //! evidence is omitted before budgeting, using the same instruction filtering as sync.
 
+use codex_core::context::guardian_model_context_item_is_bounded;
 use codex_guardian_context::TranscriptCursor;
 use codex_guardian_context::TruncationObservation;
 use codex_guardian_context::estimate_input_tokens;
@@ -60,7 +61,11 @@ impl LunaSamplingRequest {
             context.into_annotated_messages(),
         );
         let input_tokens = existing_context_tokens.saturating_add(new_input_tokens);
-        if input_tokens > max_input_tokens.saturating_sub(/*rhs*/ 256) {
+        if input_tokens > max_input_tokens.saturating_sub(/*rhs*/ 256)
+            || input
+                .iter()
+                .any(|item| !guardian_model_context_item_is_bounded(item))
+        {
             return None;
         }
         if let Some(mut history) = conversation.take_history() {

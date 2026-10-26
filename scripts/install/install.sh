@@ -764,7 +764,8 @@ prune_standalone_releases() (
     version="$(printf '%s\n' "$metadata" | awk -F '\t' '$1 == "version" {print $2}')"
     target="$(printf '%s\n' "$metadata" | awk -F '\t' '$1 == "target" {print $2}')"
     entrypoint="$(printf '%s\n' "$metadata" | awk -F '\t' '$1 == "entrypoint" {print $2}')"
-    [ "${candidate##*/}" = "$version-$target" ] && [ "$version" != "latest" ] &&
+    { [ "${candidate##*/}" = "dkropachev-$version-$target" ] ||
+      [ "${candidate##*/}" = "$version-$target" ]; } && [ "$version" != "latest" ] &&
       [ "$entrypoint" = "bin/codex" ] && [ -f "$candidate/bin/codex" ] || continue
     validate_version "$version" >/dev/null 2>&1 || continue
     case "$target" in
