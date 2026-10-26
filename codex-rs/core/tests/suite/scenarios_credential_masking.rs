@@ -87,7 +87,7 @@ allow_local_binding = true
 
 [shell_environment_policy]
 ignore_default_excludes = true
-include_only = ["HOME", "PATH", "{credential_env}", "OPENAI_BASE_URL"{startup_env}]
+include_only = ["HOME", "PATH", "TMPDIR", "TMPPREFIX", "TEMP", "TMP", "{credential_env}", "OPENAI_BASE_URL"{startup_env}]
 
 [features]
 unified_exec = true
