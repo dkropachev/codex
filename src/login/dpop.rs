@@ -2,6 +2,7 @@
  * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+// Modified for dkropachev/codex: P-256/RNG compatibility and DPoP verification.
 use crate::login::token::LoginTokenError;
 use aws_sdk_signin::config::auth::Params;
 use aws_smithy_json::serialize::JsonObjectWriter;
