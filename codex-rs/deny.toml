@@ -320,6 +320,10 @@ required-git-spec = "rev"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # List of URLs for allowed Git repositories
 allow-git = [
+    # Original kem 0.3.0-pre.0 trait API, isolated from stable kem 0.3.
+    "https://github.com/RustCrypto/traits",
+    # Checksum-recorded AWS login and legacy ML-KEM compatibility sources.
+    "https://github.com/dkropachev/codex",
     "https://github.com/dzbarsky/rules_rust",
     "https://github.com/helix-editor/nucleo.git",
     # CONNECT request handling needs this pinned H3 revision until released.
@@ -330,6 +334,8 @@ allow-git = [
     "https://github.com/openai-oss-forks/crossterm",
     "https://github.com/openai-oss-forks/tokio-tungstenite",
     "https://github.com/openai-oss-forks/tungstenite-rs",
+    # Pinned upstream age source with the patched RustCrypto dependency chain.
+    "https://github.com/str4d/rage",
 ]
 
 [sources.allow-org]
