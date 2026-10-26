@@ -22,7 +22,7 @@ deterministic = [] # Expose deterministic generation and encapsulation functions
 zeroize = ["dep:zeroize"]
 
 [dependencies]
-kem = "=0.3.0-pre.0"
+kem = { version = "=0.3.0-pre.0", git = "https://github.com/RustCrypto/traits", rev = "f785c95b9e08db25eba1240dabd3ec28efe32da1" }
 hybrid-array = { version = "0.2.0-rc.9", features = ["extra-sizes"] }
 rand_core = "0.6.4"
 sha3 = { version = "0.10.8", default-features = false }

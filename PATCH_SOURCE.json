@@ -1,0 +1,12 @@
+{
+  "package": "ml-kem",
+  "version": "0.2.3",
+  "published_crate_sha256": "8de49b3df74c35498c0232031bb7e85f9389f913e2796169c8ab47a53993a18f",
+  "upstream_revision": "72dbb072b7efb790d6a158053ad352c364e51f6a",
+  "upstream_path": "ml-kem",
+  "changes": [
+    "Resolve the existing kem 0.3.0-pre.0 trait dependency from its exact upstream Git revision to coexist with registry kem 0.3",
+    "No Rust implementation or cryptographic algorithm code changes"
+  ],
+  "removal_condition": "Use a compatible Clatter release that supports the stable KEM trait API"
+}

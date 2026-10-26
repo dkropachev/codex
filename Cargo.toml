@@ -73,6 +73,8 @@ features = ["extra-sizes"]
 
 [dependencies.kem]
 version = "=0.3.0-pre.0"
+git = "https://github.com/RustCrypto/traits"
+rev = "f785c95b9e08db25eba1240dabd3ec28efe32da1"
 
 [dependencies.rand_core]
 version = "0.6.4"
