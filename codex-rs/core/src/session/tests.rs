@@ -4276,7 +4276,7 @@ async fn session_configured_reports_permission_profile_for_external_sandbox() ->
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<()> {
     let server = start_mock_server().await;
-    mount_sse_once(
+    let parent_request = mount_sse_once(
         &server,
         sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
     )
@@ -4355,6 +4355,25 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
     wait_for_event(&forked.thread, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = first_forked_request.single_request();
+    assert_eq!(
+        request.instructions_text(),
+        parent_request.single_request().instructions_text()
+    );
+    let input = request.input();
+    let carriers = input[..request.request_prefix_len()]
+        .iter()
+        .filter(|item| item["type"] == "message")
+        .collect::<Vec<_>>();
+    assert!(carriers.len() > 1);
+    for item in carriers {
+        assert!(serde_json::to_vec(item)?.len() <= 10_000);
+        assert_eq!(
+            item["internal_chat_message_metadata_passthrough"],
+            serde_json::json!({
+                "content_item_kinds": ["model.base_instructions.part"],
+            })
+        );
+    }
     let snapshot = context_snapshot::format_labeled_requests_snapshot(
         "First request after fork when startup preserves the parent baseline, the fork changes approval policy, and the first forked turn enters plan mode.",
         &[("First Forked Turn Request", &request)],
