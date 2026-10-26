@@ -5,7 +5,6 @@ mod account_grant;
 pub use account_grant::AccountOAuthGrant;
 pub use account_grant::AccountOAuthGrantLease;
 pub use account_grant::AccountOAuthGrantRevision;
-use account_grant::same_account_grant;
 use account_grant::same_account_login;
 
 use chrono::Utc;
@@ -2771,126 +2770,6 @@ impl AuthManager {
             session_source,
         )
         .await
-    }
-
-    /// Borrows a persisted account grant while excluding this manager's token refreshes.
-    /// Release the lease after the IdP exchange, then check the grant before using its result.
-    pub async fn lease_account_oauth_grant(
-        self: &Arc<Self>,
-    ) -> std::io::Result<Option<AccountOAuthGrantLease>> {
-        let permit = Arc::clone(&self.refresh_lock)
-            .acquire_owned()
-            .await
-            .map_err(|_| std::io::Error::other("Account refresh coordination is unavailable."))?;
-        let login_generation = self.auth_change_state_tx.borrow().login_generation;
-        let Some(tokens) = self.read_account_grant_tokens().await? else {
-            return Ok(None);
-        };
-        let grant = AccountOAuthGrant {
-            manager: Arc::clone(self),
-            tokens,
-            login_generation,
-        };
-        if !grant.owner_is_current() {
-            return Ok(None);
-        }
-        Ok(Some(AccountOAuthGrantLease { grant, permit }))
-    }
-
-    /// Checks the persisted account owner without requiring an EMA-eligible account grant.
-    /// Dedicated enterprise credentials still belong to this account login.
-    pub async fn account_login_is_current(&self, expected: &CodexAuth) -> std::io::Result<bool> {
-        if !matches!(expected, CodexAuth::Chatgpt(_)) {
-            return Ok(self.auth_cached().is_some_and(|current| {
-                !matches!(current, CodexAuth::Chatgpt(_))
-                    && current.get_account_id() == expected.get_account_id()
-                    && current.get_chatgpt_user_id() == expected.get_chatgpt_user_id()
-            }));
-        }
-        let expected = expected.get_token_data()?;
-        if expected
-            .login_owner_id
-            .as_ref()
-            .is_none_or(String::is_empty)
-        {
-            return Ok(false);
-        }
-        let matches_owner = || {
-            self.auth_cached().is_some_and(|auth| {
-                matches!(auth, CodexAuth::Chatgpt(_))
-                    && auth
-                        .get_token_data()
-                        .is_ok_and(|tokens| account_grant::same_account_login(&expected, &tokens))
-            })
-        };
-        if !matches_owner() {
-            return Ok(false);
-        }
-        let stored = self.read_persisted_account_tokens().await?;
-        Ok(matches_owner()
-            && stored
-                .as_ref()
-                .is_some_and(|tokens| account_grant::same_account_login(&expected, tokens)))
-    }
-
-    async fn read_persisted_account_tokens(&self) -> std::io::Result<Option<TokenData>> {
-        let home = self.codex_home.clone();
-        let mode = self.auth_credentials_store_mode;
-        let backend = self.keyring_backend_kind;
-        let originator = codex_otel::auth_storage::AuthStorageOriginator::current();
-        let stored = tokio::task::spawn_blocking(move || {
-            originator.sync_scope(|| {
-                let _commit = auth_storage_commit_guard()?;
-                create_auth_storage(home, mode, backend).load_account_grant()
-            })
-        })
-        .await
-        .map_err(|_| std::io::Error::other("Account credential read failed."))?
-        .map_err(|_: std::io::Error| {
-            std::io::Error::other("Account credential storage is unavailable.")
-        })?;
-        Ok(stored
-            .filter(|auth| auth.resolved_mode() == AuthMode::Chatgpt)
-            .and_then(|auth| auth.tokens))
-    }
-
-    async fn read_account_grant_tokens(&self) -> std::io::Result<Option<TokenData>> {
-        if self.has_external_auth()
-            || self.auth_credentials_store_mode == AuthCredentialsStoreMode::Ephemeral
-        {
-            return Ok(None);
-        }
-        let Some(auth @ CodexAuth::Chatgpt(_)) = self.auth_cached() else {
-            return Ok(None);
-        };
-        let allowed = self.allowed_login_methods();
-        if validate_auth_restrictions(
-            Some(&allowed),
-            self.effective_chatgpt_workspaces().as_deref(),
-            &auth,
-        )
-        .is_err()
-        {
-            return Ok(None);
-        }
-        let cached = auth.get_token_data()?;
-        let stored = self.read_persisted_account_tokens().await?;
-        Ok(stored.filter(|tokens| {
-            tokens.oauth_provenance.as_ref().is_some_and(|provenance| {
-                !provenance.issuer.trim().is_empty() && !provenance.client_id.trim().is_empty()
-            }) && tokens
-                .login_owner_id
-                .as_ref()
-                .is_some_and(|id| !id.is_empty())
-                && !tokens.refresh_token.is_empty()
-                && tokens
-                    .id_token
-                    .chatgpt_user_id
-                    .as_ref()
-                    .is_some_and(|id| !id.is_empty())
-                && tokens.account_id.as_ref().is_some_and(|id| !id.is_empty())
-                && same_account_grant(tokens, &cached)
-        }))
     }
 
     /// Reloads auth from the active source. Returns whether the auth value changed.
