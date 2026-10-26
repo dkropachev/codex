@@ -63,6 +63,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol_test_support::ContentItemTestExt;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
@@ -316,6 +317,37 @@ fn response_item_contains_message_text(item: &ResponseItem, needle: &str) -> boo
         }
         ContentItem::InputImage { .. } | ContentItem::InputAudio { .. } => false,
     })
+}
+
+fn assert_guardian_instruction_carriers(request: &ResponsesRequest, expected: &str) {
+    assert_eq!(request.instructions_text(), expected);
+    let input = request.input();
+    let carriers = input
+        .iter()
+        .skip_while(|item| item["type"] == "additional_tools")
+        .take_while(|item| {
+            item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                == serde_json::json!(["model.base_instructions.part"])
+        })
+        .collect::<Vec<_>>();
+    assert!(carriers.len() > 1);
+    let metadata = &carriers[0]["internal_chat_message_metadata_passthrough"];
+    let turn_id = metadata["turn_id"].as_str().expect("recorded turn ID");
+    assert!(!turn_id.is_empty());
+    let create_time = &metadata["create_time"];
+    assert!(create_time.is_number());
+    for item in carriers {
+        assert!(serde_json::to_vec(item).unwrap().len() <= 10_000);
+        assert_eq!(
+            item["internal_chat_message_metadata_passthrough"],
+            serde_json::json!({
+                "content_item_kinds": ["model.base_instructions.part"],
+                "content_item_metadata": [codex_protocol::models::ContentItemMetadata::harness()],
+                "turn_id": turn_id,
+                "create_time": create_time,
+            })
+        );
+    }
 }
 
 fn format_guardian_requests_snapshot(
@@ -2553,6 +2585,12 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         tty: false,
     };
 
+    let expected_instructions =
+        guardian_review_session_config(&session, &GuardianReviewContext::from(&turn))
+            .await?
+            .spawn_config
+            .base_instructions
+            .expect("Guardian instructions");
     let outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
@@ -2580,6 +2618,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         Some(codex_analytics::GuardianReviewSessionKind::TrunkNew)
     ));
     let request = request_log.single_request();
+    assert_guardian_instruction_carriers(&request, &expected_instructions);
     let turn_metadata: serde_json::Value = serde_json::from_str(
         &request
             .header("x-codex-turn-metadata")
@@ -2792,6 +2831,12 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         justification: Some("Need to push the first docs fix.".to_string()),
         tty: false,
     };
+    let expected_instructions =
+        guardian_review_session_config(&session, &GuardianReviewContext::from(&turn))
+            .await?
+            .spawn_config
+            .base_instructions
+            .expect("Guardian instructions");
     let first_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
@@ -3080,6 +3125,11 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
 
     let first_body = requests[0].body_json();
     let second_body = requests[1].body_json();
+    for request in &requests[..2] {
+        assert_guardian_instruction_carriers(request, &expected_instructions);
+    }
+    let first_input = requests[0].input();
+    assert_eq!(&requests[1].input()[..first_input.len()], &first_input);
     let third_body = requests[2].body_json();
     let fourth_body = requests[3].body_json();
     let third_input = third_body["input"]
@@ -4363,6 +4413,7 @@ async fn guardian_review_session_config_isolates_parent_customizations() {
                 guardian_output_contract_prompt(),
             )
             .render()
+            .expect_text()
         )
     );
 }
@@ -4486,6 +4537,7 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
                 guardian_output_contract_prompt(),
             )
             .render()
+            .expect_text()
         )
     );
 }

@@ -198,7 +198,7 @@ async fn interrupt_during_pending_work_refresh_preserves_trigger_mail_once() {
     );
     session
         .input_queue
-        .enqueue_mailbox_communication(communication.clone(), Default::default())
+        .enqueue_mailbox_communication(communication.clone().into(), Default::default())
         .await;
 
     let pending_work_start = tokio::spawn({
@@ -231,7 +231,7 @@ async fn interrupt_during_pending_work_refresh_preserves_trigger_mail_once() {
     assert_eq!(
         (first_delivery, second_delivery),
         (
-            vec![TurnInput::InterAgentCommunication(communication)],
+            vec![TurnInput::InterAgentCommunication(communication.into())],
             Vec::new(),
         )
     );

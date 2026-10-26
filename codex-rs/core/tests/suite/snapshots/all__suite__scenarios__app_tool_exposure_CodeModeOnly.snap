@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
+assertion_line: 2703
 expression: "context_snapshot::format_request_history_snapshot(\"A non-deferred connector is called through code mode while another connector stays deferred.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
 Scenario: A non-deferred connector is called through code mode while another connector stays deferred.
@@ -23,16 +24,20 @@ Settings:
 -- request 1 (turn) --
 00:message/developer:
     <MODEL_INSTRUCTIONS>
-01:message/developer[2]:
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <APPS_INSTRUCTIONS>
-02:message/user:
+04:message/user:
     <ENVIRONMENT_CONTEXT>
-03:message/user:
+05:message/user:
     Look up my calendar.
 -- request 2 (turn) --
-04:custom_tool_call/exec:text((await tools.mcp__codex_apps__calendar__lookup({})).content[0].text);
-05:custom_tool_call_output:Script completed
+06:custom_tool_call/exec:text((await tools.mcp__codex_apps__calendar__lookup({})).content[0].text);
+07:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
      | calendar-lookup-ok

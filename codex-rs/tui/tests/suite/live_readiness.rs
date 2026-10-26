@@ -9,13 +9,15 @@ use tokio::sync::broadcast;
 
 #[derive(Default)]
 pub(super) struct ProgramStatus {
-    idle: bool,
+    ready: bool,
 }
 
 impl vt100::Callbacks for ProgramStatus {
     fn unhandled_osc(&mut self, _screen: &mut vt100::Screen, params: &[&[u8]]) {
         if let [b"7501", state] = params {
-            self.idle = *state == b"state=idle:app=codex";
+            self.ready = *state == b"state=idle:app=codex"
+                || *state == b"state=done:app=codex"
+                || *state == b"state=error:app=codex";
         }
     }
 }
@@ -28,7 +30,7 @@ pub(super) async fn wait_for_ready(
 ) -> Result<()> {
     let mut raw = Vec::new();
     tokio::time::timeout(Duration::from_secs(/*secs*/ 30), async {
-        while !screen.callbacks().idle
+        while !screen.callbacks().ready
             || !screen
                 .screen()
                 .contents()

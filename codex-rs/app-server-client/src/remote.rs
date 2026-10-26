@@ -634,7 +634,10 @@ impl crate::AppServerRequestHandle {
             (Self::Remote(left), Self::Remote(right)) => {
                 left.command_tx.same_channel(&right.command_tx)
             }
-            (Self::InProcess(_), Self::Remote(_)) | (Self::Remote(_), Self::InProcess(_)) => false,
+            (Self::Cloud(left), Self::Cloud(right)) => left.commands.same_channel(&right.commands),
+            (Self::InProcess(_), Self::Remote(_) | Self::Cloud(_))
+            | (Self::Remote(_), Self::InProcess(_) | Self::Cloud(_))
+            | (Self::Cloud(_), Self::InProcess(_) | Self::Remote(_)) => false,
         }
     }
 }

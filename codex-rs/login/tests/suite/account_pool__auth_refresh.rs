@@ -68,6 +68,8 @@ async fn refresh_token_uses_active_account_pool_member() -> Result<()> {
         },
         access_token: INITIAL_ACCESS_TOKEN.to_string(),
         refresh_token: INITIAL_REFRESH_TOKEN.to_string(),
+        oauth_provenance: None,
+        login_owner_id: None,
         account_id: Some(account_id.to_string()),
     };
     let initial_auth = AuthDotJson {
@@ -140,10 +142,10 @@ async fn refresh_token_uses_active_account_pool_member() -> Result<()> {
     Ok(())
 }
 
-struct AccountPoolTestConfig {
-    codex_home: PathBuf,
-    chatgpt_base_url: String,
-    account_pool: AccountPoolToml,
+pub(super) struct AccountPoolTestConfig {
+    pub(super) codex_home: PathBuf,
+    pub(super) chatgpt_base_url: String,
+    pub(super) account_pool: AccountPoolToml,
 }
 
 impl AuthManagerConfig for AccountPoolTestConfig {

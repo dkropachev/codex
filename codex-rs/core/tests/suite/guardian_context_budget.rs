@@ -136,28 +136,24 @@ async fn review_preserves_user_instructions_until_request_budgeting(
         codex_guardian_context::MANUAL_APPROVAL_DEVELOPER_PREFIX
     );
     let restriction = "Revoke permission to edit files. Only run the echo command.";
-    // V2 retains the first review's user input. The smallest window exercises
-    // first-review truncation only; the larger windows cover follow-up delivery.
-    if compactions_per_turn.len() == 2 {
-        test.codex
-            .inject_response_items(vec![
-                responses::user_message_item(&followup),
-                ResponseItem::Message {
-                    status: None,
-                    encrypted_content: None,
-                    id: None,
-                    role: "developer".to_owned(),
-                    content: vec![ContentItem::InputText {
-                        text: approval.clone(),
-                    }],
-                    phase: None,
-                    internal_chat_message_metadata_passthrough: None,
-                },
-            ])
-            .await?;
-        test.submit_text_turn(restriction).await?;
-        ThreadIdle::wait(&test.codex).await;
-    }
+    test.codex
+        .inject_response_items(vec![
+            responses::user_message_item(&followup),
+            ResponseItem::Message {
+                status: None,
+                encrypted_content: None,
+                id: None,
+                role: "developer".to_owned(),
+                content: vec![ContentItem::InputText {
+                    text: approval.clone(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            },
+        ])
+        .await?;
+    test.submit_text_turn(restriction).await?;
+    ThreadIdle::wait(&test.codex).await;
     let (compactions, requests): (Vec<_>, Vec<_>) = responses
         .requests()
         .into_iter()
@@ -235,10 +231,10 @@ enum ReviewerResponse {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(1, ReviewerResponse::Decision; "required_context_fails_closed")]
-// Admit the initial tool schemas while oversized tool/image continuations still require recovery.
+// Admit the initial tool schemas while oversized continuations still require recovery.
 #[test_case(6_000, ReviewerResponse::ToolContinuation; "oversized_tool_continuation_compacts")]
 #[test_case(7_000, ReviewerResponse::CachedCompactionContinuation; "cached_compaction_fits_reviewer_budget")]
-#[test_case(6_000, ReviewerResponse::FileImageContinuation; "uploaded_original_image_history_compacts")]
+#[test_case(6_000, ReviewerResponse::FileImageContinuation; "uploaded_original_image_history_omits_oversized_image")]
 #[test_case(5_000, ReviewerResponse::UncompactableContinuation; "ineffective_compaction_fails_closed")]
 #[test_case(5_000, ReviewerResponse::CompactionError; "compaction_service_error_does_not_request_user_approval")]
 #[test_case(6_000, ReviewerResponse::NextReview; "incoming_review_compacts_existing_history")]
@@ -370,7 +366,7 @@ async fn review_respects_complete_context_budget(
                         "text('inspection-output'.repeat(600));",
                     ),
                     // A tiny inline image fits before upload. Its opaque original-detail file
-                    // reference must reserve 10k tokens in reviewer history and force compaction.
+                    // reference reserves 10k tokens and is omitted from the bounded continuation.
                     ReviewerResponse::FileImageContinuation => ev_custom_tool_call(
                         "reviewer-inspect",
                         "exec",

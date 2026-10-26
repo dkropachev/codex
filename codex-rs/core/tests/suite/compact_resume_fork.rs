@@ -5,7 +5,6 @@
 //! request payload that Codex would send to the model and assert that the
 //! model-visible history matches the expected sequence of messages.
 
-use super::compact::COMPACT_WARNING_MESSAGE;
 use super::compact::FIRST_REPLY;
 use super::compact::SUMMARY_TEXT;
 use anyhow::Context;
@@ -24,7 +23,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::ThreadIdle;
 use core_test_support::responses::ResponseMock;
@@ -239,7 +237,12 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     let input_after_resume = json!(requests[requests.len() - 2]["input"]);
     let mut input_after_fork = json!(requests[requests.len() - 1]["input"]);
     // The request prefix has a thread-scoped ID; retained history IDs stay unchanged.
-    input_after_fork[0]["id"] = input_after_compact[0]["id"].clone();
+    let captured = gather_requests(&request_log);
+    let prefix_len = captured[captured.len() - 3].request_prefix_len();
+    assert_eq!(prefix_len, captured.last().unwrap().request_prefix_len());
+    for index in 0..prefix_len {
+        input_after_fork[index]["id"] = input_after_compact[index]["id"].clone();
+    }
 
     let compact_arr = input_after_compact
         .as_array()
@@ -656,17 +659,6 @@ async fn compact_conversation(conversation: &Arc<CodexThread>) {
         .submit(Op::Compact)
         .await
         .expect("compact conversation");
-    let warning_event = wait_for_event(conversation, |ev| {
-        matches!(
-            ev,
-            EventMsg::Warning(WarningEvent { message }) if message == COMPACT_WARNING_MESSAGE
-        )
-    })
-    .await;
-    let EventMsg::Warning(WarningEvent { message }) = warning_event else {
-        panic!("expected warning event after compact");
-    };
-    assert_eq!(message, COMPACT_WARNING_MESSAGE);
     wait_for_event(conversation, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     ThreadIdle::wait(conversation).await;
 }

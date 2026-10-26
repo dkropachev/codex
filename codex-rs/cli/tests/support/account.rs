@@ -84,6 +84,8 @@ fn write_chatgpt_auth_with_expiration(
         auth_mode: Some(AuthMode::Chatgpt),
         openai_api_key: None,
         tokens: Some(TokenData {
+            login_owner_id: None,
+            oauth_provenance: None,
             id_token: codex_login::token_data::parse_chatgpt_jwt_claims(&id_token)?,
             access_token: id_token,
             refresh_token: format!("refresh-{account_id}"),

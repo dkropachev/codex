@@ -3,6 +3,8 @@
 use super::*;
 use codex_context_fragments::AnnotatedContent;
 use codex_context_fragments::RenderedFragment;
+use codex_protocol::models::ContentItemMetadata;
+use codex_protocol_test_support::ContentItemTestExt;
 use codex_utils_output_truncation::approx_token_count;
 use pretty_assertions::assert_eq;
 
@@ -33,9 +35,10 @@ fn role_segment_filters_base_and_appends_bundled_guidance() {
             instructions.render_fragment(),
             RenderedFragment::new(
                 "developer",
-                AnnotatedContent::input_text(
+                AnnotatedContent::text(
                     expected_text,
                     ContentItemKind("multi_agent.role_instructions".to_string()),
+                    ContentItemMetadata::harness(),
                 ),
             ),
         );
@@ -57,7 +60,7 @@ fn role_instructions_bound_model_visible_items() {
             expose_model_overrides: true,
         },
     ] {
-        let rendered = instructions.render();
+        let rendered = instructions.render().expect_text();
         assert!(approx_token_count(&rendered) <= 10_000);
         assert!(rendered.contains("tokens truncated"));
     }

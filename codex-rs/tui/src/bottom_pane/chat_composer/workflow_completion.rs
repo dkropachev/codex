@@ -117,16 +117,14 @@ fn workflow_completion_request(
                 completed.pop();
                 prefix = format!("--{flag_prefix}");
                 CompletionMode::Field
-            } else if let Some(flag) = tokens
-                .get(tokens.len().saturating_sub(2))
-                .and_then(|value| value.strip_prefix("--"))
-            {
+            } else {
+                let flag = tokens
+                    .get(tokens.len().saturating_sub(2))
+                    .and_then(|value| value.strip_prefix("--"))?;
                 completed.truncate(tokens.len().saturating_sub(2));
                 active_field = kebab_flag_to_field(flag);
                 prefix = last.clone();
                 CompletionMode::Value
-            } else {
-                return None;
             }
         }
         Some(last) if last.starts_with("--") => {

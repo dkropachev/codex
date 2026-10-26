@@ -1,12 +1,18 @@
+//! Initial base instructions, recorded in history for incremental-tools windows.
+
 use super::ContextualUserFragment;
-use crate::context_manager::MAX_MODEL_CONTEXT_ITEM_TOKENS;
 use crate::utils::json::serialized_json_bytes;
 use codex_protocol::ResponseItemId;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::ResponseItem;
-use codex_utils_string::approx_bytes_for_tokens;
+use codex_protocol::models::input_text;
 use codex_utils_string::take_bytes_at_char_boundary;
 use uuid::Uuid;
+
+// Ordinary byte-oriented text tokens consume at least one UTF-8 byte. Bound the complete
+// serialized item, including escaping, IDs, metadata and framing; hidden server framing is separate.
+const MAX_INSTRUCTION_ITEM_BYTES: usize = 10_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BaseInstructionsFragment(pub(crate) String);
@@ -19,7 +25,7 @@ impl BaseInstructionsFragment {
         self,
         prefix_namespace: Uuid,
     ) -> serde_json::Result<Vec<ResponseItem>> {
-        let limit = approx_bytes_for_tokens(MAX_MODEL_CONTEXT_ITEM_TOKENS);
+        let limit = MAX_INSTRUCTION_ITEM_BYTES;
         let instruction_namespace = Uuid::new_v5(&prefix_namespace, self.0.as_bytes());
         let mut complete = ContextualUserFragment::into(self.clone());
         complete.set_id(Some(ResponseItemId::with_suffix(
@@ -30,6 +36,8 @@ impl BaseInstructionsFragment {
             return Ok(vec![complete]);
         }
 
+        // Version split policies independently of the unchanged whole-item identity above.
+        let instruction_namespace = Uuid::new_v5(&instruction_namespace, b"serialized-010000-v1");
         let mut items = Vec::new();
         let mut remaining = self.0.as_str();
         let mut part = 1_u64;
@@ -68,19 +76,172 @@ impl BaseInstructionsFragment {
         Ok(items)
     }
 
-    pub(crate) fn matches_item(item: &ResponseItem) -> bool {
+    /// Recovers the original base from consecutive, independently bounded messages.
+    pub(crate) fn text_from_items<'a>(
+        items: impl IntoIterator<Item = &'a ResponseItem>,
+    ) -> Option<String> {
+        let mut restored = String::new();
+        let mut next_part = 1_u64;
+        for item in items {
+            let Some(text) = Self::text_from_item(item) else {
+                if next_part > 1 {
+                    break;
+                }
+                continue;
+            };
+            let is_part = matches!(item, ResponseItem::Message {
+                internal_chat_message_metadata_passthrough: Some(metadata), ..
+            } if matches!(metadata.content_item_kinds.as_deref(), Some([kind])
+                if kind.as_str() == BaseInstructionsPart::KIND));
+            if !is_part {
+                if next_part > 1 {
+                    break;
+                }
+                return Some(text.to_owned());
+            }
+            let framing = text.strip_prefix("Base instructions, part ")?;
+            let (part, framing) = framing.split_once('.')?;
+            if part.parse::<u64>().ok()? != next_part {
+                return None;
+            }
+            let (_, payload) = framing.split_once("\nPayload (")?;
+            let (bytes, payload) = payload.split_once(" UTF-8 bytes):\n")?;
+            if bytes.parse::<usize>().ok()? != payload.len() {
+                return None;
+            }
+            restored.push_str(payload);
+            next_part += 1;
+        }
+        (next_part > 1).then_some(restored)
+    }
+
+    /// Reads only a dedicated, harness-classified base item, including an explicitly empty base.
+    pub(crate) fn text_from_item(item: &ResponseItem) -> Option<&str> {
         let ResponseItem::Message {
+            role,
+            content,
             internal_chat_message_metadata_passthrough: Some(metadata),
             ..
         } = item
         else {
-            return false;
+            return None;
         };
-        metadata
-            .content_item_kinds
-            .as_ref()
-            .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Self::KIND))
+        match (
+            role.as_str(),
+            content.as_slice(),
+            metadata.content_item_kinds.as_deref(),
+        ) {
+            ("developer", [ContentItem::InputText { text }], Some([kind]))
+                if matches!(kind.as_str(), Self::KIND | BaseInstructionsPart::KIND) =>
+            {
+                Some(text)
+            }
+            _ => None,
+        }
     }
+}
+
+/// Bounds only new model-instruction messages, preserving their stamped metadata and first ID.
+pub(crate) fn bound_model_instruction_items(items: Vec<ResponseItem>) -> Vec<ResponseItem> {
+    let limit = MAX_INSTRUCTION_ITEM_BYTES;
+    let mut bounded = Vec::new();
+    for item in items {
+        let ResponseItem::Message {
+            role,
+            content,
+            internal_chat_message_metadata_passthrough: Some(metadata),
+            ..
+        } = &item
+        else {
+            bounded.push(item);
+            continue;
+        };
+        let [ContentItem::InputText { text }] = content.as_slice() else {
+            bounded.push(item);
+            continue;
+        };
+        if role != "developer"
+            || !matches!(metadata.content_item_kinds.as_deref(), Some([kind])
+                if matches!(kind.as_str(), BaseInstructionsFragment::KIND | "model.instructions" | "model_switch.instructions"))
+            || text.is_empty()
+            || serialized_json_bytes(&item).is_ok_and(|bytes| bytes <= limit)
+        {
+            bounded.push(item);
+            continue;
+        }
+        // The pinned finite JSON-number formatter uses at most 24 bytes. Charge that
+        // width while splitting so timestamp precision cannot move payload boundaries.
+        let timestamp_padding = metadata
+            .create_time
+            .as_ref()
+            .and_then(|time| serialized_json_bytes(time).ok())
+            .map(|bytes| 24_usize.saturating_sub(bytes))
+            .unwrap_or_default();
+        let limit = limit.saturating_sub(timestamp_padding);
+        let part_kind = if metadata.content_item_kinds.as_deref()
+            == Some(&[ContentItemKind(BaseInstructionsFragment::KIND.to_string())])
+        {
+            BaseInstructionsPart::KIND
+        } else {
+            "model.instructions.part"
+        };
+        let mut template = item;
+        let ResponseItem::Message { content, .. } = &mut template else {
+            unreachable!("validated model instruction message");
+        };
+        let Some(ContentItem::InputText { text }) = content.pop() else {
+            unreachable!("validated single instruction text");
+        };
+        let mut remaining = text.as_str();
+        let mut part = 1_u64;
+        while !remaining.is_empty() {
+            let id = if part == 1 {
+                template.id().cloned()
+            } else {
+                Some(ResponseItemId::new("msg"))
+            };
+            let make_item = |payload| {
+                let mut result = template.clone();
+                result.set_id(id.clone());
+                if let ResponseItem::Message {
+                    content,
+                    internal_chat_message_metadata_passthrough: Some(metadata),
+                    ..
+                } = &mut result
+                {
+                    *content = vec![match (BaseInstructionsPart { part, payload }).render() {
+                        ContentItem::InputText { text } if matches!(metadata.content_item_kinds.as_deref(), Some([kind]) if kind.as_str() == "model_switch.instructions") => {
+                            super::ModelSwitchInstructions::new(text).render()
+                        }
+                        fragment => fragment,
+                    }];
+                    metadata.content_item_kinds =
+                        Some(vec![ContentItemKind(part_kind.to_string())]);
+                }
+                result
+            };
+            let mut lower = 0;
+            let mut upper = remaining.len().min(limit);
+            while lower < upper {
+                let middle = lower + (upper - lower).div_ceil(/*rhs*/ 2);
+                let payload = take_bytes_at_char_boundary(remaining, middle);
+                if serialized_json_bytes(&make_item(payload)).is_ok_and(|bytes| bytes <= limit) {
+                    lower = middle;
+                } else {
+                    upper = middle - 1;
+                }
+            }
+            let payload = take_bytes_at_char_boundary(remaining, lower);
+            assert!(
+                !payload.is_empty(),
+                "model instruction framing exceeds item budget"
+            );
+            bounded.push(make_item(payload));
+            remaining = &remaining[payload.len()..];
+            part += 1;
+        }
+    }
+    bounded
 }
 
 impl ContextualUserFragment for BaseInstructionsFragment {
@@ -100,8 +261,8 @@ impl ContextualUserFragment for BaseInstructionsFragment {
         ("", "")
     }
 
-    fn body(&self) -> String {
-        self.0.clone()
+    fn body(&self) -> ContentItem {
+        input_text(self.0.clone())
     }
 }
 
@@ -111,9 +272,13 @@ struct BaseInstructionsPart<'a> {
     payload: &'a str,
 }
 
+impl BaseInstructionsPart<'_> {
+    const KIND: &str = "model.base_instructions.part";
+}
+
 impl ContextualUserFragment for BaseInstructionsPart<'_> {
     fn content_kind(&self) -> ContentItemKind {
-        ContentItemKind(BaseInstructionsFragment::KIND.to_string())
+        ContentItemKind(Self::KIND.to_string())
     }
 
     fn role(&self) -> &'static str {
@@ -128,12 +293,12 @@ impl ContextualUserFragment for BaseInstructionsPart<'_> {
         ("", "")
     }
 
-    fn body(&self) -> String {
+    fn body(&self) -> ContentItem {
         let Self { part, payload } = self;
         let bytes = payload.len();
-        format!(
+        input_text(format!(
             "Base instructions, part {part}. Concatenate consecutive payloads without separators to obtain the complete instructions.\nPayload ({bytes} UTF-8 bytes):\n{payload}"
-        )
+        ))
     }
 }
 

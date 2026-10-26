@@ -1074,6 +1074,7 @@ impl UnifiedExecProcessManager {
                 .session
                 .request_approval(approval, approval_context)
                 .await
+                .result
                 .map_err(UnifiedExecError::StdinApproval)?;
         }
 
@@ -1096,6 +1097,15 @@ impl UnifiedExecProcessManager {
         } = self
             .prepare_process_handles(process_id, &locked_process)
             .await?;
+        context
+            .session
+            .services
+            .rollout_thread_trace
+            .record_stdin_target(
+                &context.step_context.turn.sub_id,
+                &context.call_id,
+                &call_id,
+            );
         let remote_exited =
             process.has_exited() && output.drain_policy == OutputDrainPolicy::WaitForOutputClosure;
         // A write racing with remote exit still collects the final output.
@@ -1173,10 +1183,7 @@ impl UnifiedExecProcessManager {
             return Err(UnifiedExecError::process_failed(message));
         }
 
-        // After polling, refresh_process_state tells us whether the PTY is
-        // still alive or has exited and been removed from the store; we thread
-        // that through so the handler can tag or suppress TerminalInteraction
-        // with an appropriate process_id and exit_code.
+        // Only finalize remote sessions after both process exit and output collection.
         let status = self
             .refresh_process_state(process_id, OutputRetention::UntilCollected)
             .await;

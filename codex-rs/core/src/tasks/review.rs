@@ -142,7 +142,7 @@ async fn start_review_conversation(
     let pull_request_context_bytes = pull_request_context
         .as_deref()
         .map(ContextualUserFragment::render)
-        .map_or(0, |context| context.len());
+        .map_or(0, |context| context.into_text().unwrap_or_default().len());
     let prompt_bytes = input
         .iter()
         .filter_map(|item| serde_json::to_vec(item).ok())

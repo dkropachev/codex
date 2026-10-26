@@ -1,12 +1,13 @@
 //! Load bounded history pages into the transcript before updating its owned or inline viewport.
 
+use std::collections::HashSet;
 use std::ops::Range;
 
 use super::*;
 use crate::app_server_session::HISTORY_ITEM_PAGE_LIMIT;
 use crate::app_server_session::thread_items_page_params;
-use crate::history_cell::SessionHeaderHistoryCell;
-use crate::history_cell::SessionInfoCell;
+use crate::history_cell::UserHistoryCell;
+use crate::history_cell::is_session_history_prefix_cell;
 use crate::pager_overlay::TranscriptHistoryState;
 use crate::thread_transcript::RawReasoningVisibility;
 use crate::thread_transcript::thread_items_to_transcript_cells;
@@ -96,13 +97,22 @@ impl App {
         let items = app_server
             .apply_older_history_page(thread_id, cursor, page, &mut turns)
             .await?;
+        let hidden_item_ids = hidden_review_item_ids(&turns);
         let visibility = if self.config.show_raw_agent_reasoning {
             RawReasoningVisibility::Visible
         } else {
             RawReasoningVisibility::Hidden
         };
         let width = tui.terminal.last_known_screen_size.width;
-        let cells = self.project_older_history_cells(items, &turns, thread_id, &cwd, visibility);
+        self.remove_hidden_review_cells(tui, &turns, &hidden_item_ids, thread_id, &cwd, visibility);
+        let cells = self.project_older_history_cells(
+            items,
+            &turns,
+            &hidden_item_ids,
+            thread_id,
+            &cwd,
+            visibility,
+        );
         let inserted = self.prepend_older_transcript_cells(cells);
         self.transcript_view
             .history_loaded(&self.transcript_cells, inserted.clone());
@@ -130,24 +140,102 @@ impl App {
         Ok(())
     }
 
+    /// Remove prompts revealed as internal review input by an older page's review marker.
+    fn remove_hidden_review_cells(
+        &mut self,
+        tui: &mut tui::Tui,
+        turns: &[Turn],
+        hidden_item_ids: &HashSet<&str>,
+        thread_id: ThreadId,
+        cwd: &AbsolutePathBuf,
+        visibility: RawReasoningVisibility,
+    ) {
+        if hidden_item_ids.is_empty() {
+            return;
+        }
+        let user_items = turns
+            .iter()
+            .flat_map(|turn| turn.items.iter())
+            .filter(|item| matches!(item, ThreadItem::UserMessage { .. }))
+            .map(|item| (item.id().to_string(), item.clone()))
+            .collect::<Vec<_>>();
+        let projected_user_cells = thread_items_to_transcript_cells(
+            Some(thread_id),
+            cwd,
+            user_items.iter().map(|(_, item)| item.clone()),
+            visibility,
+            Some(&self.config),
+        );
+        let persisted_user_cells = user_items
+            .into_iter()
+            .zip(projected_user_cells)
+            .map(|((item_id, _), cell)| (item_id, cell))
+            .collect();
+        let indices = hidden_transcript_indices(
+            &self.transcript_cells,
+            persisted_user_cells,
+            hidden_item_ids,
+        );
+        if indices.is_empty() {
+            return;
+        }
+        if self.backtrack.overlay_preview_active {
+            let selected_index = crate::app_backtrack::nth_user_position(
+                &self.transcript_cells,
+                self.backtrack.nth_user_message,
+            );
+            if selected_index.is_some_and(|selected| indices.contains(&selected)) {
+                self.cancel_transcript_browsing(tui);
+            } else {
+                let removed_visible_users = indices
+                    .iter()
+                    .filter(|&&index| {
+                        selected_index.is_some_and(|selected| index < selected)
+                            && crate::app_backtrack::user_count(std::slice::from_ref(
+                                &self.transcript_cells[index],
+                            )) != 0
+                    })
+                    .count();
+                self.backtrack.nth_user_message = self
+                    .backtrack
+                    .nth_user_message
+                    .saturating_sub(removed_visible_users);
+            }
+        }
+        for index in indices {
+            self.transcript_cells.remove(index);
+        }
+        self.native_history.retain(&self.transcript_cells);
+        self.transcript_view.restart_search();
+        self.transcript_view
+            .history_loaded(&self.transcript_cells, 0..0);
+        if let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut() {
+            overlay.replace_cells(self.transcript_cells.clone());
+        }
+    }
+
     /// Project successful turn completion metadata after the corresponding page's final item.
     fn project_older_history_cells(
         &mut self,
         items: Vec<ThreadItem>,
         turns: &[Turn],
+        hidden_item_ids: &HashSet<&str>,
         thread_id: ThreadId,
         cwd: &AbsolutePathBuf,
         visibility: RawReasoningVisibility,
     ) -> Vec<Arc<dyn HistoryCell>> {
         let mut cells = Vec::new();
         for (items, completed_turn) in completion::group_completed_turn_items(items, turns) {
-            cells.extend(thread_items_to_transcript_cells(
-                Some(thread_id),
-                cwd,
-                items,
-                visibility,
-                Some(&self.config),
-            ));
+            // Internal prompts stay invisible, but still separate adjacent tool groups.
+            for visible in items.split(|item| hidden_item_ids.contains(item.id())) {
+                cells.extend(thread_items_to_transcript_cells(
+                    Some(thread_id),
+                    cwd,
+                    visible.iter().cloned(),
+                    visibility,
+                    Some(&self.config),
+                ));
+            }
             if let Some(turn) = completed_turn
                 && let Some(completion) = self
                     .chat_widget
@@ -176,10 +264,7 @@ impl App {
         } else {
             self.transcript_cells
                 .iter()
-                .rposition(|cell| {
-                    cell.as_any().is::<SessionInfoCell>()
-                        || cell.as_any().is::<SessionHeaderHistoryCell>()
-                })
+                .rposition(|cell| is_session_history_prefix_cell(cell.as_ref()))
                 .map_or(/*default*/ 0, |index| index.saturating_add(/*rhs*/ 1))
         };
         let inserted = index..index + cells.len();
@@ -264,6 +349,63 @@ impl App {
         }
         tui.frame_requester().schedule_frame();
     }
+}
+
+/// Classify internal review prompts across page boundaries before rendering any older items.
+fn hidden_review_item_ids(turns: &[Turn]) -> HashSet<&str> {
+    let mut hidden = HashSet::new();
+    let mut review_mode = false;
+    for (index, turn) in turns.iter().enumerate() {
+        let hidden_nested_review_turn = index
+            .checked_sub(/*rhs*/ 1)
+            .and_then(|previous| turns.get(previous))
+            .is_some_and(|previous| {
+                crate::app_backtrack::is_hidden_nested_review_turn(previous, turn)
+            });
+        for item in &turn.items {
+            match item {
+                ThreadItem::EnteredReviewMode { .. } => review_mode = true,
+                ThreadItem::ExitedReviewMode { .. } => review_mode = false,
+                ThreadItem::UserMessage { .. } if review_mode || hidden_nested_review_turn => {
+                    hidden.insert(item.id());
+                }
+                _ => {}
+            }
+        }
+    }
+    hidden
+}
+
+/// Match repeated user messages from newest to oldest so identical visible prompts stay distinct.
+fn hidden_transcript_indices(
+    cells: &[Arc<dyn HistoryCell>],
+    mut persisted_user_cells: Vec<(String, Arc<dyn HistoryCell>)>,
+    hidden_item_ids: &HashSet<&str>,
+) -> Vec<usize> {
+    let mut indices = Vec::new();
+    for (index, cell) in cells.iter().enumerate().rev() {
+        let Some(user_cell) = cell.as_any().downcast_ref::<UserHistoryCell>() else {
+            continue;
+        };
+        let Some(position) = persisted_user_cells.iter().rposition(|(_, projected)| {
+            projected
+                .as_any()
+                .downcast_ref::<UserHistoryCell>()
+                .is_some_and(|projected| {
+                    projected.message == user_cell.message
+                        && projected.text_elements == user_cell.text_elements
+                        && projected.local_image_paths == user_cell.local_image_paths
+                        && projected.remote_image_urls == user_cell.remote_image_urls
+                })
+        }) else {
+            continue;
+        };
+        if hidden_item_ids.contains(persisted_user_cells[position].0.as_str()) {
+            indices.push(index);
+        }
+        persisted_user_cells.truncate(position);
+    }
+    indices
 }
 
 /// Preserve events received while the request was in flight and deduplicate overlapping pages.

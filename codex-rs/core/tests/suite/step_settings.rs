@@ -891,21 +891,33 @@ async fn settings_updates_preserve_turn_identity_and_target(target: SettingsTarg
         Some("original-turn-state".to_string())
     );
     assert_eq!(requests[2].header(TURN_STATE_HEADER), None);
-    let expected_switch_counts = match target {
-        SettingsTarget::Thread => vec![0, 0, 1],
-        SettingsTarget::Turn => vec![0, 1, 2],
+    let switch = |model: &str| {
+        let catalog = step_settings_models();
+        let model = catalog
+            .iter()
+            .find(|info| info.slug == model)
+            .expect("settings target model");
+        format!(
+            "<model_switch>\nThe user was previously using a different model. Please continue the conversation according to the following instructions:\n\n{}\n</model_switch>",
+            codex_prompts::render_model_instructions(model)
+        )
+    };
+    let expected_switches = match target {
+        SettingsTarget::Thread => vec![vec![], vec![], vec![switch(MODEL_B)]],
+        SettingsTarget::Turn => vec![
+            vec![],
+            vec![switch(MODEL_B)],
+            vec![switch(MODEL_B), switch(MODEL_A)],
+        ],
     };
     assert_eq!(
         requests
             .iter()
-            .map(|request| request
-                .message_input_texts("developer")
-                .iter()
-                .filter(|text| text.contains("<model_switch>"))
-                .count())
+            .map(core_test_support::responses::ResponsesRequest::model_switch_texts)
             .collect::<Vec<_>>(),
-        expected_switch_counts
+        expected_switches
     );
+
     Ok(())
 }
 
@@ -1769,15 +1781,23 @@ async fn captured_model_replans_tools_and_retains_the_issuing_request_router() -
         requests
             .iter()
             .map(|request| {
-                core_test_support::responses::namespace_child_tool(
-                    &request["input"][0],
-                    "functions",
-                    "apply_patch",
-                )
-                .is_some()
+                let declaration = request["input"]
+                    .as_array()
+                    .expect("provider input")
+                    .iter()
+                    .rfind(|item| item["type"] == "additional_tools")
+                    .expect("latest tool declaration");
+                ["apply_patch", "exec_command", "write_stdin"]
+                    .into_iter()
+                    .filter(|name| namespace_child_tool(declaration, "functions", name).is_some())
+                    .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>(),
-        vec![false, true, false],
+        vec![
+            vec!["exec_command", "write_stdin"],
+            vec!["apply_patch"],
+            vec!["exec_command", "write_stdin"]
+        ],
     );
     let metadata = requests
         .iter()
@@ -1799,29 +1819,6 @@ async fn captured_model_replans_tools_and_retains_the_issuing_request_router() -
             })
             .collect::<Vec<_>>(),
         vec![false, true, false],
-    );
-    assert_eq!(
-        requests
-            .iter()
-            .map(|request| {
-                ["exec_command", "write_stdin"]
-                    .into_iter()
-                    .filter(|name| {
-                        core_test_support::responses::namespace_child_tool(
-                            &request["input"][0],
-                            "functions",
-                            name,
-                        )
-                        .is_some()
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>(),
-        vec![
-            vec!["exec_command", "write_stdin"],
-            vec![],
-            vec!["exec_command", "write_stdin"]
-        ],
     );
     assert!(
         requests[2]["input"]
