@@ -90,8 +90,6 @@ ignore = [
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive is unmaintained after merging into zbus 6; zbus 4 remains via codex-tui and keyring 3.6/secret-service 4 in codex-keyring-store; even secret-service 5 requires zbus 5; remove when the credential-store dependencies and TUI migrate to zbus 6" },
     # Reviewed 2026-10-20: maintenance-only advisory; i18n-config has not released its toml migration.
     { id = "RUSTSEC-2026-0374", reason = "basic-toml is unmaintained; pulled in via i18n-config 0.4.8 under age 0.12.1 used by codex-secrets; no fixed i18n-config release yet; remove when age/i18n dependencies adopt the upstream toml migration" },
-    # Reviewed upstream in openai/codex#57206 on 2026-10-24.
-    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5.5 via elliptic-curve 0.13.8 is used by age, AWS login, user verification, and WebRTC; timing leakage can affect private-key or session-secret operations; remove when these dependency paths use crypto-bigint >=0.7.6" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
