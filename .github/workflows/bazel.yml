@@ -32,8 +32,40 @@ jobs:
         include:
           - runner: macos-15
             target: aarch64-apple-darwin
+            partition: cli
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            partition: execution
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            partition: extensions
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            partition: core
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            partition: app-server
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            partition: rest
           - runner: macos-15
             target: x86_64-apple-darwin
+            partition: cli
+          - runner: macos-15
+            target: x86_64-apple-darwin
+            partition: execution
+          - runner: macos-15
+            target: x86_64-apple-darwin
+            partition: extensions
+          - runner: macos-15
+            target: x86_64-apple-darwin
+            partition: core
+          - runner: macos-15
+            target: x86_64-apple-darwin
+            partition: app-server
+          - runner: macos-15
+            target: x86_64-apple-darwin
+            partition: rest
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             partition: cli

@@ -341,7 +341,7 @@ codex-windows-sandbox-test-support = { path = "windows-sandbox-rs/tests/support"
 core_test_support = { path = "core/tests/common" }
 
 # External
-age = "0.12.1"
+age = { git = "https://github.com/str4d/rage", rev = "b5b68c4f4f7ea5c368bc060f6fe0237549c3a13f" }
 ansi-to-tui = "8.0.1"
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
@@ -575,7 +575,7 @@ windows-sys = "0.61.2"
 winreg = "0.55.0"
 # Preserve the previous compression formats and native bzip2 backend without enabling PPMd.
 zip = { version = "9.0.5", default-features = false, features = ["aes-crypto", "bzip2-rs", "deflate64", "deflate-flate2", "deflate-zopfli", "lzma", "time", "zstd", "xz"] }
-zstd = "0.13"
+zstd = "0.14.3"
 
 wiremock = "0.6"
 zeroize = "1.8.2"
@@ -664,6 +664,12 @@ inherits = "test"
 opt-level = 0
 
 [patch.crates-io]
+# Published aws-config 1.8.12 plus the P-256/RNG compatibility patch, mirrored
+# on an isolated dependency branch. Remove when credentials-login uses P-256 0.14.
+aws-config = { git = "https://github.com/dkropachev/codex", rev = "ac18f8d66eaf6d289c2411dba86ee385b2a43f64" }
+# Clatter's ML-KEM 0.2 uses the pre-release trait API. Give it a distinct
+# source so age's ML-KEM 0.3 can use the stable trait API without a conflict.
+ml-kem = { git = "https://github.com/dkropachev/codex", rev = "5699d6d58227832d396c718b65b5dd8e405f41f0" }
 # Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
 crossterm = { git = "https://github.com/openai-oss-forks/crossterm", rev = "ed1cdab335221515706178d68495bba2aed1924f" }

@@ -211,6 +211,7 @@ pub(crate) async fn prune(daemon: &Daemon, root: &Path, settings: &DaemonSetting
             .strip_prefix("local-")
             .and_then(|s| s.strip_suffix(&format!("-{}", manifest.target)));
         if !(name == format!("{}-{}", manifest.version, manifest.target)
+            || name == format!("dkropachev-{}-{}", manifest.version, manifest.target)
             || local.is_some_and(|digest| blake3::Hash::from_hex(digest).is_ok()))
             || !matches!(manifest.entrypoint.as_str(), "bin/codex" | "bin/codex.exe")
         {

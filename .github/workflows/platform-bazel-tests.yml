@@ -110,6 +110,19 @@ jobs:
           releases="$(python3 .github/scripts/resolve_exec_server_releases.py)"
           echo "CODEX_COMPAT_RELEASES=$releases" >> "$GITHUB_ENV"
 
+      - name: Allow high file descriptors in macOS spawn tests
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # RLIMIT_NOFILE alone cannot exceed the kernel's per-process ceiling.
+          # The spawn fallback test needs valid descriptors above OPEN_MAX (10240).
+          if (( $(sysctl -n kern.maxfiles) < 131072 )); then
+            sudo sysctl -w kern.maxfiles=131072
+          fi
+          if (( $(sysctl -n kern.maxfilesperproc) < 65536 )); then
+            sudo sysctl -w kern.maxfilesperproc=65536
+          fi
+
       - name: Run Bazel tests
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}

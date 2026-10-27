@@ -446,6 +446,18 @@ mod tests {
     static MCP_OAUTH_CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
+    fn decrypts_ciphertext_from_registry_age_0_12_1() -> Result<()> {
+        // Written by the published age 0.12.1, before upgrading its crypto dependencies.
+        let ciphertext = BASE64_STANDARD.decode("YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IHNjcnlwdCAyRVMzQUZMSVMzeVlPN3Y4WHpXdklnIDE1CmdQRGpnSkxJbDhkYXArRWdqMWEzcFBRTUFhYjEvMXhEdVZjTGxIdHpRVGsKLS0tIHpKQmNpNmxYRFV1QlJxTTNyMnlXQTV2S3BQdnY2Tm03ZWZOYk5kY0pWTkkKfl95ZGWvLjJ5NKsypbhTgaHYFSSIbiC0h/6HPSlmf7jlLa6gmCbykNDp3C2aw7nAqxBckiM=")?;
+        let passphrase = SecretString::from("release-upgrade-compatibility".to_owned());
+        assert_eq!(
+            decrypt_with_passphrase(&ciphertext, &passphrase)?,
+            b"existing local secret"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn load_file_rejects_newer_schema_versions() -> Result<()> {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let keyring = Arc::new(MockKeyringStore::default());
