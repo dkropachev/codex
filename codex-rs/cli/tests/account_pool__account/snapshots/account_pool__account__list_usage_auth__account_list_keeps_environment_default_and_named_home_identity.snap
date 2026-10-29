@@ -1,0 +1,62 @@
+---
+source: cli/tests/account_pool__account/list_usage_auth_tests.rs
+expression: "String::from_utf8(output)?"
+---
+Default account:
+  default: logged in
+    codex:
+      plan: pro
+      credits: 90.00; has credits: true
+      primary: unknown
+      secondary: unknown
+      spending limit reached: unknown
+    ordinary usage allowed: unknown
+    limit-reset credits: unknown
+
+Pool a (default pool, provider openai, policy drain):
+  work: logged in
+    codex:
+      plan: pro
+      credits: 20.00; has credits: true
+      primary: unknown
+      secondary: unknown
+      spending limit reached: unknown
+    ordinary usage allowed: unknown
+    limit-reset credits: unknown
+  missing: missing
+    usage: unavailable
+
+Pool z (provider openai, policy drain):
+  work: logged in
+    codex:
+      plan: pro
+      credits: 20.00; has credits: true
+      primary: unknown
+      secondary: unknown
+      spending limit reached: unknown
+    ordinary usage allowed: unknown
+    limit-reset credits: unknown
+
+Standalone accounts:
+  api-key: logged in
+    usage: unavailable
+  invalid: invalid
+    usage: unavailable
+  pat: logged in
+    codex:
+      plan: pro
+      credits: 30.00; has credits: true
+      primary: unknown
+      secondary: unknown
+      spending limit reached: unknown
+    ordinary usage allowed: unknown
+    limit-reset credits: unknown
+  standalone: logged in
+    codex:
+      plan: pro
+      credits: 40.00; has credits: true
+      primary: unknown
+      secondary: unknown
+      spending limit reached: unknown
+    ordinary usage allowed: unknown
+    limit-reset credits: unknown

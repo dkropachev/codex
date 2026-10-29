@@ -301,6 +301,7 @@ pub(crate) fn start_http_server(
                             requests.push(request.clone());
                         }
                         let response = connection_handler(&request);
+                        connection_handled_requests.fetch_add(1, Ordering::SeqCst);
                         let response = format!(
                             "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                             response.status_code,
@@ -316,7 +317,6 @@ pub(crate) fn start_http_server(
                         {
                             return;
                         }
-                        connection_handled_requests.fetch_add(1, Ordering::SeqCst);
                         let _ = stream.shutdown(Shutdown::Write);
                         let _ =
                             stream.set_read_timeout(Some(Duration::from_millis(/*millis*/ 20)));

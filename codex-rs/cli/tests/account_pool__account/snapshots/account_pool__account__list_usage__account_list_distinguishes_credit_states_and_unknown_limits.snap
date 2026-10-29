@@ -1,0 +1,41 @@
+---
+source: cli/tests/account_pool__account/list_usage_tests.rs
+expression: "String::from_utf8(output)?"
+---
+Standalone accounts:
+  hidden: logged in
+    codex:
+      plan: free
+      credits: hidden (unknown); has credits: true
+      primary: unknown
+      secondary: unknown
+      spending limit reached: unknown
+    ordinary usage allowed: unknown
+    limit-reset credits: unknown
+  missing: logged in
+    codex:
+      plan: free
+      credits: unavailable
+      primary: unknown
+      secondary: unknown
+      spending limit reached: unknown
+    ordinary usage allowed: unknown
+    limit-reset credits: unknown
+  unlimited: logged in
+    codex:
+      plan: free
+      credits: unlimited
+      primary: unknown
+      secondary: unknown
+      spending limit reached: unknown
+    ordinary usage allowed: unknown
+    limit-reset credits: unknown
+  zero: logged in
+    codex:
+      plan: free
+      credits: 0.000; has credits: false
+      primary: unknown
+      secondary: unknown
+      spending limit reached: unknown
+    ordinary usage allowed: unknown
+    limit-reset credits: unknown
