@@ -1,0 +1,65 @@
+---
+source: cli/tests/account_pool__account.rs
+expression: "stdout.replace(&reset_time, \"[RESET]\")"
+---
+Default account:
+  default: logged in
+    codex:
+      plan: pro
+      credits: 12.345600; has credits: true
+      primary (300m): 25% used; resets [RESET]
+      secondary (10080m): 100% used; resets [RESET]
+      spending limit: 100.00; used 75.125; 25% remaining; resets [RESET]
+      spending limit reached: yes
+      reached-limit reason: workspace_member_usage_limit_reached
+    Spark:
+      model: gpt-spark
+      plan: pro
+      credits: unavailable
+      primary (60m): 10% used; resets [RESET]
+      secondary: unknown
+      spending limit reached: unknown
+    ordinary usage allowed: no
+    limit-reset credits: 3
+
+Pool codex-pro (default pool, provider openai, policy drain):
+  work-pro: logged in
+    codex:
+      plan: pro
+      credits: 12.345600; has credits: true
+      primary (300m): 25% used; resets [RESET]
+      secondary (10080m): 100% used; resets [RESET]
+      spending limit: 100.00; used 75.125; 25% remaining; resets [RESET]
+      spending limit reached: yes
+      reached-limit reason: workspace_member_usage_limit_reached
+    Spark:
+      model: gpt-spark
+      plan: pro
+      credits: unavailable
+      primary (60m): 10% used; resets [RESET]
+      secondary: unknown
+      spending limit reached: unknown
+    ordinary usage allowed: no
+    limit-reset credits: 3
+  personal-pro: missing
+    usage: unavailable
+
+Standalone accounts:
+  standalone: logged in
+    codex:
+      plan: pro
+      credits: 12.345600; has credits: true
+      primary (300m): 25% used; resets [RESET]
+      secondary (10080m): 100% used; resets [RESET]
+      spending limit: 100.00; used 75.125; 25% remaining; resets [RESET]
+      spending limit reached: yes
+      reached-limit reason: workspace_member_usage_limit_reached
+    Spark:
+      model: gpt-spark
+      plan: pro
+      credits: unavailable
+      primary (60m): 10% used; resets [RESET]
+      secondary: unknown
+      spending limit reached: unknown
+    ordinary usage allowed: no
+    limit-reset credits: 3

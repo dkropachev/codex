@@ -1,3 +1,6 @@
+#[path = "account_list_usage.rs"]
+mod usage;
+
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -24,6 +27,7 @@ enum CredentialStatus {
 struct AccountCredential {
     status: CredentialStatus,
     auth_mode: Option<AuthMode>,
+    usage: usage::AccountUsage,
 }
 
 #[derive(Debug, Clone)]
@@ -68,51 +72,72 @@ pub async fn run_list_accounts(cli_config_overrides: CliConfigOverrides, json_ou
 }
 
 async fn collect_accounts(config: &Config) -> ListedAccounts {
-    let default_account =
-        credential_for_account_home(&config.codex_home, config, /*require_chatgpt*/ false)
-            .await
-            .filter(|credential| credential.status != CredentialStatus::Missing)
-            .map(|credential| ListedAccount {
-                id: "default".to_string(),
-                credential,
-            });
-
-    let effective_default_pool = effective_default_pool(config);
-    let mut pools = Vec::new();
-    if let Some(account_pool) = config
-        .account_pool
-        .as_ref()
-        .filter(|account_pool| account_pool.enabled)
-    {
-        for (pool_id, definition) in &account_pool.pools {
-            pools.push(listed_pool(config, pool_id, definition, &effective_default_pool).await);
+    let mut ids = named_account_ids(config)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let account_pool = config.account_pool.as_ref().filter(|pool| pool.enabled);
+    let pool_member_homes = account_pool
+        .into_iter()
+        .flat_map(|pool| pool.pools.values())
+        .flat_map(|pool| &pool.accounts)
+        .map(|id| {
+            ids.insert(id.clone());
+            account_codex_home(&config.codex_home, id)
+        })
+        .collect::<BTreeSet<_>>();
+    let homes = std::iter::once(config.codex_home.to_path_buf())
+        .chain(
+            ids.iter()
+                .map(|id| account_codex_home(&config.codex_home, id)),
+        )
+        .collect::<BTreeSet<_>>();
+    let credentials = futures::future::join_all(homes.into_iter().map(|home| {
+        let requirement = if pool_member_homes.contains(&home) {
+            usage::CredentialRequirement::Chatgpt
+        } else {
+            usage::CredentialRequirement::Any
+        };
+        async move {
+            let credential = usage::lookup(config, &home, requirement).await;
+            (home, credential)
         }
-    }
-
+    }))
+    .await
+    .into_iter()
+    .collect::<BTreeMap<_, _>>();
+    let default_account = credentials
+        .get(config.codex_home.as_path())
+        .filter(|credential| credential.status != CredentialStatus::Missing)
+        .map(|credential| ListedAccount {
+            id: "default".to_string(),
+            credential: credential.clone(),
+        });
+    let effective_default_pool = effective_default_pool(config);
+    let pools = account_pool
+        .into_iter()
+        .flat_map(|pool| &pool.pools)
+        .map(|(pool_id, definition)| {
+            listed_pool(
+                config,
+                pool_id,
+                definition,
+                &effective_default_pool,
+                &credentials,
+            )
+        })
+        .collect::<Vec<_>>();
     let pool_member_ids = pools
         .iter()
         .flat_map(|pool| pool.members.iter().map(|member| member.id.clone()))
         .collect::<BTreeSet<_>>();
-    let mut standalone_accounts = Vec::new();
-    for account_id in named_account_ids(config)
+    let standalone_accounts = ids
         .into_iter()
-        .filter(|account_id| !pool_member_ids.contains(account_id))
-    {
-        let account_home = account_codex_home(&config.codex_home, &account_id);
-        standalone_accounts.push(ListedAccount {
-            id: account_id,
-            credential: credential_for_account_home(
-                &account_home,
-                config,
-                /*require_chatgpt*/ false,
-            )
-            .await
-            .unwrap_or(AccountCredential {
-                status: CredentialStatus::Missing,
-                auth_mode: None,
-            }),
-        });
-    }
+        .filter(|id| !pool_member_ids.contains(id))
+        .map(|id| ListedAccount {
+            credential: credentials[&account_codex_home(&config.codex_home, &id)].clone(),
+            id,
+        })
+        .collect();
 
     ListedAccounts {
         default_account,
@@ -121,30 +146,24 @@ async fn collect_accounts(config: &Config) -> ListedAccounts {
     }
 }
 
-async fn listed_pool(
+fn listed_pool(
     config: &Config,
     pool_id: &str,
     definition: &AccountPoolDefinitionToml,
     effective_default_pool: &Option<String>,
+    credentials: &BTreeMap<std::path::PathBuf, AccountCredential>,
 ) -> ListedPool {
-    let mut members = Vec::new();
-    for account_id in &definition.accounts {
-        let account_home = account_codex_home(&config.codex_home, account_id);
-        members.push(ListedAccount {
-            id: account_id.clone(),
-            credential: credential_for_account_home(
-                &account_home,
-                config,
-                /*require_chatgpt*/ true,
-            )
-            .await
-            .unwrap_or(AccountCredential {
-                status: CredentialStatus::Missing,
-                auth_mode: None,
-            }),
-        });
-    }
-
+    let members = definition
+        .accounts
+        .iter()
+        .map(|id| {
+            let credential = credentials[&account_codex_home(&config.codex_home, id)].clone();
+            ListedAccount {
+                id: id.clone(),
+                credential,
+            }
+        })
+        .collect();
     ListedPool {
         id: pool_id.to_string(),
         is_default: effective_default_pool.as_deref() == Some(pool_id),
@@ -158,45 +177,72 @@ async fn credential_for_account_home(
     codex_home: &Path,
     config: &Config,
     require_chatgpt: bool,
-) -> Option<AccountCredential> {
+) -> (AccountCredential, Option<CodexAuth>) {
     let auth_route_config = config.auth_route_config();
-    match CodexAuth::from_auth_storage(
-        codex_home,
-        config.cli_auth_credentials_store_mode,
-        Some(config.chatgpt_base_url.as_str()),
-        config.auth_keyring_backend_kind(),
-        &auth_route_config,
-    )
-    .await
-    {
+    let auth = if codex_home == config.codex_home.as_path() {
+        CodexAuth::from_auth_storage(
+            codex_home,
+            config.cli_auth_credentials_store_mode,
+            Some(config.chatgpt_base_url.as_str()),
+            config.auth_keyring_backend_kind(),
+            &auth_route_config,
+        )
+        .await
+    } else {
+        CodexAuth::from_stored_auth_storage(
+            codex_home,
+            config.cli_auth_credentials_store_mode,
+            Some(config.chatgpt_base_url.as_str()),
+            config.auth_keyring_backend_kind(),
+            &auth_route_config,
+        )
+        .await
+    };
+    match auth {
         Ok(Some(auth)) => {
             let status = if require_chatgpt && !auth.is_chatgpt_auth() {
                 CredentialStatus::Invalid
             } else {
                 CredentialStatus::LoggedIn
             };
-            Some(AccountCredential {
-                status,
-                auth_mode: Some(app_server_auth_mode(auth.auth_mode())),
-            })
+            (
+                AccountCredential {
+                    status,
+                    auth_mode: Some(app_server_auth_mode(auth.auth_mode())),
+                    usage: usage::AccountUsage::default(),
+                },
+                Some(auth),
+            )
         }
         Ok(None) => {
             if codex_home.join("auth.json").exists() {
-                Some(AccountCredential {
-                    status: CredentialStatus::Invalid,
-                    auth_mode: None,
-                })
+                (
+                    AccountCredential {
+                        status: CredentialStatus::Invalid,
+                        auth_mode: None,
+                        usage: usage::AccountUsage::default(),
+                    },
+                    None,
+                )
             } else {
-                Some(AccountCredential {
-                    status: CredentialStatus::Missing,
-                    auth_mode: None,
-                })
+                (
+                    AccountCredential {
+                        status: CredentialStatus::Missing,
+                        auth_mode: None,
+                        usage: usage::AccountUsage::default(),
+                    },
+                    None,
+                )
             }
         }
-        Err(_) => Some(AccountCredential {
-            status: CredentialStatus::Invalid,
-            auth_mode: None,
-        }),
+        Err(_) => (
+            AccountCredential {
+                status: CredentialStatus::Invalid,
+                auth_mode: None,
+                usage: usage::AccountUsage::default(),
+            },
+            None,
+        ),
     }
 }
 
@@ -266,6 +312,7 @@ fn print_accounts_human(accounts: &ListedAccounts) {
             default_account.id,
             default_account.credential.status.as_str()
         );
+        print!("{}", usage::render(&default_account.credential.usage));
         needs_blank = true;
     }
 
@@ -287,6 +334,7 @@ fn print_accounts_human(accounts: &ListedAccounts) {
         );
         for member in &pool.members {
             println!("  {}: {}", member.id, member.credential.status.as_str());
+            print!("{}", usage::render(&member.credential.usage));
         }
         needs_blank = true;
     }
@@ -298,6 +346,7 @@ fn print_accounts_human(accounts: &ListedAccounts) {
         println!("Standalone accounts:");
         for account in &accounts.standalone_accounts {
             println!("  {}: {}", account.id, account.credential.status.as_str());
+            print!("{}", usage::render(&account.credential.usage));
         }
     }
 }
@@ -351,6 +400,7 @@ fn accounts_json(accounts: &ListedAccounts) -> serde_json::Value {
                         "id": member.id,
                         "credentialStatus": member.credential.status.as_str(),
                         "authMode": member.credential.auth_mode.map(auth_mode_name),
+                        "usage": member.credential.usage,
                     })
                 }).collect::<Vec<_>>(),
             })
@@ -394,6 +444,7 @@ fn account_json(
         "type": "account",
         "credentialStatus": account.credential.status.as_str(),
         "authMode": account.credential.auth_mode.map(auth_mode_name),
+        "usage": account.credential.usage,
         "pools": pools,
         "poolMembership": pool_membership,
     })

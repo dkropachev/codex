@@ -1,4 +1,7 @@
+mod stored_auth;
 mod workspace_routing;
+
+use stored_auth::AuthStorageContext;
 
 #[path = "account_grant.rs"]
 mod account_grant;
@@ -1655,30 +1658,27 @@ async fn load_auth(
 
     // External ChatGPT auth tokens live in the in-memory (ephemeral) store. Always check this
     // first so external auth takes precedence over any persisted credentials.
+    let storage_context = AuthStorageContext {
+        codex_home,
+        allowed_login_methods,
+        forced_chatgpt_workspace_id,
+        chatgpt_base_url,
+        keyring_backend_kind,
+        agent_identity_authapi_base_url,
+        auth_route_config,
+    };
     let ephemeral_storage = create_auth_storage(
         codex_home.to_path_buf(),
         AuthCredentialsStoreMode::Ephemeral,
         AuthKeyringBackendKind::default(),
     );
-    if let Some(auth_dot_json) = ephemeral_storage.load()?
-        && auth_mode_is_allowed(allowed_login_methods, auth_dot_json.resolved_mode())
-    {
-        if let Some(agent_identity) = auth_dot_json.agent_identity.as_ref() {
-            ensure_agent_identity_workspace_allowed(forced_chatgpt_workspace_id, agent_identity)?;
-        }
-        let auth = CodexAuth::from_auth_dot_json(
-            codex_home,
-            auth_dot_json,
+    if let Some(auth) = storage_context
+        .load(
+            ephemeral_storage.as_ref(),
             AuthCredentialsStoreMode::Ephemeral,
-            chatgpt_base_url,
-            keyring_backend_kind,
-            agent_identity_authapi_base_url,
-            auth_route_config,
         )
-        .await?;
-        if let CodexAuth::PersonalAccessToken(auth) = &auth {
-            ensure_auth_workspace_allowed(forced_chatgpt_workspace_id, auth.account_id())?;
-        }
+        .await?
+    {
         return Ok(Some(auth));
     }
 
@@ -1717,31 +1717,9 @@ async fn load_auth(
         auth_credentials_store_mode,
         keyring_backend_kind,
     );
-    let auth_dot_json = match storage.load()? {
-        Some(auth) => auth,
-        None => return Ok(None),
-    };
-    if !auth_mode_is_allowed(allowed_login_methods, auth_dot_json.resolved_mode()) {
-        return Ok(None);
-    }
-    if let Some(agent_identity) = auth_dot_json.agent_identity.as_ref() {
-        ensure_agent_identity_workspace_allowed(forced_chatgpt_workspace_id, agent_identity)?;
-    }
-
-    let auth = CodexAuth::from_auth_dot_json(
-        codex_home,
-        auth_dot_json,
-        auth_credentials_store_mode,
-        chatgpt_base_url,
-        keyring_backend_kind,
-        agent_identity_authapi_base_url,
-        auth_route_config,
-    )
-    .await?;
-    if let CodexAuth::PersonalAccessToken(auth) = &auth {
-        ensure_auth_workspace_allowed(forced_chatgpt_workspace_id, auth.account_id())?;
-    }
-    Ok(Some(auth))
+    storage_context
+        .load(storage.as_ref(), auth_credentials_store_mode)
+        .await
 }
 
 // Ordinary auth tolerates legacy metadata loss; EMA grant checks remain strict.

@@ -1,5 +1,12 @@
 mod support;
 
+#[path = "account_pool__account/list_usage_tests.rs"]
+mod list_usage;
+
+#[path = "account_pool__account/list_usage_auth_tests.rs"]
+mod list_usage_auth;
+
+use anyhow::Context;
 use anyhow::Result;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
@@ -51,7 +58,11 @@ fn account_list_human_groups_pool_members_and_statuses() -> Result<()> {
         "standalone@example.com",
     )?;
 
+    let server = start_http_server(/*expected_requests*/ 3, |_| {
+        TestHttpResponse::json(/*status_code*/ 200, &usage_payload().to_string())
+    })?;
     let mut cmd = codex_command(codex_home.path())?;
+    cmd.args(["-c", &format!("chatgpt_base_url={:?}", server.url)]);
     let output = cmd
         .args(["account", "list"])
         .assert()
@@ -61,11 +72,20 @@ fn account_list_human_groups_pool_members_and_statuses() -> Result<()> {
         .clone();
     let stdout = String::from_utf8(output)?;
 
-    assert_eq!(
-        stdout,
-        "Default account:\n  default: logged in\n\nPool codex-pro (default pool, provider openai, policy drain):\n  work-pro: logged in\n  personal-pro: missing\n\nStandalone accounts:\n  standalone: logged in\n"
-    );
+    let reset_time =
+        chrono::DateTime::from_timestamp(/*secs*/ 2_000_000_000, /*nsecs*/ 0)
+            .context("valid reset timestamp")?
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M:%S %Z")
+            .to_string();
+    let snapshot = codex_utils_cargo_bin::find_resource!(
+        "tests/snapshots/account_pool__account__account_list_human_groups_pool_members_and_statuses.snap"
+    )?;
+    insta::with_settings!({snapshot_path => snapshot.parent().context("snapshot has no parent")?}, {
+        insta::assert_snapshot!(stdout.replace(&reset_time, "[RESET]"));
+    });
 
+    assert_eq!(server.finish()?.len(), 3);
     Ok(())
 }
 
@@ -100,7 +120,7 @@ policy = "drain"
 
     assert_eq!(
         stdout,
-        "Pool codex-pro (default pool, provider openai, policy drain):\n  api-key-pro: invalid\n  corrupt-pro: invalid\n  missing-pro: missing\n"
+        "Pool codex-pro (default pool, provider openai, policy drain):\n  api-key-pro: invalid\n    usage: unavailable\n  corrupt-pro: invalid\n    usage: unavailable\n  missing-pro: missing\n    usage: unavailable\n"
     );
 
     Ok(())
@@ -122,7 +142,11 @@ fn account_list_json_includes_pool_metadata_and_memberships() -> Result<()> {
         "standalone@example.com",
     )?;
 
+    let server = start_http_server(/*expected_requests*/ 3, |_| {
+        TestHttpResponse::json(/*status_code*/ 200, &usage_payload().to_string())
+    })?;
     let mut cmd = codex_command(codex_home.path())?;
+    cmd.args(["-c", &format!("chatgpt_base_url={:?}", server.url)]);
     let output = cmd
         .args(["account", "list", "--json"])
         .assert()
@@ -132,6 +156,25 @@ fn account_list_json_includes_pool_metadata_and_memberships() -> Result<()> {
         .clone();
     let value: serde_json::Value = serde_json::from_slice(&output)?;
 
+    let unavailable = json!({"status": "unavailable", "error": null, "rateLimits": null,
+        "ordinaryUsageAllowed": null, "rateLimitResetCreditCount": null});
+    let usage = json!({
+        "status": "available", "error": null, "ordinaryUsageAllowed": false,
+        "rateLimitResetCreditCount": 3,
+        "rateLimits": [{
+            "limitId": "codex", "limitName": null, "normalModelSlug": null, "planType": "pro",
+            "primary": {"usedPercent": 25, "windowDurationMins": 300, "resetsAt": 2000000000},
+            "secondary": {"usedPercent": 100, "windowDurationMins": 10080, "resetsAt": 2000000000},
+            "credits": {"hasCredits": true, "unlimited": false, "balance": "12.345600"},
+            "individualLimit": {"limit": "100.00", "used": "75.125", "remainingPercent": 25, "resetsAt": 2000000000},
+            "spendControlReached": true, "rateLimitReachedType": "workspace_member_usage_limit_reached"
+        }, {
+            "limitId": "codex_spark", "limitName": "Spark", "normalModelSlug": "gpt-spark", "planType": "pro",
+            "primary": {"usedPercent": 10, "windowDurationMins": 60, "resetsAt": 2000000000},
+            "secondary": null, "credits": null, "individualLimit": null,
+            "spendControlReached": null, "rateLimitReachedType": null
+        }]
+    });
     assert_eq!(
         value,
         json!({
@@ -141,6 +184,7 @@ fn account_list_json_includes_pool_metadata_and_memberships() -> Result<()> {
                     "type": "account",
                     "credentialStatus": "logged in",
                     "authMode": "chatgpt",
+                    "usage": usage,
                     "pools": [],
                     "poolMembership": []
                 },
@@ -157,6 +201,7 @@ fn account_list_json_includes_pool_metadata_and_memberships() -> Result<()> {
                     "type": "account",
                     "credentialStatus": "logged in",
                     "authMode": "chatgpt",
+                    "usage": usage,
                     "pools": ["codex-pro"],
                     "poolMembership": [
                         {
@@ -171,6 +216,7 @@ fn account_list_json_includes_pool_metadata_and_memberships() -> Result<()> {
                     "type": "account",
                     "credentialStatus": "missing",
                     "authMode": null,
+                    "usage": unavailable,
                     "pools": ["codex-pro"],
                     "poolMembership": [
                         {
@@ -185,6 +231,7 @@ fn account_list_json_includes_pool_metadata_and_memberships() -> Result<()> {
                     "type": "account",
                     "credentialStatus": "logged in",
                     "authMode": "chatgpt",
+                    "usage": usage,
                     "pools": [],
                     "poolMembership": []
                 }
@@ -200,12 +247,14 @@ fn account_list_json_includes_pool_metadata_and_memberships() -> Result<()> {
                         {
                             "id": "work-pro",
                             "credentialStatus": "logged in",
-                            "authMode": "chatgpt"
+                            "authMode": "chatgpt",
+                            "usage": usage
                         },
                         {
                             "id": "personal-pro",
                             "credentialStatus": "missing",
-                            "authMode": null
+                            "authMode": null,
+                            "usage": unavailable
                         }
                     ]
                 }
@@ -213,6 +262,7 @@ fn account_list_json_includes_pool_metadata_and_memberships() -> Result<()> {
         })
     );
 
+    assert_eq!(server.finish()?.len(), 3);
     Ok(())
 }
 
@@ -464,4 +514,28 @@ fn account_refresh_pool_reports_missing_pool() -> Result<()> {
         .stderr(contains("Account pool missing not found"));
 
     Ok(())
+}
+
+fn usage_payload() -> serde_json::Value {
+    let window = |seconds, used| {
+        json!({
+            "used_percent": used, "limit_window_seconds": seconds,
+            "reset_after_seconds": 60, "reset_at": 2000000000
+        })
+    };
+    json!({
+        "plan_type": "pro",
+        "credits": {"has_credits": true, "unlimited": false, "balance": "12.345600"},
+        "rate_limit": {"allowed": false, "limit_reached": true,
+            "primary_window": window(/*seconds*/ 18000, /*used*/ 25), "secondary_window": window(/*seconds*/ 604800, /*used*/ 100)},
+        "additional_rate_limits": [{"metered_feature": "codex_spark", "limit_name": "Spark",
+            "normal_model_slug": "gpt-spark",
+            "rate_limit": {"allowed": true, "limit_reached": false,
+                "primary_window": window(/*seconds*/ 3600, /*used*/ 10)}}],
+        "spend_control": {"reached": true, "individual_limit": {
+            "limit": "100.00", "used": "75.125", "remaining": "24.875", "used_percent": 75, "remaining_percent": 25,
+            "reset_after_seconds": 60, "reset_at": 2000000000}},
+        "rate_limit_reached_type": {"type": "workspace_member_usage_limit_reached"},
+        "rate_limit_reset_credits": {"available_count": 3}
+    })
 }

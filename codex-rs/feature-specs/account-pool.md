@@ -235,6 +235,39 @@ The CLI supports account-pool inspection and maintenance:
 Pool member accounts should not be duplicated in account list output as ordinary named accounts when
 they are already represented by a configured pool.
 
+#### Live Usage In Account Listings
+
+`codex account list` includes live usage beneath each default, pool-member, and standalone account.
+Human output shows plan, precise credit balance, primary and secondary quota windows with reset
+times, additional model quotas, spending limits and reached-limit reasons, ordinary usage permission,
+and available limit-reset credits. Unknown values, unavailable data, unlimited credits, hidden balances,
+false permission, and zero balances remain distinguishable.
+
+`codex account list --json` adds a `usage` object to account records and nested pool-member records.
+Its fields are `status`, `error`, `rateLimits`, `ordinaryUsageAllowed`, and
+`rateLimitResetCreditCount`. Optional values are explicit JSON nulls. Balance strings retain their
+precision. Usage status is `available`, `unavailable`, or `error`; lookup failures do not fail the
+overall listing or expose raw backend error bodies.
+
+Each distinct credential home is loaded and queried once, concurrently, with a ten-second
+asynchronous deadline covering both credential hydration and the usage request. Repeated pool
+members reuse the same result. Output preserves default, pool, member, and standalone ordering.
+The deadline does not preempt synchronous credential-store or filesystem operations.
+
+Named entries use their own per-home ephemeral credentials first, followed by the configured
+persistent store. Explicit ephemeral-only storage has no persistent fallback. `CODEX_ACCESS_TOKEN`
+does not replace named credentials for classification or usage. The default entry retains existing
+environment-token precedence, including visibility when only an environment credential exists.
+Named `credentialStatus` and `authMode` therefore reflect the named home under an environment
+override. All supported authentication modes, File/Keyring/Auto/Ephemeral stores, keyring backends,
+and authentication routes remain supported. Credentials without usage-backend support retain their
+credential status with usage unavailable.
+
+Listing is a passive usage read: it does not select or switch a pool member, consume reset credits,
+or opt into Reserve. Credential-loading and usage errors remain isolated to their account; known
+credentials retain their status when the usage request fails or times out. If authentication itself
+times out before metadata is available, the entry reports invalid credentials and a usage timeout.
+
 ### App-Server And TUI Surface
 
 `account/read` returns a logical pool account when a pool is active:
@@ -323,6 +356,8 @@ state. If account-pool config is removed, Codex returns to default auth behavior
 - [codex-rs/tui/src/app/background_requests.rs](../tui/src/app/background_requests.rs)
 - [codex-rs/tui/src/app/event_dispatch.rs](../tui/src/app/event_dispatch.rs)
 - [codex-rs/cli/src/account_list.rs](../cli/src/account_list.rs)
+- [codex-rs/cli/src/account_list_usage.rs](../cli/src/account_list_usage.rs)
+- [codex-rs/login/src/auth/manager/stored_auth.rs](../login/src/auth/manager/stored_auth.rs)
 - [codex-rs/cli/src/account_refresh.rs](../cli/src/account_refresh.rs)
 - [codex-rs/cli/src/account_usage.rs](../cli/src/account_usage.rs)
 - [codex-rs/cli/src/login.rs](../cli/src/login.rs)
@@ -465,6 +500,10 @@ the main Codex command surface.
 #### Test cases
 
 - Account list displays account-pool members and credential state: codex-rs/cli/tests/account_pool__account.rs:account_list_human_groups_pool_members_and_statuses,account_list_human_marks_invalid_pool_members,account_list_json_includes_pool_metadata_and_memberships
+- Account list fetches once per home concurrently with exact account identity and stable ordering: codex-rs/cli/tests/account_pool__account/list_usage_tests.rs:account_list_fetches_concurrently_once_per_home_with_own_auth_in_stable_order
+- Account list distinguishes hidden, missing, unlimited and zero credit balances: codex-rs/cli/tests/account_pool__account/list_usage_tests.rs:account_list_distinguishes_credit_states_and_unknown_limits
+- Account list isolates backend failures, malformed responses and authentication or usage timeouts: codex-rs/cli/tests/account_pool__account/list_usage_tests.rs:account_list_retains_credentials_when_usage_fails_or_times_out
+- Account list preserves default environment overrides while named entries retain their own credentials and balances: codex-rs/cli/tests/account_pool__account/list_usage_auth_tests.rs:account_list_keeps_environment_default_and_named_home_identity
 - Account limits displays account-pool member status: codex-rs/cli/tests/account_pool__account.rs:account_limits_groups_pool_members_and_reports_missing_invalid_in_config_order
 - Login status recognizes usable default-pool credentials: codex-rs/cli/tests/account_pool__account.rs:login_status_uses_configured_account_pool_auth
 - Account refresh reports account-pool member outcomes: codex-rs/cli/tests/account_pool__account.rs:account_refresh_pool_reports_all_missing_credentials,account_refresh_pool_reports_partial_success,account_refresh_pool_reports_blocked_member_and_succeeds_when_another_member_refreshes,account_refresh_pool_fails_when_all_members_are_blocked,account_refresh_pool_fails_when_stale_credentials_cannot_refresh,account_refresh_pool_reports_missing_pool
@@ -581,6 +620,10 @@ Generate tests for these behaviors:
 - Assignments are independent by pool id, usage bucket, and affinity key.
 - Cached auth reads return a usable auth without setting `activeAccountId`.
 - CLI login status reports usable default-pool auth without activating a pool member.
+- Account listing uses each named home's credentials even when a global access token is present,
+  while retaining the default environment account and reusing shared pool-member usage results.
+- Account listing preserves precise nullable usage fields and isolates asynchronous authentication
+  and usage timeouts without failing the listing.
 - Each ModelClient operation selects auth once and pins that account for the operation.
 - Starting a new agent/subagent does not switch account unless a request hits an allowed failover
   boundary.
