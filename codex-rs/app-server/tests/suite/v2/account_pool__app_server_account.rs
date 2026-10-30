@@ -81,11 +81,13 @@ stream_max_retries = 0
 #[tokio::test]
 async fn get_account_with_chatgpt_pool() -> Result<()> {
     let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    mount_pool_usage(&server).await;
     create_config_toml(
         codex_home.path(),
         CreateConfigTomlParams {
             requires_openai_auth: Some(true),
-            chatgpt_base_url: None,
+            chatgpt_base_url: Some(server.uri()),
             account_pool_config: Some(
                 r#"
 [account_pool]
@@ -125,6 +127,18 @@ accounts = ["work-pro", "personal-pro"]
         AuthCredentialsStoreMode::File,
     )?;
 
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .and(header("ChatGPT-Account-ID", "work-pro"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "rate_limit": {"allowed": true, "primary_window": {"used_percent": 18}},
+            "credits": {"has_credits": true, "unlimited": false, "balance": "12.3400"},
+            "rate_limit_reset_credits": {"available_count": 3}
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+
     let received = read_account_response(codex_home.path()).await?;
 
     let expected = GetAccountResponse {
@@ -139,8 +153,14 @@ accounts = ["work-pro", "personal-pro"]
                     plan_type: Some(AccountPlanType::Pro),
                     active: true,
                     unavailable_reason: None,
-                    regular_remaining: None,
+                    regular_remaining: Some(82),
                     spark_remaining: None,
+                    credits: Some(codex_app_server_protocol::CreditsSnapshot {
+                        has_credits: true,
+                        unlimited: false,
+                        balance: Some("12.3400".to_string()),
+                    }),
+                    rate_limit_reset_credit_count: Some(3),
                     last_error: None,
                 },
                 AccountPoolMember {
@@ -151,6 +171,8 @@ accounts = ["work-pro", "personal-pro"]
                     unavailable_reason: None,
                     regular_remaining: None,
                     spark_remaining: None,
+                    credits: None,
+                    rate_limit_reset_credit_count: None,
                     last_error: None,
                 },
             ],
@@ -158,17 +180,20 @@ accounts = ["work-pro", "personal-pro"]
         requires_openai_auth: true,
     };
     assert_eq!(received, expected);
+    server.verify().await;
     Ok(())
 }
 
 #[tokio::test]
 async fn get_account_with_chatgpt_pool_reports_unavailable_members() -> Result<()> {
     let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    mount_pool_usage(&server).await;
     create_config_toml(
         codex_home.path(),
         CreateConfigTomlParams {
             requires_openai_auth: Some(true),
-            chatgpt_base_url: None,
+            chatgpt_base_url: Some(server.uri()),
             account_pool_config: Some(
                 r#"
 [account_pool]
@@ -221,6 +246,8 @@ accounts = ["work-pro", "api-key-pro", "missing-pro"]
                     unavailable_reason: None,
                     regular_remaining: None,
                     spark_remaining: None,
+                    credits: None,
+                    rate_limit_reset_credit_count: None,
                     last_error: None,
                 },
                 AccountPoolMember {
@@ -228,12 +255,12 @@ accounts = ["work-pro", "api-key-pro", "missing-pro"]
                     email: None,
                     plan_type: None,
                     active: false,
-                    unavailable_reason: Some(
-                        "account pool members must use ChatGPT auth".to_string(),
-                    ),
+                    unavailable_reason: Some("invalid credentials".to_string()),
                     regular_remaining: None,
                     spark_remaining: None,
-                    last_error: None,
+                    credits: None,
+                    rate_limit_reset_credit_count: None,
+                    last_error: Some("invalid credentials".to_string()),
                 },
                 AccountPoolMember {
                     id: "missing-pro".to_string(),
@@ -243,7 +270,9 @@ accounts = ["work-pro", "api-key-pro", "missing-pro"]
                     unavailable_reason: Some("missing credentials".to_string()),
                     regular_remaining: None,
                     spark_remaining: None,
-                    last_error: None,
+                    credits: None,
+                    rate_limit_reset_credit_count: None,
+                    last_error: Some("missing credentials".to_string()),
                 },
             ],
         }),
@@ -257,6 +286,7 @@ accounts = ["work-pro", "api-key-pro", "missing-pro"]
 async fn get_account_rate_limits_read_does_not_activate_chatgpt_pool_member() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
+    mount_pool_usage(&server).await;
     create_config_toml(
         codex_home.path(),
         CreateConfigTomlParams {
@@ -321,7 +351,7 @@ accounts = ["work-pro", "personal-pro"]
                 }
             }
         })))
-        .expect(1)
+        .expect(3)
         .mount(&server)
         .await;
 
@@ -344,8 +374,10 @@ accounts = ["work-pro", "personal-pro"]
                     plan_type: Some(AccountPlanType::Pro),
                     active: true,
                     unavailable_reason: None,
-                    regular_remaining: None,
+                    regular_remaining: Some(58),
                     spark_remaining: None,
+                    credits: None,
+                    rate_limit_reset_credit_count: None,
                     last_error: None,
                 },
                 AccountPoolMember {
@@ -356,6 +388,8 @@ accounts = ["work-pro", "personal-pro"]
                     unavailable_reason: None,
                     regular_remaining: None,
                     spark_remaining: None,
+                    credits: None,
+                    rate_limit_reset_credit_count: None,
                     last_error: None,
                 },
             ],
@@ -428,6 +462,7 @@ accounts = ["work-pro", "personal-pro"]
 async fn get_account_token_usage_read_does_not_activate_chatgpt_pool_member() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
+    mount_pool_usage(&server).await;
     create_config_toml(
         codex_home.path(),
         CreateConfigTomlParams {
@@ -513,6 +548,8 @@ accounts = ["work-pro", "personal-pro"]
                     unavailable_reason: None,
                     regular_remaining: None,
                     spark_remaining: None,
+                    credits: None,
+                    rate_limit_reset_credit_count: None,
                     last_error: None,
                 },
                 AccountPoolMember {
@@ -523,6 +560,8 @@ accounts = ["work-pro", "personal-pro"]
                     unavailable_reason: None,
                     regular_remaining: None,
                     spark_remaining: None,
+                    credits: None,
+                    rate_limit_reset_credit_count: None,
                     last_error: None,
                 },
             ],
@@ -558,6 +597,15 @@ accounts = ["work-pro", "personal-pro"]
         expected_account
     );
     Ok(())
+}
+
+async fn mount_pool_usage(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .with_priority(/*p*/ 100)
+        .mount(server)
+        .await;
 }
 
 async fn read_account_response(codex_home: &Path) -> Result<GetAccountResponse> {

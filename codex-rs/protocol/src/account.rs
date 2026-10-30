@@ -75,6 +75,8 @@ pub struct ProviderAccountPoolMember {
     pub unavailable_reason: Option<String>,
     pub regular_remaining: Option<u64>,
     pub spark_remaining: Option<u64>,
+    pub credits: Option<crate::protocol::CreditsSnapshot>,
+    pub rate_limit_reset_credit_count: Option<i64>,
     pub last_error: Option<String>,
 }
 

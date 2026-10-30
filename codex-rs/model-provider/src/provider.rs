@@ -746,6 +746,9 @@ impl ModelProvider for ConfiguredModelProvider {
                                     unavailable_reason: member.unavailable_reason,
                                     regular_remaining: member.regular_remaining,
                                     spark_remaining: member.spark_remaining,
+                                    credits: member.credits,
+                                    rate_limit_reset_credit_count: member
+                                        .rate_limit_reset_credit_count,
                                     last_error: member.last_error,
                                 })
                                 .collect(),

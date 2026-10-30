@@ -138,8 +138,8 @@ Cache heat is derived from the latest known cached-token state for the affinity:
 
 ### Usage Refresh
 
-For `load_balance`, Codex can refresh usage snapshots before auth selection when cached usage is
-missing or stale. Freshness is bounded and currently uses a short interval. The refresh is metadata
+For both selection policies, Codex can refresh usage snapshots before auth selection when cached usage is
+missing or stale. Usage refresh and member credential lookup have bounded five-second waits; credential rotation completes in detached tasks when necessary. Freshness uses the existing one-minute throttle. The refresh is metadata
 for choosing or rebalancing an assignment; it must not switch accounts by itself.
 
 Usage refresh should:
@@ -287,6 +287,8 @@ times out before metadata is available, the entry reports invalid credentials an
         "unavailableReason": null,
         "regularRemaining": 82,
         "sparkRemaining": 100,
+        "credits": {"hasCredits": true, "unlimited": false, "balance": "12.3400"},
+        "rateLimitResetCreditCount": 3,
         "lastError": null
       }
     ]
@@ -302,6 +304,9 @@ Fields:
 - `members[].unavailableReason`: current reason this member cannot be selected, when known.
 - `members[].regularRemaining` and `members[].sparkRemaining`: latest known remaining usage
   percentages, or `null` when unknown.
+- `members[].credits`: nullable credit snapshot preserving exact balances, hidden balances,
+  availability, and unlimited state.
+- `members[].rateLimitResetCreditCount`: available on-demand resets, or `null` when unknown.
 - `members[].lastError`: latest member-level refresh or auth error.
 
 `account/updated` notifies auth mode and plan type changes. It does not carry full pool member
@@ -315,7 +320,7 @@ active pool member.
 available values into the latest known rate-limit state or refetch. Nullable metadata in an update
 does not clear previously observed metadata.
 
-The TUI presents a pool as one ChatGPT account with pool metadata. It displays the active member when
+The TUI presents a pool as one ChatGPT account with pool metadata and compact per-member reset and credit availability. It displays the active member when
 known and falls back to the first usable member for display only when no active member exists. Member
 count, unavailable count, remaining usage, and member errors are diagnostic status data and must not
 imply account switching.

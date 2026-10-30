@@ -39,7 +39,37 @@ async fn status_snapshot_shows_chatgpt_pool_active_member() {
             email: Some("work@example.com".to_string()),
             plan: Some("Pro".to_string()),
         }),
-        member_count: 2,
+        member_resources: [
+            ("work-pro", Some((true, false, Some("12.3400"))), Some(3)),
+            ("hidden", Some((true, false, None)), Some(2)),
+            ("hidden-empty", Some((false, false, None)), Some(0)),
+            ("unknown", None, None),
+            ("unlimited", Some((false, true, None)), Some(0)),
+            ("zero", Some((false, false, Some("0"))), Some(0)),
+        ]
+        .into_iter()
+        .map(|(id, credits, resets)| {
+            super::pool_member_resources(&codex_app_server_protocol::AccountPoolMember {
+                id: id.to_string(),
+                email: None,
+                plan_type: None,
+                active: false,
+                unavailable_reason: None,
+                regular_remaining: None,
+                spark_remaining: None,
+                last_error: None,
+                credits: credits.map(|(has_credits, unlimited, balance)| {
+                    codex_app_server_protocol::CreditsSnapshot {
+                        has_credits,
+                        unlimited,
+                        balance: balance.map(str::to_string),
+                    }
+                }),
+                rate_limit_reset_credit_count: resets,
+            })
+        })
+        .collect(),
+        member_count: 6,
         unavailable_count: 0,
     };
     let usage = TokenUsage {
@@ -92,6 +122,10 @@ async fn status_snapshot_shows_chatgpt_pool_unavailable_members() {
     let account_display = StatusAccountDisplay::ChatGptPool {
         pool_id: "codex-pro".to_string(),
         active_member: None,
+        member_resources: vec![
+            "work-pro: resets ?, credits ?".to_string(),
+            "personal-pro: resets ?, credits ?".to_string(),
+        ],
         member_count: 2,
         unavailable_count: 2,
     };
@@ -145,6 +179,10 @@ async fn status_snapshot_shows_chatgpt_pool_without_active_member() {
     let account_display = StatusAccountDisplay::ChatGptPool {
         pool_id: "codex-pro".to_string(),
         active_member: None,
+        member_resources: vec![
+            "work-pro: resets ?, credits ?".to_string(),
+            "personal-pro: resets ?, credits ?".to_string(),
+        ],
         member_count: 2,
         unavailable_count: 0,
     };

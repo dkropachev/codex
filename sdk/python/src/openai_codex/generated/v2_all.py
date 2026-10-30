@@ -6979,10 +6979,14 @@ class AccountPoolMember(BaseModel):
         populate_by_name=True,
     )
     active: bool
+    credits: CreditsSnapshot | None = None
     email: str | None = None
     id: str
     last_error: Annotated[str | None, Field(alias="lastError")] = None
     plan_type: Annotated[PlanType | None, Field(alias="planType")] = None
+    rate_limit_reset_credit_count: Annotated[
+        int | None, Field(alias="rateLimitResetCreditCount")
+    ] = None
     regular_remaining: Annotated[int | None, Field(alias="regularRemaining", ge=0)] = None
     spark_remaining: Annotated[int | None, Field(alias="sparkRemaining", ge=0)] = None
     unavailable_reason: Annotated[str | None, Field(alias="unavailableReason")] = None

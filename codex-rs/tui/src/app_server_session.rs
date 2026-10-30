@@ -1948,6 +1948,10 @@ pub(crate) fn account_ui_state_from_response(account: &GetAccountResponse) -> Ac
                         email: member.email.clone(),
                         plan: member.plan_type.map(plan_type_display_name),
                     }),
+                    member_resources: members
+                        .iter()
+                        .map(crate::status::pool_member_resources)
+                        .collect(),
                     member_count: members.len(),
                     unavailable_count,
                 }),

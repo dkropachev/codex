@@ -16,6 +16,7 @@ mod thread_usage;
 
 pub(crate) use account::StatusAccountDisplay;
 pub(crate) use account::StatusAccountPoolMemberDisplay;
+pub(crate) use account::pool_member_resources;
 pub(crate) use card::StatusHistoryHandle;
 #[cfg(test)]
 pub(crate) use card::new_status_output;

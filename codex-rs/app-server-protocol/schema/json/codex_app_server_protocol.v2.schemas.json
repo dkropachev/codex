@@ -145,6 +145,16 @@
         "active": {
           "type": "boolean"
         },
+        "credits": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CreditsSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "email": {
           "type": [
             "string",
@@ -168,6 +178,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "rateLimitResetCreditCount": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
           ]
         },
         "regularRemaining": {

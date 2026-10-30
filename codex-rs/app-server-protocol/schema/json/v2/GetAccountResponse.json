@@ -106,6 +106,16 @@
         "active": {
           "type": "boolean"
         },
+        "credits": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CreditsSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "email": {
           "type": [
             "string",
@@ -129,6 +139,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "rateLimitResetCreditCount": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
           ]
         },
         "regularRemaining": {
@@ -168,6 +185,27 @@
         "us_cr"
       ],
       "type": "string"
+    },
+    "CreditsSnapshot": {
+      "properties": {
+        "balance": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hasCredits": {
+          "type": "boolean"
+        },
+        "unlimited": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "hasCredits",
+        "unlimited"
+      ],
+      "type": "object"
     },
     "PlanType": {
       "enum": [

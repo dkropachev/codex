@@ -748,6 +748,7 @@ impl StatusHistoryCell {
                 pool_id,
                 active_member,
                 member_count,
+                member_resources: _,
                 unavailable_count,
             } => {
                 let active_details = active_member
@@ -870,6 +871,17 @@ impl StatusHistoryCell {
             lines.push(formatter.line("Account", vec![Span::from(account_value)]));
             if let Some(account_details) = account_details {
                 lines.push(formatter.continuation(vec![Span::from(account_details)]));
+            }
+        }
+
+        if let Some(StatusAccountDisplay::ChatGptPool {
+            member_resources, ..
+        }) = self.account.as_ref()
+        {
+            for resources in member_resources {
+                for line in textwrap::wrap(resources, value_width.max(1)) {
+                    lines.push(formatter.continuation(vec![line.into_owned().into()]));
+                }
             }
         }
 

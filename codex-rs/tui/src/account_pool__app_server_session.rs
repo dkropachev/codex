@@ -20,6 +20,12 @@ fn account_ui_state_from_response_preserves_chatgpt_pool_details() {
                     unavailable_reason: None,
                     regular_remaining: Some(80),
                     spark_remaining: Some(50),
+                    credits: Some(codex_app_server_protocol::CreditsSnapshot {
+                        has_credits: true,
+                        unlimited: false,
+                        balance: Some("12.3400".to_string()),
+                    }),
+                    rate_limit_reset_credit_count: Some(3),
                     last_error: None,
                 },
                 codex_app_server_protocol::AccountPoolMember {
@@ -30,6 +36,8 @@ fn account_ui_state_from_response_preserves_chatgpt_pool_details() {
                     unavailable_reason: Some("missing credentials".to_string()),
                     regular_remaining: None,
                     spark_remaining: None,
+                    credits: None,
+                    rate_limit_reset_credit_count: None,
                     last_error: Some("missing credentials".to_string()),
                 },
             ],
@@ -53,6 +61,10 @@ fn account_ui_state_from_response_preserves_chatgpt_pool_details() {
                 email: Some("work@example.com".to_string()),
                 plan: Some("Pro 200".to_string()),
             }),
+            member_resources: vec![
+                "work-pro: resets 3, credits 12.3400".to_string(),
+                "personal-pro: resets ?, credits ?".to_string()
+            ],
             member_count: 2,
             unavailable_count: 1,
         })
@@ -79,6 +91,8 @@ fn account_ui_state_from_response_uses_pool_member_metadata_without_active_assig
                     unavailable_reason: None,
                     regular_remaining: Some(80),
                     spark_remaining: Some(50),
+                    credits: None,
+                    rate_limit_reset_credit_count: None,
                     last_error: None,
                 },
                 codex_app_server_protocol::AccountPoolMember {
@@ -89,6 +103,8 @@ fn account_ui_state_from_response_uses_pool_member_metadata_without_active_assig
                     unavailable_reason: None,
                     regular_remaining: Some(60),
                     spark_remaining: Some(40),
+                    credits: None,
+                    rate_limit_reset_credit_count: None,
                     last_error: None,
                 },
             ],
@@ -108,6 +124,10 @@ fn account_ui_state_from_response_uses_pool_member_metadata_without_active_assig
         Some(StatusAccountDisplay::ChatGptPool {
             pool_id: "codex-pro".to_string(),
             active_member: None,
+            member_resources: vec![
+                "work-pro: resets ?, credits ?".to_string(),
+                "personal-pro: resets ?, credits ?".to_string()
+            ],
             member_count: 2,
             unavailable_count: 0,
         })
