@@ -118,7 +118,7 @@ pub struct AccountPoolRecoveryState {
         (String, String, AccountPoolUsageBucket),
         AccountPoolAuthSelection,
     >,
-    /// Pins the next model operation to a member whose included quota was just recovered.
+    /// Pins the next model operation to the member chosen during recovery.
     pub retry_selection: Option<AccountPoolAuthSelection>,
     pub(crate) reset_attempts: std::collections::HashSet<(String, String)>,
 }

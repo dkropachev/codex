@@ -1,3 +1,4 @@
+mod refresh;
 mod stored_auth;
 mod workspace_routing;
 
@@ -3686,36 +3687,7 @@ impl AuthManager {
         tokens: TokenData,
         reason: RefreshReason,
     ) -> Result<(), RefreshTokenError> {
-        let endpoint = refresh_token_endpoint(tokens.oauth_provenance.as_ref());
-        let client_id = tokens
-            .oauth_provenance
-            .as_ref()
-            .map(|provenance| provenance.client_id.clone())
-            .unwrap_or_else(oauth_client_id);
-        let refresh_response = request_chatgpt_token_refresh(
-            tokens.refresh_token.clone(),
-            &endpoint,
-            &client_id,
-            auth.client(),
-            reason,
-        )
-        .await?;
-
-        // An explicit override may send refresh to another authority. Retain provenance
-        // only when the endpoint used by this request matches the recorded issuer.
-        let provenance = tokens.oauth_provenance.clone().filter(|provenance| {
-            endpoint == format!("{}/oauth/token", provenance.issuer.trim_end_matches('/'))
-        });
-
-        persist_tokens(
-            auth.storage(),
-            &tokens,
-            provenance,
-            refresh_response.id_token,
-            refresh_response.access_token,
-            refresh_response.refresh_token,
-        )
-        .map_err(RefreshTokenError::from)?;
+        auth.refresh(tokens, reason).await?;
         self.reload().await;
 
         Ok(())

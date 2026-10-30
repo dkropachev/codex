@@ -1363,6 +1363,15 @@ impl ModelClient {
         &self,
         request: AccountPoolClientSetupRequest<'_>,
     ) -> Result<CurrentClientSetup> {
+        let provider = self.state.provider.info();
+        if !provider.requires_openai_auth
+            || provider.env_key.is_some()
+            || provider.experimental_bearer_token.is_some()
+            || provider.auth.is_some()
+            || provider.aws.is_some()
+        {
+            return self.current_client_setup(request.routing).await;
+        }
         let selection_context = AccountPoolSelectionContext {
             bucket: AccountPoolUsageBucket::Regular,
             affinity_key: request.affinity_key.to_string(),

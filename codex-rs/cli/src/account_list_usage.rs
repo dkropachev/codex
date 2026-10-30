@@ -56,20 +56,25 @@ pub(super) async fn lookup(
         )
         .await;
         credential = loaded;
-        let Some(auth) = auth.filter(|_| credential.status == CredentialStatus::LoggedIn) else {
+        let Some(mut auth) = auth.filter(|_| credential.status == CredentialStatus::LoggedIn)
+        else {
             return;
         };
         if !auth.uses_codex_backend() {
             return;
         }
-        match BackendClient::from_auth(
-            config.chatgpt_base_url.clone(),
-            &auth,
-            config.http_client_factory(),
-        )
-        .get_rate_limits_with_reset_credits()
-        .await
-        {
+        let usage = async {
+            auth.refresh_if_needed().await?;
+            BackendClient::from_auth(
+                config.chatgpt_base_url.clone(),
+                &auth,
+                config.http_client_factory(),
+            )
+            .get_rate_limits_with_reset_credits()
+            .await
+        }
+        .await;
+        match usage {
             Ok(usage) => {
                 credential.usage = AccountUsage {
                     status: UsageStatus::Available,

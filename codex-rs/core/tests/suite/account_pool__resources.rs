@@ -196,6 +196,60 @@ async fn no_permitted_capacity_does_not_use_other_authentication() -> Result<()>
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug)]
+enum IndependentProvider {
+    BearerToken,
+    Unauthenticated,
+}
+
+#[test_case::test_case(IndependentProvider::BearerToken; "provider token bypasses exhausted pool")]
+#[test_case::test_case(IndependentProvider::Unauthenticated; "local provider bypasses exhausted pool")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn independent_provider_ignores_unavailable_pool(
+    provider: IndependentProvider,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    let response = responses::mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("done"), ev_completed("done")]),
+    )
+    .await;
+    let test = test_codex()
+        .with_config_auth_manager()
+        .with_config(move |config| {
+            config.model_provider.requires_openai_auth =
+                matches!(provider, IndependentProvider::BearerToken);
+            config.model_provider.experimental_bearer_token = match provider {
+                IndependentProvider::BearerToken => Some("provider-token".into()),
+                IndependentProvider::Unauthenticated => None,
+            };
+            // No member has credentials, so the pool cannot authorize a request.
+            config.account_pool = Some(AccountPoolToml {
+                enabled: true,
+                default_pool: Some("codex-pro".to_string()),
+                pools: [("codex-pro".to_string(), resource_definition())].into(),
+            });
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn("use the independently configured provider")
+        .await?;
+    let request = response.single_request();
+    let expected_auth = match provider {
+        IndependentProvider::BearerToken => Some("Bearer provider-token".to_string()),
+        IndependentProvider::Unauthenticated => None,
+    };
+    assert_eq!(
+        (
+            request.header("authorization"),
+            request.header("ChatGPT-Account-ID")
+        ),
+        (expected_auth, None)
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hot_cache_can_reset_same_account_below_switch_threshold() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -337,3 +391,6 @@ async fn ineffective_model_recovery_is_bounded_even_when_usage_reports_success()
     server.verify().await;
     Ok(())
 }
+
+#[path = "account_pool__recovery_retry.rs"]
+mod recovery_retry;

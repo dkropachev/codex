@@ -24,11 +24,18 @@ static RESET_GUARDS: LazyLock<Mutex<HashMap<PathBuf, Weak<ResetGuard>>>> =
 
 #[derive(Debug, Default)]
 pub(super) struct ResetState {
-    owner: Option<String>,
-    pending: Option<(String, u8)>,
+    pub(super) owner: Option<String>,
+    pub(super) pending: Option<PendingReset>,
     completed_at: Option<Instant>,
     attempted_at: Option<Instant>,
     blocked: bool,
+}
+
+#[derive(Debug)]
+pub(super) struct PendingReset {
+    request_id: String,
+    pub(super) attempts: u8,
+    pub(super) bucket: AccountPoolUsageBucket,
 }
 
 pub(super) fn reset_guard(home: &Path) -> Arc<ResetGuard> {
@@ -129,7 +136,12 @@ impl AccountPoolManager {
             .collect();
         for account_id in pool.order_member_ids(&context, selection.cache_hint, candidates) {
             if pool.member_tier(&account_id, bucket).is_some() {
-                return can_switch || account_id == selection.account_id;
+                // Selection can also consider uncertain resets from earlier turns. Pin
+                // this candidate so a reset already attempted this turn cannot win again.
+                let mut retry_context = context.clone();
+                retry_context.pinned_account_id = Some(account_id);
+                state.retry_selection = pool.select_auth(retry_context).await;
+                return state.retry_selection.is_some();
             }
             let key = (pool.pool_id.clone(), account_id.clone());
             let Some(failed) =
@@ -230,14 +242,16 @@ impl AccountPool {
             return false;
         }
         // Keep the same request ID after an uncertain POST. Bound uncertain retries across turns.
-        let (request_id, attempts) = guard
-            .pending
-            .get_or_insert_with(|| (format!("codex-pool-{:032x}", rand::random::<u128>()), 0));
-        if *attempts >= 2 {
+        let pending = guard.pending.get_or_insert_with(|| PendingReset {
+            request_id: format!("codex-pool-{:032x}", rand::random::<u128>()),
+            attempts: 0,
+            bucket,
+        });
+        if pending.attempts >= 2 || pending.bucket != bucket {
             return false;
         }
-        *attempts += 1;
-        let request_id = request_id.clone();
+        pending.attempts += 1;
+        let request_id = pending.request_id.clone();
         guard.attempted_at = Some(Instant::now());
         let response = tokio::time::timeout(
             REQUEST_TIMEOUT,

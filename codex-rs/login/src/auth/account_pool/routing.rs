@@ -64,6 +64,22 @@ impl AccountPool {
             .iter()
             .filter_map(|member| {
                 self.member_tier(&member.account_id, bucket)
+                    .or_else(|| {
+                        if !self.definition.auto_consume_resets {
+                            return None;
+                        }
+                        let guard = member.reset_guard.state.try_lock().ok()?;
+                        let pending = guard.pending.as_ref()?;
+                        // Keep exhaustion recorded, but let a later model error retry
+                        // an uncertain redemption using its original request ID.
+                        (pending.attempts < 2
+                            && pending.bucket == bucket
+                            && member
+                                .manager
+                                .auth_cached_unpooled()
+                                .is_some_and(|auth| auth.get_account_id() == guard.owner))
+                        .then_some(CapacityTier::Resets)
+                    })
                     .map(|tier| (member.account_id.clone(), tier))
             })
             .collect();
