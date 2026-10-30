@@ -6,6 +6,9 @@ mod list_usage;
 #[path = "account_pool__account/list_usage_auth_tests.rs"]
 mod list_usage_auth;
 
+#[path = "account_pool__account/list_usage_refresh_tests.rs"]
+mod list_usage_refresh;
+
 use anyhow::Context;
 use anyhow::Result;
 use predicates::str::contains;
