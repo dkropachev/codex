@@ -359,7 +359,7 @@ async fn pinned_powershell_runs_under_wine_with_a_pty() -> Result<()> {
         session,
         mut stdout_rx,
         mut stderr_rx,
-        exit_rx,
+        mut exit_rx,
     } = codex_utils_pty::spawn_pty_process(
         &wine,
         &args,
@@ -370,28 +370,29 @@ async fn pinned_powershell_runs_under_wine_with_a_pty() -> Result<()> {
         codex_utils_pty::ChildFds::Inherited(&[]),
     )
     .await?;
-    let command_result = timeout(Duration::from_secs(30), async {
-        let stdout = async {
-            let mut output = Vec::new();
-            while let Some(chunk) = stdout_rx.recv().await {
-                output.extend(chunk);
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    // A fresh Wine prefix also boots Windows services and starts the .NET runtime.
+    let command_result = timeout(Duration::from_secs(/*secs*/ 90), async {
+        loop {
+            tokio::select! {
+                Some(chunk) = stdout_rx.recv() => stdout.extend(chunk),
+                Some(chunk) = stderr_rx.recv() => stderr.extend(chunk),
+                result = &mut exit_rx => break result.context("wait for PowerShell"),
             }
-            output
-        };
-        let stderr = async {
-            let mut output = Vec::new();
-            while let Some(chunk) = stderr_rx.recv().await {
-                output.extend(chunk);
-            }
-            output
-        };
-        let (stdout, stderr, exit_code) = tokio::join!(stdout, stderr, exit_rx);
-        Ok::<_, anyhow::Error>((stdout, stderr, exit_code.context("wait for PowerShell")?))
+        }
     })
     .await
-    .context("PowerShell smoke test timed out")
+    .with_context(|| {
+        format!(
+            "PowerShell smoke test timed out; stdout: {}; stderr: {}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr),
+        )
+    })
     .and_then(std::convert::identity);
-    drop(session);
+    // Wine services can retain the PTY after PowerShell exits. Stop them before
+    // waiting for output EOF, while keeping the session's output readers alive.
     let shutdown_result = timeout(Duration::from_secs(10), async {
         let mut command = TokioCommand::new(&runtime.wineserver);
         command
@@ -410,14 +411,32 @@ async fn pinned_powershell_runs_under_wine_with_a_pty() -> Result<()> {
     .await
     .context("stop isolated wineserver timed out")
     .and_then(std::convert::identity);
-    let (stdout, stderr, exit_code) = match (command_result, shutdown_result) {
-        (Ok(output), Ok(())) => output,
+    let output_result = timeout(Duration::from_secs(/*secs*/ 10), async {
+        tokio::join!(
+            async {
+                while let Some(chunk) = stdout_rx.recv().await {
+                    stdout.extend(chunk);
+                }
+            },
+            async {
+                while let Some(chunk) = stderr_rx.recv().await {
+                    stderr.extend(chunk);
+                }
+            },
+        );
+    })
+    .await
+    .context("PowerShell output did not close after Wine shutdown");
+    drop(session);
+    let exit_code = match (command_result, shutdown_result) {
+        (Ok(exit_code), Ok(())) => exit_code,
         (Err(error), Ok(())) => return Err(error),
         (Ok(_), Err(error)) => return Err(error),
         (Err(error), Err(shutdown_error)) => {
             return Err(error.context(format!("Wine teardown also failed: {shutdown_error:#}")));
         }
     };
+    output_result?;
     anyhow::ensure!(
         exit_code == 0,
         "PowerShell exited with {}; stderr: {}",
