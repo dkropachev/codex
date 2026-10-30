@@ -101,6 +101,9 @@ async fn refresh_token_uses_active_account_pool_member() -> Result<()> {
                 AccountPoolDefinitionToml {
                     provider: "openai".to_string(),
                     policy: AccountPoolPolicyToml::Drain,
+                    auto_consume_resets: false,
+                    auto_consume_credits: false,
+                    fallback_priority: Default::default(),
                     accounts: vec![account_id.to_string()],
                 },
             )]

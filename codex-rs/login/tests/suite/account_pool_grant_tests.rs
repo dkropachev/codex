@@ -62,6 +62,9 @@ impl Fixture {
         let definition = AccountPoolDefinitionToml {
             provider: "openai".into(),
             policy: AccountPoolPolicyToml::Drain,
+            auto_consume_resets: false,
+            auto_consume_credits: false,
+            fallback_priority: Default::default(),
             accounts: vec!["work-pro".into(), "personal-pro".into()],
         };
         let config = AccountPoolTestConfig {

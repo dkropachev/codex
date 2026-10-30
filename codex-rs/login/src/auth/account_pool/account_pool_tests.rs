@@ -134,6 +134,9 @@ async fn managed_policy_filters_disallowed_pool_member_auth() {
                 AccountPoolDefinitionToml {
                     provider: "openai".to_string(),
                     policy: AccountPoolPolicyToml::Drain,
+                    auto_consume_resets: false,
+                    auto_consume_credits: false,
+                    fallback_priority: Default::default(),
                     accounts: vec!["work-pro".to_string()],
                 },
             )]
@@ -642,6 +645,9 @@ pub(super) async fn pool_manager_with_base_url(
                 AccountPoolDefinitionToml {
                     provider: "openai".to_string(),
                     policy,
+                    auto_consume_resets: false,
+                    auto_consume_credits: false,
+                    fallback_priority: Default::default(),
                     accounts: accounts.into_iter().map(str::to_string).collect(),
                 },
             )]

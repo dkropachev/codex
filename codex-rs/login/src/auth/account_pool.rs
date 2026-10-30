@@ -1,4 +1,5 @@
 mod refresh;
+mod routing;
 mod transport;
 mod usage;
 
@@ -438,62 +439,6 @@ impl AccountPool {
         None
     }
 
-    fn select_member_ids(
-        &self,
-        context: &AccountPoolSelectionContext,
-        cache_hint: Option<AccountPoolCacheHint>,
-    ) -> Vec<String> {
-        let bucket = context.bucket;
-        let mut account_ids: Vec<_> = self
-            .members
-            .iter()
-            .filter(|member| !self.is_exhausted(&member.account_id, bucket))
-            .map(|member| member.account_id.clone())
-            .collect();
-        if let Some(pinned_account_id) = context.pinned_account_id.as_deref() {
-            return account_ids
-                .into_iter()
-                .filter(|account_id| account_id == pinned_account_id)
-                .collect();
-        }
-        let assignment_key = self.assignment_key(bucket, &context.affinity_key);
-        if let Some(assignment) = self.assignment(&assignment_key)
-            && let Some(active_index) = account_ids
-                .iter()
-                .position(|account_id| account_id == &assignment.account_id)
-        {
-            if self.definition.policy != AccountPoolPolicyToml::LoadBalance {
-                let active_account_id = account_ids.remove(active_index);
-                account_ids.insert(0, active_account_id);
-                return account_ids;
-            }
-            match cache_hint
-                .map(|hint| hint.heat())
-                .unwrap_or(AccountPoolCacheHeat::Cold)
-            {
-                AccountPoolCacheHeat::Cold => {}
-                AccountPoolCacheHeat::Warm | AccountPoolCacheHeat::Hot
-                    if !self.should_rebalance_assignment(
-                        &assignment.account_id,
-                        bucket,
-                        cache_hint,
-                    ) =>
-                {
-                    let active_account_id = account_ids.remove(active_index);
-                    account_ids.insert(0, active_account_id);
-                    return account_ids;
-                }
-                AccountPoolCacheHeat::Warm | AccountPoolCacheHeat::Hot => {}
-            }
-        }
-        if self.definition.policy == AccountPoolPolicyToml::LoadBalance {
-            account_ids.sort_by_key(|account_id| {
-                std::cmp::Reverse(self.member_score(account_id, bucket, &assignment_key))
-            });
-        }
-        account_ids
-    }
-
     fn status(&self) -> AccountPoolStatus {
         let active_account_id = self.active_account_id();
         let members = self
@@ -671,93 +616,6 @@ impl AccountPool {
             })
     }
 
-    fn member_score(
-        &self,
-        account_id: &str,
-        bucket: AccountPoolUsageBucket,
-        assignment_key: &AccountPoolAssignmentKey,
-    ) -> i64 {
-        let (remaining, unknown_usage_penalty) = match self.fresh_remaining(account_id, bucket) {
-            Some(remaining) => (remaining as i64, 0),
-            None => (0, UNKNOWN_USAGE_PENALTY),
-        };
-        let active_affinity_penalty = self.active_assignment_count(account_id, assignment_key)
-            as i64
-            * ACTIVE_AFFINITY_PENALTY;
-        remaining - unknown_usage_penalty - active_affinity_penalty
-    }
-
-    fn active_assignment_count(
-        &self,
-        account_id: &str,
-        current_key: &AccountPoolAssignmentKey,
-    ) -> usize {
-        let Ok(guard) = self.assignments.read() else {
-            return 0;
-        };
-        guard
-            .iter()
-            .filter(|(key, assignment)| key != &current_key && assignment.account_id == account_id)
-            .count()
-    }
-
-    fn fresh_remaining(&self, account_id: &str, bucket: AccountPoolUsageBucket) -> Option<u64> {
-        self.member_state(account_id)
-            .and_then(|state| state.usage)
-            .filter(|usage| usage.last_refreshed.elapsed() <= USAGE_REFRESH_INTERVAL)
-            .and_then(|usage| match bucket {
-                AccountPoolUsageBucket::Regular => usage.regular_remaining,
-                AccountPoolUsageBucket::Spark => usage.spark_remaining,
-            })
-    }
-
-    fn should_rebalance_assignment(
-        &self,
-        active_account_id: &str,
-        bucket: AccountPoolUsageBucket,
-        cache_hint: Option<AccountPoolCacheHint>,
-    ) -> bool {
-        let Some(active_remaining) = self.fresh_remaining(active_account_id, bucket) else {
-            return false;
-        };
-        let (low_remaining, material_advantage) = match cache_hint
-            .map(|hint| hint.heat())
-            .unwrap_or(AccountPoolCacheHeat::Cold)
-        {
-            AccountPoolCacheHeat::Cold => return true,
-            AccountPoolCacheHeat::Warm => (
-                WARM_REBALANCE_LOW_REMAINING,
-                WARM_REBALANCE_MATERIAL_ADVANTAGE,
-            ),
-            AccountPoolCacheHeat::Hot => (
-                HOT_REBALANCE_LOW_REMAINING,
-                HOT_REBALANCE_MATERIAL_ADVANTAGE,
-            ),
-        };
-        if active_remaining > low_remaining {
-            return false;
-        }
-        self.members
-            .iter()
-            .filter(|member| member.account_id != active_account_id)
-            .filter(|member| !self.is_exhausted(&member.account_id, bucket))
-            .filter_map(|member| self.fresh_remaining(&member.account_id, bucket))
-            .max()
-            .is_some_and(|best_remaining| {
-                best_remaining >= active_remaining.saturating_add(material_advantage)
-            })
-    }
-
-    fn has_available_member(&self, bucket: AccountPoolUsageBucket) -> bool {
-        self.members.iter().any(|member| {
-            !self.is_exhausted(&member.account_id, bucket)
-                && member
-                    .manager
-                    .auth_cached_unpooled()
-                    .is_some_and(|auth| auth.is_chatgpt_auth())
-        })
-    }
-
     async fn refresh_active_token(&self) -> Result<(), RefreshTokenError> {
         let account_id = self.active_account_id().or_else(|| {
             self.cached_member_auth(AccountPoolUsageBucket::Regular)
@@ -800,3 +658,7 @@ async fn member_auth(account_id: &str, manager: &Arc<AuthManager>) -> Option<Cod
 #[cfg(test)]
 #[path = "account_pool/account_pool_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "account_pool/capacity_tests.rs"]
+mod capacity_tests;

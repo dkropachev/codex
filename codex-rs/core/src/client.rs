@@ -1382,6 +1382,17 @@ impl ModelClient {
                 .auth_selection_for_model(request.model, Some(selection_context.clone()))
                 .await;
             let Some(account_pool_selection) = auth_selection.account_pool_selection else {
+                if auth_selection.auth.is_none()
+                    && self
+                        .state
+                        .provider
+                        .auth_manager()
+                        .is_some_and(|manager| manager.account_pool_status().is_some())
+                {
+                    return Err(CodexErr::InvalidRequest(
+                        "no permitted pool capacity".to_string(),
+                    ));
+                }
                 if request.pinned_selection.is_some() {
                     return Err(
                         std::io::Error::other("pinned account pool member is unavailable").into(),

@@ -2073,6 +2073,9 @@ async fn external_auth_suppresses_configured_account_pool_routing() {
             AccountPoolDefinitionToml {
                 provider: "openai".to_string(),
                 policy: AccountPoolPolicyToml::Drain,
+                auto_consume_resets: false,
+                auto_consume_credits: false,
+                fallback_priority: Default::default(),
                 accounts: vec!["pool-account".to_string()],
             },
         )]

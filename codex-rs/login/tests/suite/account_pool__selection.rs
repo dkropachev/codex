@@ -165,12 +165,12 @@ async fn cold_load_balance_selection_penalizes_unknown_usage() -> Result<()> {
     write_chatgpt_auth(codex_home.path(), "work-pro", "work@example.com")?;
     write_chatgpt_auth(codex_home.path(), "personal-pro", "personal@example.com")?;
     let pool = load_balance_pool(codex_home.path()).await?;
-    pool.set_usage_for_testing("personal-pro", Some(0), Some(0), Instant::now());
+    pool.set_usage_for_testing("personal-pro", Some(1), Some(1), Instant::now());
 
     let selection = pool
         .auth_for_context(selection_context(
             AccountPoolUsageBucket::Regular,
-            "known-empty-usage",
+            "known-small-usage",
         ))
         .await
         .context("selection should exist")?;
@@ -396,6 +396,9 @@ fn load_balance_account_pool_config() -> AccountPoolToml {
             AccountPoolDefinitionToml {
                 provider: "openai".to_string(),
                 policy: AccountPoolPolicyToml::LoadBalance,
+                auto_consume_resets: false,
+                auto_consume_credits: false,
+                fallback_priority: Default::default(),
                 accounts: vec!["work-pro".to_string(), "personal-pro".to_string()],
             },
         )]
