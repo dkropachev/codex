@@ -59,6 +59,7 @@ In the codex-rs folder where the rust code lives:
     the new implementation so the invariants stay close to the code that owns them.
   - Avoid adding new standalone methods to `codex-rs/tui/src/chatwidget.rs` unless the change is
     trivial; prefer new modules/files and keep `chatwidget.rs` focused on orchestration.
+- Limit local build and compilation concurrency to at most 8 worker jobs total. Run only one build or compilation command at a time. Set `CARGO_BUILD_JOBS=8` for all Cargo and `just` commands, including tests and Clippy; use `--jobs=8` for Bazel and equivalent limits for other build tools.
 - When running Rust commands (e.g. `just fix` or `just test`) be patient with the command and never try to kill them using the PID. Rust lock can make the execution slow, this is expected.
 
 Run `just fmt` (in the `codex-rs` directory) automatically after you have finished making code changes anywhere in this repository; do not ask for approval to run it. Additionally, run the tests:
