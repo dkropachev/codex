@@ -227,8 +227,19 @@ The pool must not switch for:
 - Account status reads, rate-limit reads, cached auth/status inspection, or agent/subagent startup.
 - Load-balance refresh results by themselves.
 
-Automatic reset recovery is introduced separately. Selection may route to a member whose
-reset availability is enabled, but passive reads never redeem a reset.
+Recovery first tries remaining included quota, then enabled fallback resources in configured order.
+A reset requires a supported model usage-limit error before visible output; polling and status reads
+never redeem resets. Same-account reset recovery does not require the cache-switch threshold.
+Accounts selected for their reset availability may still spend enabled credits before producing the
+error required for redemption, even with `resets_first`.
+
+Redemption is serialized per credential home across pool references. Under that guard Codex rechecks
+usage, retains a stable idempotency key for at most two uncertain POST attempts, and refreshes usage
+afterward. Definitive ineffective resets are suppressed until usage confirms recovery. Each turn
+attempts reset recovery at most once per member, so stale or ineffective recovery cannot loop.
+Exhaustion is cleared only when refreshed usage confirms included capacity.
+
+Exhaustion and redemption state are process-local and may reset across Codex process restarts.
 
 ### WebSocket Identity
 
@@ -668,3 +679,19 @@ Generate tests for these behaviors:
   unknown, hidden, zero, and unlimited values. TUI pool status shows compact per-member resources.
 - TUI/app-server `account/rateLimits/read` and `account/rateLimits/updated` update status display
   without selecting or switching accounts.
+
+### Reset and credit awareness coverage
+
+- Permission and priority combinations, numeric credit ordering, fallback affinity, and included
+  quota preference: `login/src/auth/account_pool/capacity_tests.rs`.
+- Concurrent credential-home recovery, uncertain redemption IDs, ineffective resets, and partial
+  usage refresh failures: `login/src/auth/account_pool/recovery_tests.rs`.
+- Agent fallback ordering, same-account reset retry below the cache threshold, disabled consumption,
+  exhausted-pool errors, and visible-output safety: `core/tests/suite/account_pool__resources.rs`.
+- WebSocket reconnect into credit capacity: `account_pool_websocket_failover_reconnects_with_next_member`.
+- Legacy app-server member payloads and exact nullable balances:
+  `app-server-protocol/src/protocol/v2/account_pool_tests.rs`.
+
+Implementation can be reviewed in three stages: usage/status visibility (including the mechanical
+usage/test extraction and wire schemas), configuration/selection, then automatic reset recovery and
+agent integration coverage.

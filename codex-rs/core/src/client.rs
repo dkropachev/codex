@@ -315,6 +315,7 @@ pub struct ModelClientSession {
     client: ModelClient,
     websocket_session: WebsocketSession,
     last_account_pool_selection: Option<AccountPoolAuthSelection>,
+    account_pool_recovery_state: codex_login::AccountPoolRecoveryState,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -340,6 +341,7 @@ pub(crate) struct ResponsesRoutingSnapshot {
 pub(crate) struct ResponsesHttpState {
     turn_state: Arc<OnceLock<String>>,
     account_pool_selection: Option<AccountPoolAuthSelection>,
+    retry_selection: Option<AccountPoolAuthSelection>,
 }
 
 impl ResponsesHttpState {
@@ -347,6 +349,7 @@ impl ResponsesHttpState {
         Self {
             turn_state: Arc::new(snapshot.turn_state.map(OnceLock::from).unwrap_or_default()),
             account_pool_selection: snapshot.account_pool_selection,
+            retry_selection: None,
         }
     }
 }
@@ -766,6 +769,7 @@ impl ModelClient {
             client: self.clone(),
             websocket_session,
             last_account_pool_selection: None,
+            account_pool_recovery_state: codex_login::AccountPoolRecoveryState::default(),
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -1726,21 +1730,25 @@ impl ModelClientSession {
         );
     }
 
-    pub(crate) fn mark_account_pool_selection_exhausted(
-        &self,
+    pub(crate) async fn recover_account_pool_selection(
+        &mut self,
         bucket: AccountPoolUsageBucket,
-        error: String,
+        mode: codex_login::AccountPoolRecoveryMode,
     ) -> bool {
         let Some(selection) = self.last_account_pool_selection.as_ref() else {
             return false;
         };
-        self.client
-            .state
-            .provider
-            .auth_manager()
-            .is_some_and(|auth_manager| {
-                auth_manager.mark_account_pool_selection_exhausted(selection, bucket, error)
-            })
+        let Some(auth_manager) = self.client.state.provider.auth_manager() else {
+            return false;
+        };
+        auth_manager
+            .recover_account_pool_selection(
+                selection,
+                bucket,
+                mode,
+                &mut self.account_pool_recovery_state,
+            )
+            .await
     }
 
     fn remember_account_pool_selection(&mut self, setup: &CurrentClientSetup) {
@@ -2157,7 +2165,7 @@ impl ResponsesHttpExecutor<'_> {
         let mut auth_recovery = None;
         let mut provider_auth_recovery_attempted = false;
         let mut pending_retry = PendingUnauthorizedRetry::default();
-        let mut pinned_selection = None;
+        let mut pinned_selection = state.retry_selection.take();
         let affinity_key = self
             .client
             .prompt_cache_key(responses_metadata)
@@ -2390,7 +2398,7 @@ impl ModelClientSession {
         let mut auth_recovery = None;
         let mut provider_auth_recovery_attempted = false;
         let mut pending_retry = PendingUnauthorizedRetry::default();
-        let mut pinned_selection = None;
+        let mut pinned_selection = self.account_pool_recovery_state.retry_selection.clone();
         let affinity_key = self
             .client
             .prompt_cache_key(responses_metadata)
@@ -2821,7 +2829,10 @@ impl ModelClientSession {
                         )
                         .await?
                     {
-                        WebsocketStreamOutcome::Stream(stream) => return Ok(stream),
+                        WebsocketStreamOutcome::Stream(stream) => {
+                            self.account_pool_recovery_state.retry_selection = None;
+                            return Ok(stream);
+                        }
                         WebsocketStreamOutcome::FallbackToHttp => {
                             self.try_switch_fallback_transport(session_telemetry, model_info);
                         }
@@ -2831,6 +2842,7 @@ impl ModelClientSession {
                 let mut state = ResponsesHttpState {
                     turn_state: Arc::clone(&self.turn_state),
                     account_pool_selection: self.last_account_pool_selection.clone(),
+                    retry_selection: self.account_pool_recovery_state.retry_selection.take(),
                 };
                 let result = ResponsesHttpExecutor::new(&self.client)
                     .stream_responses_http(

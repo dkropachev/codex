@@ -113,7 +113,7 @@ fn missing_window_reset_uses_error_reset_before_window_duration() {
             /*visible_output_started*/ false,
             now,
         ),
-        AccountPoolFailoverDecision::Stay
+        AccountPoolFailoverDecision::Stay(AccountPoolUsageBucket::Regular)
     );
 }
 
@@ -166,7 +166,7 @@ fn hot_cache_prevents_short_wait_failover() {
             /*visible_output_started*/ false,
             now,
         ),
-        AccountPoolFailoverDecision::Stay
+        AccountPoolFailoverDecision::Stay(AccountPoolUsageBucket::Regular)
     );
 }
 

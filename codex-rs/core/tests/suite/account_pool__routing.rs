@@ -864,3 +864,6 @@ fn fake_jwt(payload: serde_json::Value) -> String {
     };
     format!("{}.{}.sig", encode(header), encode(payload))
 }
+
+#[path = "account_pool__resources.rs"]
+mod resources;
