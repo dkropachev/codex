@@ -212,6 +212,7 @@ fn non_exhausted_window_does_not_switch() {
 
 fn selection(cache_hint: Option<AccountPoolCacheHint>) -> AccountPoolAuthSelection {
     AccountPoolAuthSelection {
+        selected_at: std::time::Instant::now(),
         auth: CodexAuth::from_api_key("sk-test"),
         pool_id: "codex-pro".to_string(),
         account_id: "work-pro".to_string(),

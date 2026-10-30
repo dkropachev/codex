@@ -41,6 +41,8 @@ pub use auth::AccountPoolCacheHeat;
 pub use auth::AccountPoolCacheHint;
 pub use auth::AccountPoolMemberStatus;
 pub use auth::AccountPoolOperationKind;
+pub use auth::AccountPoolRecoveryMode;
+pub use auth::AccountPoolRecoveryState;
 pub use auth::AccountPoolSelectionContext;
 pub use auth::AccountPoolStatus;
 pub use auth::AccountPoolUsageBucket;

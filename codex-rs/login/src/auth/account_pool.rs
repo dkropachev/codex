@@ -1,3 +1,4 @@
+mod recovery;
 mod refresh;
 mod routing;
 mod transport;
@@ -102,6 +103,7 @@ struct AccountPoolAssignment {
 struct AccountPoolMember {
     account_id: String,
     manager: Arc<AuthManager>,
+    reset_guard: Arc<recovery::ResetGuard>,
 }
 
 #[derive(Debug)]
@@ -153,6 +155,7 @@ impl AccountPoolManager {
                 let mut member_auth_config = auth_config.clone();
                 member_auth_config.codex_home =
                     auth_config.codex_home.join("accounts").join(account_id);
+                let reset_guard = recovery::reset_guard(&member_auth_config.codex_home);
                 let mut manager = AuthManager::new_from_auth_config(
                     member_auth_config,
                     /*enable_codex_api_key_env*/ false,
@@ -162,6 +165,7 @@ impl AccountPoolManager {
                 members.push(AccountPoolMember {
                     account_id: account_id.clone(),
                     manager: Arc::new(manager),
+                    reset_guard,
                 });
             }
             pools.insert(
@@ -379,6 +383,7 @@ impl AccountPool {
                 cache_hint,
             );
             return Some(AccountPoolAuthSelection {
+                selected_at: Instant::now(),
                 auth,
                 pool_id: self.pool_id.clone(),
                 account_id: member_account_id,

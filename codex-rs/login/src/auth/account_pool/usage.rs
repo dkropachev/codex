@@ -188,11 +188,21 @@ impl AccountPool {
     pub(super) fn apply_usage(&self, account_id: &str, usage: MemberUsage) {
         if let Ok(mut guard) = self.state.write() {
             let state = guard.entry(account_id.to_string()).or_default();
-            if usage.included_available(AccountPoolUsageBucket::Regular) == Some(true) {
-                state.regular_exhausted = false;
-            }
-            if usage.included_available(AccountPoolUsageBucket::Spark) == Some(true) {
-                state.spark_exhausted = false;
+            for bucket in [
+                AccountPoolUsageBucket::Regular,
+                AccountPoolUsageBucket::Spark,
+            ] {
+                if usage.included_available(bucket) == Some(true) {
+                    match bucket {
+                        AccountPoolUsageBucket::Regular => state.regular_exhausted = false,
+                        AccountPoolUsageBucket::Spark => state.spark_exhausted = false,
+                    }
+                    if let Some(member) = self.member(account_id)
+                        && let Ok(mut recovered) = member.reset_guard.recovered_at.write()
+                    {
+                        recovered.insert(bucket, usage.last_refreshed);
+                    }
+                }
             }
             state.usage = Some(usage);
         }

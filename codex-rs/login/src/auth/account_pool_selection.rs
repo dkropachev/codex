@@ -75,6 +75,7 @@ impl AccountPoolSelectionContext {
 #[derive(Clone, Debug)]
 pub struct AccountPoolAuthSelection {
     pub auth: CodexAuth,
+    pub selected_at: std::time::Instant,
     pub pool_id: String,
     pub account_id: String,
     pub bucket: AccountPoolUsageBucket,
@@ -101,4 +102,23 @@ impl AccountPoolAssignmentKey {
             affinity_key,
         }
     }
+}
+
+/// Recovery may always retry a reset on the same account; cache cost gates account changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccountPoolRecoveryMode {
+    SameAccountOnly,
+    AllowSwitch,
+}
+
+/// Per-turn recovery budget and error evidence for previously tried pool members.
+#[derive(Debug, Default)]
+pub struct AccountPoolRecoveryState {
+    pub(crate) failed_selections: std::collections::HashMap<
+        (String, String, AccountPoolUsageBucket),
+        AccountPoolAuthSelection,
+    >,
+    /// Pins the next model operation to a member whose included quota was just recovered.
+    pub retry_selection: Option<AccountPoolAuthSelection>,
+    pub(crate) reset_attempts: std::collections::HashSet<(String, String)>,
 }
