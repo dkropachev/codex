@@ -34,7 +34,9 @@ pub(super) async fn wait_for_ready(
     log_dir: &Path,
 ) -> Result<()> {
     let mut raw = Vec::new();
-    tokio::time::timeout(Duration::from_secs(/*secs*/ 30), async {
+    // Cold startup on busy release runners can take longer than an individual UI update.
+    // Keep waiting for the session and OSC state rather than sending input to the loading UI.
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 60), async {
         while !screen.callbacks().ready
             || !screen
                 .screen()
