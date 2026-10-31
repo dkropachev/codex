@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
@@ -12,6 +11,9 @@ use tempfile::tempdir;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use wiremock::MockServer;
+
+use super::live_readiness::LiveScreen;
+use super::live_readiness::wait_for_ready;
 
 const MARKETPLACE_NAME: &str = "codex-curated";
 
@@ -45,16 +47,18 @@ async fn plugin_popup_lists_installed_plugin_and_toggles_enabled_state() -> Resu
     let spawned = spawn_tui(&codex, codex_home.path(), log_dir.path(), workspace.path()).await?;
     let writer = spawned.session.writer_sender();
     let mut output_rx = combine_output_receivers(spawned.stdout_rx, spawned.stderr_rx);
-    let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
+    let mut screen = LiveScreen::new_with_callbacks(
+        /*rows*/ 24,
+        /*cols*/ 80,
+        /*scrollback_len*/ 0,
+        Default::default(),
+    );
 
-    wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("GPT-5.6-Terra default")
-    })
-    .await?;
+    wait_for_ready(&mut output_rx, &mut screen, log_dir.path()).await?;
 
-    send_text(&writer, "/plugins").await?;
+    writer.send(b"\x1b[200~/plugins\x1b[201~".to_vec()).await?;
     wait_for_screen(&mut output_rx, &mut screen, "plugins command", |contents| {
-        contents.contains("/plugins")
+        contents.lines().any(|line| line.trim() == "› /plugins")
     })
     .await?;
     writer.send(b"\r".to_vec()).await?;
@@ -127,12 +131,14 @@ async fn plugin_mention_selection_submits_plugin_guidance() -> Result<()> {
     let spawned = spawn_tui(&codex, codex_home.path(), log_dir.path(), workspace.path()).await?;
     let writer = spawned.session.writer_sender();
     let mut output_rx = combine_output_receivers(spawned.stdout_rx, spawned.stderr_rx);
-    let mut screen = vt100::Parser::new(/*rows*/ 24, /*cols*/ 80, /*scrollback*/ 0);
+    let mut screen = LiveScreen::new_with_callbacks(
+        /*rows*/ 24,
+        /*cols*/ 80,
+        /*scrollback_len*/ 0,
+        Default::default(),
+    );
 
-    wait_for_screen(&mut output_rx, &mut screen, "composer", |contents| {
-        contents.contains("GPT-5.6-Terra default")
-    })
-    .await?;
+    wait_for_ready(&mut output_rx, &mut screen, log_dir.path()).await?;
 
     send_text(&writer, "$live").await?;
     wait_for_screen(
@@ -265,6 +271,9 @@ wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
 
+[tui]
+status_line = ["thread-id"]
+
 [features]
 plugins = true
 mentions_v2 = false
@@ -380,7 +389,7 @@ async fn send_text(writer: &mpsc::Sender<Vec<u8>>, text: &str) -> Result<()> {
 
 async fn wait_for_screen(
     output_rx: &mut broadcast::Receiver<Vec<u8>>,
-    screen: &mut vt100::Parser,
+    screen: &mut LiveScreen,
     label: &str,
     predicate: impl Fn(&str) -> bool,
 ) -> Result<String> {
@@ -422,7 +431,7 @@ async fn wait_for_screen(
                     );
                 }
             };
-        screen.write_all(&chunk)?;
+        screen.process(&chunk);
         raw.extend_from_slice(&chunk);
     }
 }
