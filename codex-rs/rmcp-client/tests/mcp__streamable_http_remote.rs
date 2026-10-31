@@ -23,6 +23,7 @@ use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::ProtocolVersion;
 use serde_json::json;
+use tokio::sync::Notify;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -74,9 +75,14 @@ async fn stalled_handshake_unblocks_remote_executor(
     expected_method: &str,
 ) -> anyhow::Result<()> {
     let http_server = MockServer::start().await;
+    let request_started = Arc::new(Notify::new());
+    let server_request_started = Arc::clone(&request_started);
     Mock::given(method("POST"))
         .and(body_partial_json(json!({ "method": expected_method })))
-        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(10)))
+        .respond_with(move |_: &wiremock::Request| {
+            server_request_started.notify_one();
+            ResponseTemplate::new(200).set_delay(Duration::from_secs(/*secs*/ 60))
+        })
         .expect(1)
         .mount(&http_server)
         .await;
@@ -99,21 +105,29 @@ async fn stalled_handshake_unblocks_remote_executor(
         Implementation::new("codex-test", "0.0.0-test"),
     )
     .with_protocol_version(ProtocolVersion::V_2025_06_18);
-    let error = client
-        .initialize(
-            params,
-            Some(Duration::from_millis(500)),
-            Box::new(|_, _| {
-                async {
-                    Ok(ElicitationResponse {
-                        action: ElicitationAction::Accept,
-                        content: None,
-                        meta: None,
-                    })
-                }
-                .boxed()
-            }),
-        )
+    let initialize = client.initialize(
+        params,
+        Some(Duration::from_secs(/*secs*/ 10)),
+        Box::new(|_, _| {
+            async {
+                Ok(ElicitationResponse {
+                    action: ElicitationAction::Accept,
+                    content: None,
+                    meta: None,
+                })
+            }
+            .boxed()
+        }),
+    );
+    tokio::pin!(initialize);
+    tokio::select! {
+        result = &mut initialize => anyhow::bail!("handshake finished before stalling: {result:?}"),
+        result = tokio::time::timeout(Duration::from_secs(/*secs*/ 10), request_started.notified()) => {
+            result.context("MCP handshake request did not reach the server")?;
+        }
+    }
+    // The real exec-server has its own clock, so let its HTTP deadline expire too.
+    let error = initialize
         .await
         .err()
         .context("the stalled MCP handshake must time out")?;
