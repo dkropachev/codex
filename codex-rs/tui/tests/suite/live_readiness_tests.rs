@@ -20,19 +20,19 @@ async fn readiness_waits_for_session_and_complete_status_sequence() -> Result<()
     let start = tokio::time::Instant::now();
     let sender = tokio::spawn(async move {
         tx.send(b"\x1b]7501;state=idle:app=codex\x1b\\".to_vec())?;
-        tokio::time::sleep(Duration::from_secs(/*secs*/ 1)).await;
+        tokio::time::sleep(Duration::from_secs(/*secs*/ 15)).await;
         tx.send(b"\x1b]7501;state=working:app=codex\x1b\\".to_vec())?;
         tx.send(b"01900000-0000-7000-8000-000000000001".to_vec())?;
-        tokio::time::sleep(Duration::from_secs(/*secs*/ 1)).await;
+        tokio::time::sleep(Duration::from_secs(/*secs*/ 15)).await;
         tx.send(b"\x1b]7501;state=idle:app=".to_vec())?;
-        tokio::time::sleep(Duration::from_secs(/*secs*/ 1)).await;
+        tokio::time::sleep(Duration::from_secs(/*secs*/ 15)).await;
         tx.send(b"codex\x1b\\".to_vec())?;
         Ok::<(), anyhow::Error>(())
     });
 
     wait_for_ready(&mut rx, &mut screen, log_dir.path()).await?;
     sender.await??;
-    assert_eq!(start.elapsed(), Duration::from_secs(/*secs*/ 3));
+    assert_eq!(start.elapsed(), Duration::from_secs(/*secs*/ 45));
     assert_eq!(
         screen.screen().contents(),
         "01900000-0000-7000-8000-000000000001"
