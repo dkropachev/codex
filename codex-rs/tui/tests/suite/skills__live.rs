@@ -62,7 +62,7 @@ async fn skill_mention_submits_skill_instructions() -> Result<()> {
         Default::default(),
     );
 
-    wait_for_ready(&mut output_rx, &mut screen).await?;
+    wait_for_ready(&mut output_rx, &mut screen, log_dir.path()).await?;
 
     send_text(&writer, "$write").await?;
     wait_for_screen(&mut output_rx, &mut screen, "skill popup", |contents| {
@@ -168,7 +168,7 @@ async fn skill_toggle_enables_disabled_skill_and_preserves_draft() -> Result<()>
         Default::default(),
     );
 
-    wait_for_ready(&mut output_rx, &mut screen).await?;
+    wait_for_ready(&mut output_rx, &mut screen, log_dir.path()).await?;
     writer.send(b"$".to_vec()).await?;
     wait_for_screen(
         &mut output_rx,
