@@ -21,6 +21,18 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Free disk space for Bazel (hosted Linux)
+      if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Core tests materialize large native and Windows binaries even with
+        # remote_download_minimal. Reclaim unused SDKs before restoring caches
+        # so local test inputs and runfiles fit on the hosted runner's disk.
+        df -h "$GITHUB_WORKSPACE"
+        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+        df -h "$GITHUB_WORKSPACE"
+
     - name: Set up Bazel CI
       id: setup_bazel
       uses: ./.github/actions/setup-bazel-ci

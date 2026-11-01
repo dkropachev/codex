@@ -10,6 +10,7 @@ use codex_workflows::ScaffoldRequest;
 use codex_workflows::scaffold_workflow;
 use tempfile::tempdir;
 use tokio::sync::broadcast;
+use wiremock::MockServer;
 
 use super::live_readiness::LiveScreen;
 use super::live_readiness::wait_for_ready;
@@ -22,8 +23,11 @@ use std::os::unix::fs::PermissionsExt;
 async fn workflow_command_shows_running_status_in_live_tui() -> Result<()> {
     let codex = codex_utils_cargo_bin::cargo_bin("codex-tui")?;
     let codex_home = tempdir()?;
+    let log_dir = tempdir()?;
     let workspace = tempdir()?;
     let fake_bin = tempdir()?;
+    let server = MockServer::start().await;
+    let server_uri = server.uri();
     let workflow_release = workspace.path().join("release-workflow");
     let workflow_failure = workspace.path().join("fail-workflow");
 
@@ -38,9 +42,16 @@ async fn workflow_command_shows_running_status_in_live_tui() -> Result<()> {
         codex_home.path().join("config.toml"),
         format!(
             r#"model = "gpt-5.6-terra"
-model_provider = "openai"
+model_provider = "mock_provider"
 suppress_unstable_features_warning = true
 notice.model_migrations."gpt-5.6-terra" = "gpt-6-sol"
+
+[model_providers.mock_provider]
+name = "Mock provider for workflow tests"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
 
 [tui]
 status_line = ["thread-id"]
@@ -144,6 +155,8 @@ IFS= read -r _completion_ack
     let args = vec![
         "-c".to_string(),
         "analytics.enabled=false".to_string(),
+        "-c".to_string(),
+        format!("log_dir=\"{}\"", log_dir.path().display()),
         "--no-alt-screen".to_string(),
         "-C".to_string(),
         workspace.path().display().to_string(),
@@ -167,7 +180,7 @@ IFS= read -r _completion_ack
         Default::default(),
     );
 
-    wait_for_ready(&mut output_rx, &mut screen).await?;
+    wait_for_ready(&mut output_rx, &mut screen, log_dir.path()).await?;
 
     writer.send(b"/code-review".to_vec()).await?;
     wait_for_screen(
@@ -194,7 +207,7 @@ IFS= read -r _completion_ack
         |contents| contents.contains("Visible workflow result.") && !contents.contains("Working ("),
     )
     .await?;
-    wait_for_ready(&mut output_rx, &mut screen).await?;
+    wait_for_ready(&mut output_rx, &mut screen, log_dir.path()).await?;
 
     std::fs::remove_file(&workflow_release)?;
     std::fs::write(&workflow_failure, "fail\n")?;
@@ -223,7 +236,7 @@ IFS= read -r _completion_ack
         |contents| contents.contains("workflow failed for test") && !contents.contains("Working ("),
     )
     .await?;
-    wait_for_ready(&mut output_rx, &mut screen).await?;
+    wait_for_ready(&mut output_rx, &mut screen, log_dir.path()).await?;
 
     std::fs::remove_file(&workflow_release)?;
     std::fs::remove_file(&workflow_failure)?;
@@ -262,8 +275,11 @@ IFS= read -r _completion_ack
 async fn workflow_command_autocompletes_in_live_tui() -> Result<()> {
     let codex = codex_utils_cargo_bin::cargo_bin("codex-tui")?;
     let codex_home = tempdir()?;
+    let log_dir = tempdir()?;
     let workspace = tempdir()?;
     let fake_bin = tempdir()?;
+    let server = MockServer::start().await;
+    let server_uri = server.uri();
 
     let workspace_display = workspace.path().display();
     let parent_display = workspace
@@ -276,9 +292,16 @@ async fn workflow_command_autocompletes_in_live_tui() -> Result<()> {
         codex_home.path().join("config.toml"),
         format!(
             r#"model = "gpt-5.6-terra"
-model_provider = "openai"
+model_provider = "mock_provider"
 suppress_unstable_features_warning = true
 notice.model_migrations."gpt-5.6-terra" = "gpt-6-sol"
+
+[model_providers.mock_provider]
+name = "Mock provider for workflow tests"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
 
 [tui]
 status_line = ["thread-id"]
@@ -328,6 +351,8 @@ trust_level = "trusted"
     let args = vec![
         "-c".to_string(),
         "analytics.enabled=false".to_string(),
+        "-c".to_string(),
+        format!("log_dir=\"{}\"", log_dir.path().display()),
         "--no-alt-screen".to_string(),
         "-C".to_string(),
         workspace.path().display().to_string(),
@@ -351,7 +376,7 @@ trust_level = "trusted"
         Default::default(),
     );
 
-    wait_for_ready(&mut output_rx, &mut screen).await?;
+    wait_for_ready(&mut output_rx, &mut screen, log_dir.path()).await?;
 
     for byte in b"/code-review" {
         writer.send(vec![*byte]).await?;

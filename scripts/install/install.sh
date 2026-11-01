@@ -963,7 +963,12 @@ print_launch_instructions() {
 maybe_launch_codex_now() {
   if prompt_yes_no "Start Codex now?"; then
     step "Launching Codex"
-    "$BIN_PATH"
+    if [ -t 0 ]; then
+      "$BIN_PATH"
+    else
+      # A piped installer reads prompts from /dev/tty; Codex needs that input too.
+      "$BIN_PATH" </dev/tty
+    fi
   fi
 }
 
