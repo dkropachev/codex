@@ -12,7 +12,7 @@ use codex_protocol::protocol::RateLimitWindow;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AccountPoolFailoverDecision {
     Switch(AccountPoolUsageBucket),
-    Stay,
+    Stay(AccountPoolUsageBucket),
     NoSafeRetry,
 }
 
@@ -42,7 +42,7 @@ pub(crate) fn decide_account_pool_failover(
             selection.bucket,
         ));
     }
-    AccountPoolFailoverDecision::Stay
+    AccountPoolFailoverDecision::Stay(bucket_for_snapshot(snapshot, selection.bucket))
 }
 
 fn longest_exhausted_window_wait(

@@ -666,6 +666,22 @@ pub struct AccountPoolDefinitionToml {
     pub provider: String,
     pub policy: AccountPoolPolicyToml,
     pub accounts: Vec<String>,
+    /// Allow error-triggered redemption of on-demand resets.
+    #[serde(default)]
+    pub auto_consume_resets: bool,
+    /// Allow routing to members that require credits after included quota is exhausted.
+    #[serde(default)]
+    pub auto_consume_credits: bool,
+    #[serde(default)]
+    pub fallback_priority: AccountPoolFallbackPriorityToml,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountPoolFallbackPriorityToml {
+    #[default]
+    ResetsFirst,
+    CreditsFirst,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
@@ -2082,6 +2098,51 @@ intelligence_score = 0.8
         assert_eq!(
             account_pool.pools.get("codex-pro").expect("pool").policy,
             AccountPoolPolicyToml::LoadBalance
+        );
+    }
+
+    #[test]
+    fn account_pool_fallback_defaults_and_explicit_settings() {
+        let base = "provider = 'openai'\npolicy = 'drain'\naccounts = ['work']\n";
+        let defaults: AccountPoolDefinitionToml = toml::from_str(base).unwrap();
+        assert_eq!(
+            defaults,
+            AccountPoolDefinitionToml {
+                provider: "openai".to_string(),
+                policy: AccountPoolPolicyToml::Drain,
+                accounts: vec!["work".to_string()],
+                auto_consume_resets: false,
+                auto_consume_credits: false,
+                fallback_priority: AccountPoolFallbackPriorityToml::ResetsFirst,
+            }
+        );
+        for resets in [false, true] {
+            for credits in [false, true] {
+                for (priority, expected) in [
+                    ("resets_first", AccountPoolFallbackPriorityToml::ResetsFirst),
+                    (
+                        "credits_first",
+                        AccountPoolFallbackPriorityToml::CreditsFirst,
+                    ),
+                ] {
+                    let parsed: AccountPoolDefinitionToml = toml::from_str(&format!("{base}auto_consume_resets = {resets}\nauto_consume_credits = {credits}\nfallback_priority = '{priority}'")).unwrap();
+                    assert_eq!(
+                        parsed,
+                        AccountPoolDefinitionToml {
+                            auto_consume_resets: resets,
+                            auto_consume_credits: credits,
+                            fallback_priority: expected,
+                            ..defaults.clone()
+                        }
+                    );
+                }
+            }
+        }
+        assert!(
+            toml::from_str::<AccountPoolDefinitionToml>(&format!(
+                "{base}fallback_priority = 'invalid'"
+            ))
+            .is_err()
         );
     }
 

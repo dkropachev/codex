@@ -2550,7 +2550,7 @@ pub struct RateLimitWindow {
     pub resets_at: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct CreditsSnapshot {
     pub has_credits: bool,
     pub unlimited: bool,

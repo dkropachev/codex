@@ -164,6 +164,9 @@ fn set_single_account(config: &mut Config, account: &str) {
         AccountPoolDefinitionToml {
             provider: OPENAI_PROVIDER_ID.to_string(),
             policy: AccountPoolPolicyToml::Drain,
+            auto_consume_resets: false,
+            auto_consume_credits: false,
+            fallback_priority: Default::default(),
             accounts: vec![account.to_string()],
         },
     );

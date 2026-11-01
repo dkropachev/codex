@@ -15,6 +15,24 @@
           },
           "type": "array"
         },
+        "auto_consume_credits": {
+          "default": false,
+          "description": "Allow routing to members that require credits after included quota is exhausted.",
+          "type": "boolean"
+        },
+        "auto_consume_resets": {
+          "default": false,
+          "description": "Allow error-triggered redemption of on-demand resets.",
+          "type": "boolean"
+        },
+        "fallback_priority": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AccountPoolFallbackPriorityToml"
+            }
+          ],
+          "default": "resets_first"
+        },
         "policy": {
           "$ref": "#/definitions/AccountPoolPolicyToml"
         },
@@ -28,6 +46,13 @@
         "provider"
       ],
       "type": "object"
+    },
+    "AccountPoolFallbackPriorityToml": {
+      "enum": [
+        "resets_first",
+        "credits_first"
+      ],
+      "type": "string"
     },
     "AccountPoolPolicyToml": {
       "enum": [

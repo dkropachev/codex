@@ -1862,7 +1862,9 @@ async fn run_sampling_request(
                         client_session,
                         error,
                         visible_output_started,
-                    ) {
+                    )
+                    .await
+                    {
                         retry_state = ResponsesStreamRetryState::default();
                         continue;
                     }
@@ -2039,8 +2041,8 @@ pub(crate) async fn built_tools(
     )?))
 }
 
-fn mark_pool_member_exhausted_for_usage_limit(
-    client_session: &ModelClientSession,
+async fn mark_pool_member_exhausted_for_usage_limit(
+    client_session: &mut ModelClientSession,
     error: &UsageLimitReachedError,
     visible_output_started: bool,
 ) -> bool {
@@ -2050,10 +2052,19 @@ fn mark_pool_member_exhausted_for_usage_limit(
         visible_output_started,
         chrono::Utc::now(),
     );
-    let AccountPoolFailoverDecision::Switch(bucket) = decision else {
-        return false;
+    let (bucket, mode) = match decision {
+        AccountPoolFailoverDecision::Switch(bucket) => {
+            (bucket, codex_login::AccountPoolRecoveryMode::AllowSwitch)
+        }
+        AccountPoolFailoverDecision::Stay(bucket) => (
+            bucket,
+            codex_login::AccountPoolRecoveryMode::SameAccountOnly,
+        ),
+        AccountPoolFailoverDecision::NoSafeRetry => return false,
     };
-    client_session.mark_account_pool_selection_exhausted(bucket, error.to_string())
+    client_session
+        .recover_account_pool_selection(bucket, mode)
+        .await
 }
 
 fn response_item_starts_visible_output(item: &ResponseItem) -> bool {

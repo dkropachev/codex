@@ -88,6 +88,9 @@ async fn account_pool_background_compaction_preserves_routing_owner(
                     AccountPoolDefinitionToml {
                         provider: "openai".to_string(),
                         policy: AccountPoolPolicyToml::Drain,
+                        auto_consume_resets: false,
+                        auto_consume_credits: false,
+                        fallback_priority: Default::default(),
                         accounts: vec!["work-pro".to_string(), "personal-pro".to_string()],
                     },
                 )]
@@ -373,7 +376,18 @@ async fn account_pool_websocket_failover_reconnects_with_next_member() -> Result
     ])
     .await;
 
-    let codex = build_account_pool_websocket_codex(&server).await?.codex;
+    let usage_server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/api/codex/usage"))
+        .respond_with(|request: &wiremock::Request| {
+            let work = request.headers["ChatGPT-Account-ID"] == "work-pro";
+            ResponseTemplate::new(200).set_body_json(json!({
+                "rate_limit":{"allowed":work},
+                "credits":{"has_credits":!work,"unlimited":false,"balance":if work {"0"} else {"12.3400"}}
+            }))
+        }).mount(&usage_server).await;
+    let codex = build_account_pool_websocket_codex(&server, &usage_server)
+        .await?
+        .codex;
     submit_prompt(&codex, "first websocket turn").await?;
     wait_for_turn_complete(&codex).await;
 
@@ -540,6 +554,9 @@ async fn model_router_uses_the_selected_account_pool() -> Result<()> {
                         AccountPoolDefinitionToml {
                             provider: "openai".to_string(),
                             policy: AccountPoolPolicyToml::Drain,
+                            auto_consume_resets: false,
+                            auto_consume_credits: false,
+                            fallback_priority: Default::default(),
                             accounts: vec!["work-pro".to_string()],
                         },
                     ),
@@ -548,6 +565,9 @@ async fn model_router_uses_the_selected_account_pool() -> Result<()> {
                         AccountPoolDefinitionToml {
                             provider: "openai".to_string(),
                             policy: AccountPoolPolicyToml::Drain,
+                            auto_consume_resets: false,
+                            auto_consume_credits: false,
+                            fallback_priority: Default::default(),
                             accounts: vec!["personal-pro".to_string()],
                         },
                     ),
@@ -613,6 +633,9 @@ async fn build_account_pool_codex(
                     AccountPoolDefinitionToml {
                         provider: "openai".to_string(),
                         policy: AccountPoolPolicyToml::Drain,
+                        auto_consume_resets: false,
+                        auto_consume_credits: false,
+                        fallback_priority: Default::default(),
                         accounts: vec!["work-pro".to_string(), "personal-pro".to_string()],
                     },
                 )]
@@ -624,14 +647,17 @@ async fn build_account_pool_codex(
 
 async fn build_account_pool_websocket_codex(
     server: &responses::WebSocketTestServer,
+    usage_server: &MockServer,
 ) -> Result<core_test_support::test_codex::TestCodex> {
+    let base_url = usage_server.uri();
     let mut builder = test_codex()
         .with_config_auth_manager()
         .with_pre_build_hook(|codex_home| {
             write_chatgpt_auth(codex_home, "work-pro", "work@example.com");
             write_chatgpt_auth(codex_home, "personal-pro", "personal@example.com");
         })
-        .with_config(|config| {
+        .with_config(move |config| {
+            config.chatgpt_base_url = base_url;
             config.account_pool = Some(AccountPoolToml {
                 enabled: true,
                 default_pool: Some("codex-pro".to_string()),
@@ -640,6 +666,9 @@ async fn build_account_pool_websocket_codex(
                     AccountPoolDefinitionToml {
                         provider: "openai".to_string(),
                         policy: AccountPoolPolicyToml::Drain,
+                        auto_consume_resets: false,
+                        auto_consume_credits: true,
+                        fallback_priority: Default::default(),
                         accounts: vec!["work-pro".to_string(), "personal-pro".to_string()],
                     },
                 )]
@@ -835,3 +864,6 @@ fn fake_jwt(payload: serde_json::Value) -> String {
     };
     format!("{}.{}.sig", encode(header), encode(payload))
 }
+
+#[path = "account_pool__resources.rs"]
+mod resources;

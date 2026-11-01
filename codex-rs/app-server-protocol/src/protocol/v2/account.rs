@@ -62,6 +62,8 @@ pub struct AccountPoolMember {
     pub unavailable_reason: Option<String>,
     pub regular_remaining: Option<u64>,
     pub spark_remaining: Option<u64>,
+    pub credits: Option<CreditsSnapshot>,
+    pub rate_limit_reset_credit_count: Option<i64>,
     pub last_error: Option<String>,
 }
 impl From<ProviderAccount> for Account {
@@ -86,6 +88,8 @@ impl From<ProviderAccount> for Account {
                         unavailable_reason: member.unavailable_reason,
                         regular_remaining: member.regular_remaining,
                         spark_remaining: member.spark_remaining,
+                        credits: member.credits.map(Into::into),
+                        rate_limit_reset_credit_count: member.rate_limit_reset_credit_count,
                         last_error: member.last_error,
                     })
                     .collect(),
@@ -869,3 +873,7 @@ pub struct AccountLoginCompletedNotification {
 pub enum DesktopOnboardingEntrypoint {
     LifeSciences,
 }
+
+#[cfg(test)]
+#[path = "account_pool_tests.rs"]
+mod account_pool_tests;

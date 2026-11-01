@@ -111,6 +111,8 @@ pub use super::account_pool::AccountPoolUsageRefreshProblem;
 pub use super::account_pool::AccountPoolUsageRefreshReport;
 pub use super::account_pool_selection::AccountPoolAuthSelection;
 pub use super::account_pool_selection::AccountPoolCacheHint;
+pub use super::account_pool_selection::AccountPoolRecoveryMode;
+pub use super::account_pool_selection::AccountPoolRecoveryState;
 pub use super::account_pool_selection::AccountPoolSelectionContext;
 pub use super::account_pool_selection::AccountPoolUsageBucket;
 
@@ -3143,6 +3145,23 @@ impl AuthManager {
             }
             has_available_member
         })
+    }
+
+    /// Recover only after a supported model usage-limit error before visible output.
+    pub async fn recover_account_pool_selection(
+        &self,
+        selection: &AccountPoolAuthSelection,
+        bucket: AccountPoolUsageBucket,
+        mode: AccountPoolRecoveryMode,
+        state: &mut AccountPoolRecoveryState,
+    ) -> bool {
+        if self.has_external_auth() {
+            return false;
+        }
+        let Some(pool) = self.account_pool.as_ref() else {
+            return false;
+        };
+        pool.recover_selection(selection, bucket, mode, state).await
     }
 
     pub fn record_account_pool_cache_hint(

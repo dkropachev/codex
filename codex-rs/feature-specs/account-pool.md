@@ -63,6 +63,9 @@ default_pool = "codex-pro"
 provider = "openai"
 accounts = ["work-pro", "personal-pro"]
 policy = "load_balance"
+auto_consume_resets = false
+auto_consume_credits = false
+fallback_priority = "resets_first" # or "credits_first"
 ```
 
 Config fields:
@@ -75,6 +78,10 @@ Config fields:
 - `account_pool.pools.<pool-id>.accounts`: ordered member account ids. Empty ids, path separators,
   and parent-directory components are invalid. Order is significant for `drain` and tie-breaking.
 - `account_pool.pools.<pool-id>.policy`: `drain` or `load_balance`.
+- `auto_consume_resets` and `auto_consume_credits`: default to `false`. Availability is visible
+  regardless of permission. These are routing permissions; backend charging can race usage data.
+- `fallback_priority`: `resets_first` (default) or `credits_first`. Disabled or unavailable resources
+  are skipped.
 
 Codex fails config loading with an actionable error when enabled pool config has no pools, a missing
 default pool reference, a non-OpenAI provider, an empty member list, or an unsafe member id.
@@ -105,7 +112,9 @@ Common rules:
 - Models or request paths that consume a distinct Spark limit use the `spark` bucket.
 - Selection is keyed by pool id, usage bucket, and affinity key. Different conversations, sessions,
   and buckets can keep separate assignments.
-- Selection considers only members that are not exhausted for the request bucket.
+- Selection prefers included quota across eligible members before either fallback resource.
+- Known exhausted capacity is distinct from unknown usage. Known credit-dependent members are
+  skipped when credit consumption is disabled; unavailable usage retains best-effort cached routing.
 - Missing credentials or unsupported credentials make a member unavailable for selection and record a
   member-level status error.
 - Selecting a member for a model operation stores or updates the assignment for that selection key.
@@ -116,19 +125,23 @@ Common rules:
   rate-limit reads, and other cached status reads must not activate a pool member or switch the
   current assignment.
 - Ties preserve configured member order.
-- If no member can provide auth, Codex acts unauthenticated for that request and surfaces the same
-  class of auth error as the non-pool path.
+- If the pool has no permitted capacity, model setup returns `no permitted pool capacity` without
+  falling back to another authentication path.
 
 `drain` selects the first configured member that is available and not exhausted for the request
-bucket. Once selected, that member remains assigned while it remains available.
+bucket and resource tier. Within a tier, configured order is preserved.
 
 `load_balance` uses fresh usage data and cache heat to choose an available member:
 
-- Cold affinities prefer the member with the healthiest remaining usage.
+- Cold affinities prefer the healthiest remaining included usage. In fallback tiers they prefer
+  more resets or the larger numeric credit balance; unlimited credits rank first and hidden balances
+  remain distinct from zero. Exact balance strings are preserved for display.
 - Warm affinities keep the assigned member unless it is exhausted, unavailable, or materially worse
   than another member.
 - Hot affinities strongly prefer the assigned member and rebalance only when the assigned member is
   exhausted, unavailable, or significantly worse.
+- Warm and hot affinity is preserved within an eligible fallback tier, while included quota and
+  configured fallback priority take precedence over that affinity.
 
 Cache heat is derived from the latest known cached-token state for the affinity:
 
@@ -138,8 +151,11 @@ Cache heat is derived from the latest known cached-token state for the affinity:
 
 ### Usage Refresh
 
-For `load_balance`, Codex can refresh usage snapshots before auth selection when cached usage is
-missing or stale. Freshness is bounded and currently uses a short interval. The refresh is metadata
+For both policies, Codex refreshes usage snapshots before auth selection when cached usage is
+missing or stale. Usage refresh waits at most five seconds for parallel member tasks, including
+credential lookup. Timed-out credential refreshes finish in the background to preserve OAuth
+rotation and grant-exclusion semantics. Member selection also bounds credential refresh waits and
+uses cached credentials on timeout. The refresh is metadata
 for choosing or rebalancing an assignment; it must not switch accounts by itself.
 
 Usage refresh should:
@@ -148,7 +164,8 @@ Usage refresh should:
 - Use each member's own auth token and account id header.
 - Query the ChatGPT Codex usage endpoint for the configured backend base URL.
 - Compute remaining percentage from the most constrained available window.
-- Track separate remaining values for `regular` and `spark` buckets.
+- Track separate remaining values and backend usage permission for `regular` and `spark` buckets,
+  credit state, reset count, and spending restrictions.
 - Bound persisted or in-memory status to small scalar values and short error strings.
 
 Usage refresh must not:
@@ -210,7 +227,19 @@ The pool must not switch for:
 - Account status reads, rate-limit reads, cached auth/status inspection, or agent/subagent startup.
 - Load-balance refresh results by themselves.
 
-Exhaustion state is process-local and may reset across Codex process restarts.
+Recovery first tries remaining included quota, then enabled fallback resources in configured order.
+A reset requires a supported model usage-limit error before visible output; polling and status reads
+never redeem resets. Same-account reset recovery does not require the cache-switch threshold.
+Accounts selected for their reset availability may still spend enabled credits before producing the
+error required for redemption, even with `resets_first`.
+
+Redemption is serialized per credential home across pool references. Under that guard Codex rechecks
+usage, retains a stable idempotency key for at most two uncertain POST attempts, and refreshes usage
+afterward. Definitive ineffective resets are suppressed until usage confirms recovery. Each turn
+attempts reset recovery at most once per member, so stale or ineffective recovery cannot loop.
+Exhaustion is cleared only when refreshed usage confirms included capacity.
+
+Exhaustion and redemption state are process-local and may reset across Codex process restarts.
 
 ### WebSocket Identity
 
@@ -287,6 +316,8 @@ times out before metadata is available, the entry reports invalid credentials an
         "unavailableReason": null,
         "regularRemaining": 82,
         "sparkRemaining": 100,
+        "credits": {"hasCredits": true, "unlimited": false, "balance": "12.3400"},
+        "rateLimitResetCreditCount": 3,
         "lastError": null
       }
     ]
@@ -302,6 +333,9 @@ Fields:
 - `members[].unavailableReason`: current reason this member cannot be selected, when known.
 - `members[].regularRemaining` and `members[].sparkRemaining`: latest known remaining usage
   percentages, or `null` when unknown.
+- `members[].credits`: nullable credit snapshot, with exact nullable balance, availability, and
+  unlimited state. A missing snapshot is unknown; a null balance is hidden.
+- `members[].rateLimitResetCreditCount`: available on-demand resets, or `null` when unknown.
 - `members[].lastError`: latest member-level refresh or auth error.
 
 `account/updated` notifies auth mode and plan type changes. It does not carry full pool member
@@ -640,6 +674,24 @@ Generate tests for these behaviors:
 - A permitted WebSocket failover reconnects with the new account identity instead of reusing an old
   account connection.
 - TUI/app-server `account/read` for a pool includes `chatgptPool`, `activeAccountId`, members,
-  active flags, unavailable reasons, remaining usage, and last error.
+  active flags, unavailable reasons, remaining usage, nullable `credits` and
+  `rateLimitResetCreditCount`, and last error. Credit balances preserve exact strings and distinguish
+  unknown, hidden, zero, and unlimited values. TUI pool status shows compact per-member resources.
 - TUI/app-server `account/rateLimits/read` and `account/rateLimits/updated` update status display
   without selecting or switching accounts.
+
+### Reset and credit awareness coverage
+
+- Permission and priority combinations, numeric credit ordering, fallback affinity, and included
+  quota preference: `login/src/auth/account_pool/capacity_tests.rs`.
+- Concurrent credential-home recovery, uncertain redemption IDs, ineffective resets, and partial
+  usage refresh failures: `login/src/auth/account_pool/recovery_tests.rs`.
+- Agent fallback ordering, same-account reset retry below the cache threshold, disabled consumption,
+  exhausted-pool errors, and visible-output safety: `core/tests/suite/account_pool__resources.rs`.
+- WebSocket reconnect into credit capacity: `account_pool_websocket_failover_reconnects_with_next_member`.
+- Legacy app-server member payloads and exact nullable balances:
+  `app-server-protocol/src/protocol/v2/account_pool_tests.rs`.
+
+Implementation can be reviewed in three stages: usage/status visibility (including the mechanical
+usage/test extraction and wire schemas), configuration/selection, then automatic reset recovery and
+agent integration coverage.

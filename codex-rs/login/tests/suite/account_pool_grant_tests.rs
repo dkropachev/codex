@@ -62,6 +62,9 @@ impl Fixture {
         let definition = AccountPoolDefinitionToml {
             provider: "openai".into(),
             policy: AccountPoolPolicyToml::Drain,
+            auto_consume_resets: false,
+            auto_consume_credits: false,
+            fallback_priority: Default::default(),
             accounts: vec!["work-pro".into(), "personal-pro".into()],
         };
         let config = AccountPoolTestConfig {
@@ -303,7 +306,13 @@ async fn pooled_lease_excludes_active_guarded_authority_and_member_recovery() ->
                 .is_err()
         );
         assert_eq!(
-            server.received_requests().await.context("requests")?.len(),
+            server
+                .received_requests()
+                .await
+                .context("requests")?
+                .iter()
+                .filter(|request| request.url.path() == "/oauth/token")
+                .count(),
             index
         );
         drop(lease); // Dropping as well as explicit release must free the writer.
@@ -336,7 +345,13 @@ async fn pooled_lease_excludes_active_guarded_authority_and_member_recovery() ->
         }
         assert_eq!(ctx.manager.account_pool_status(), status);
     }
-    for request in server.received_requests().await.context("requests")? {
+    for request in server
+        .received_requests()
+        .await
+        .context("requests")?
+        .into_iter()
+        .filter(|request| request.url.path() == "/oauth/token")
+    {
         let body: serde_json::Value = request.body_json()?;
         assert_eq!(
             (body["client_id"].clone(), body["refresh_token"].clone()),
@@ -478,6 +493,80 @@ async fn detached_pool_refreshes_overlap_and_keep_their_lease_exclusion() -> Res
         "Bearer personal-pro-refresh-access"
     );
     assert!(started.try_recv().is_err());
+    server.verify().await;
+    Ok(())
+}
+
+#[serial_test::serial(auth_env)]
+#[tokio::test]
+async fn pool_usage_deadline_does_not_cancel_pending_credential_refresh() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    let ctx = Fixture::new(&server).await?;
+    let selected = ctx.selection("work-pro").await?;
+    let mut expired = ctx.initial.clone();
+    expired.last_refresh = Some(Utc::now() - chrono::Duration::days(30));
+    Fixture::write(&ctx.member_home(), &expired)?;
+    ctx.reload(&selected).await?;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"access_token":"after-lease"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .mount(&server)
+        .await;
+    let lease = ctx
+        .manager
+        .lease_account_oauth_grant()
+        .await?
+        .context("pooled grant")?;
+    let report = timeout(
+        Duration::from_secs(7),
+        ctx.manager
+            .refresh_account_pool_usage_report(Some("selected")),
+    )
+    .await?
+    .context("refresh report")?;
+    assert_eq!(
+        (
+            report.pools[0].refreshed_count,
+            report.pools[0].problems.len()
+        ),
+        (1, 1)
+    );
+    let cached = timeout(Duration::from_secs(7), ctx.selection("work-pro")).await??;
+    assert_eq!(cached.auth.get_token_data()?.access_token, "initial-access");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .context("requests")?
+            .iter()
+            .all(|request| request.url.path() != "/oauth/token")
+    );
+    drop(lease);
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let stored = load_auth_dot_json(
+                &ctx.member_home(),
+                AuthCredentialsStoreMode::File,
+                AuthKeyringBackendKind::default(),
+            )
+            .unwrap()
+            .unwrap();
+            if stored.tokens.unwrap().access_token == "after-lease" {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
     server.verify().await;
     Ok(())
 }
