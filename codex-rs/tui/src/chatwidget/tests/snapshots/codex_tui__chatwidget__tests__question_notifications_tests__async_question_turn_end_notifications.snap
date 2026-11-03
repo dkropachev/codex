@@ -1,13 +1,13 @@
 ---
 source: tui/src/chatwidget/tests/question_notifications_tests.rs
-assertion_line: 142
+assertion_line: 147
 expression: outcomes
 ---
 [
     (
         Completed,
         Some(
-            "Agent turn complete",
+            "Question: Which way?",
         ),
     ),
     (

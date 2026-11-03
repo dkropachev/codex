@@ -1,4 +1,5 @@
-//! Pending async questions retain drafts until handled locally, answered by another client, or a live turn ends.
+//! Pending async questions retain drafts across successful turns, until handled locally,
+//! answered by another client, superseded by a prompt, or recovered after an aborted turn.
 //! Message IDs survive removal so replay cannot reopen an answered or skipped question.
 
 use super::*;

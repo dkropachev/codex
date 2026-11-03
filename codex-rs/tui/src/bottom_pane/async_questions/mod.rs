@@ -1,7 +1,8 @@
 //! Inline editing for asynchronous questions. Legacy request_user_input keeps its own overlay.
 //! Local submissions and committed desktop replies remove questions. Arrival opens the editor
 //! during a running turn when the main composer is idle and no other view owns input.
-//! Live turn completion recovers unsent typed drafts before removing pending questions.
+//! Successful turns leave pending questions and drafts available for later submission.
+//! Interrupted or failed turns recover unsent typed drafts before removing pending questions.
 
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::CancellationEvent;

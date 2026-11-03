@@ -103,7 +103,8 @@
 //!
 //! # Question Draft Recovery
 //!
-//! Live terminal turns recover typed, unsubmitted question answers into the main composer.
+//! Interrupted or failed terminal turns recover typed, unsubmitted question answers into the main
+//! composer. Successful turns retain pending answers in the question editor instead.
 //! Each recovered answer follows its original question as a Markdown blockquote, with blank lines
 //! separating questions, answers, and existing text. The append flushes buffered input and dismisses
 //! unused sparkle eligibility. The separator and recovered answer form one Vim edit; large answers
