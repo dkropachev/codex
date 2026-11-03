@@ -992,6 +992,41 @@ async fn plan_implementation_popup_skips_without_proposed_plan() {
 }
 
 #[tokio::test]
+async fn plan_implementation_popup_skips_unanswered_questions() {
+    for draft in ["", "Main draft"] {
+        let (mut chat, _rx, _ops) = make_chatwidget_manual(Some("gpt-5")).await;
+        chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+        let plan_mask =
+            collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Plan)
+                .expect("plan collaboration mask");
+        chat.set_collaboration_mask(plan_mask);
+        handle_turn_started(&mut chat, "turn");
+        chat.bottom_pane
+            .set_composer_text(draft.into(), Vec::new(), Vec::new());
+        chat.on_plan_item_completed("- Step 1\n".into(), "turn".into());
+        chat.add_async_questions(
+            "question",
+            &[codex_protocol::items::AsyncUserInputQuestion {
+                title: "Which environment?".into(),
+                options: None,
+            }],
+        );
+
+        handle_turn_completed(&mut chat, "turn", /*duration_ms*/ None);
+
+        assert_eq!(chat.bottom_pane.question_editor().unanswered_count(), 1);
+        assert!(!chat.bottom_pane.has_active_view());
+        assert_eq!(chat.bottom_pane.composer_text(), draft);
+        if !draft.is_empty() {
+            insta::assert_snapshot!(
+                "plan_completion_keeps_pending_clarification",
+                normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 80))
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn plan_implementation_popup_shows_after_proposed_plan_output() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);

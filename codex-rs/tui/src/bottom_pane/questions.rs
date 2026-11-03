@@ -50,10 +50,10 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    /// Capture answers and settle the main draft before turn finalization can restore input.
+    /// Capture answers before interrupted or failed turn finalization can restore input.
     pub(crate) fn take_question_drafts(&mut self) -> Option<Vec<String>> {
         let questions = self.questions.as_mut()?;
-        // The question editor closes at turn end; recover its typed answer, not a history preview.
+        // Aborted turns close the editor; recover its typed answer, not a history preview.
         questions.composer.cancel_history_search();
         let drafts = questions.take_pending_drafts();
         if !drafts.is_empty() && !self.composer.history_search_active() {

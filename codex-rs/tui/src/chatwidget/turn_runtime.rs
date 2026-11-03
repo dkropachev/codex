@@ -258,7 +258,13 @@ impl ChatWidget {
         if !self.transcript.saw_plan_item_this_turn {
             return;
         }
-        if !self.bottom_pane.no_modal_or_popup_active() {
+        if !self.bottom_pane.no_modal_or_popup_active()
+            || self
+                .bottom_pane
+                .questions
+                .as_ref()
+                .is_some_and(|questions| questions.unanswered_count() > 0)
+        {
             return;
         }
 

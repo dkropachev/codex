@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests/question_turn_end_tests.rs
+assertion_line: 35
+expression: "normalize_snapshot_paths(render_bottom_popup(&chat, 80))"
+---
+• Queued follow-up inputs
+
+  2 of 2
+
+  When should it ship?
+
+  Tomorrow
+
+  enter submit   ⌃] skip   ⇧→ prev question
