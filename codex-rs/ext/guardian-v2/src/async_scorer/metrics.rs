@@ -55,6 +55,7 @@ pub(super) fn sampler_failure_reason(error: &LunaSamplerError) -> &'static str {
             ApiError::RateLimitExceeded { .. }
             | ApiError::RateLimit(_)
             | ApiError::UsageLimitReached(_) => "rate_limit",
+            ApiError::ModelNotFound { .. } => "model_not_found",
             ApiError::InvalidRequest { .. } | ApiError::InvalidPrompt { .. } => "invalid_request",
             ApiError::CyberPolicy { .. }
             | ApiError::BioPolicy { .. }

@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 1401
+assertion_line: 1404
 expression: "format!(\"{history}\\n\\nWoken parent mailbox:\\n{}\",\nserde_json::to_string_pretty(&mailbox)?,)"
 ---
 Scenario: The parent finishes at medium reasoning without persistent mode. A real child then completes its release check and wakes a new parent turn. Complete model streams are grouped as parent, then worker.
@@ -47,13 +47,14 @@ Settings:
     <MULTI_AGENT_MODE>
 07:message/user:
     Ask a worker to check the release, then finish your turn.
+08:configuration_update:reasoning={"effort":"medium"}
 -- request 2 (turn) --
-08:function_call/collaboration.spawn_agent:{"fork_turns":"none","message":"Check whether the release is ready.","task_name":"worker"}
-09:function_call_output:{"task_name":"/root/worker"}
+09:function_call/collaboration.spawn_agent:{"fork_turns":"none","message":"Check whether the release is ready.","task_name":"worker"}
+10:function_call_output:{"task_name":"/root/worker"}
 -- request 3 (turn) --
-10:message/assistant:
+11:message/assistant:
     I have delegated the release check.
-11:agent_message
+12:agent_message
 
 ## Window 2 (after request 3: input diverged at item 00)
 Settings: same as window 1
@@ -86,9 +87,10 @@ Settings: same as window 1
 06:message/developer:
     <MULTI_AGENT_MODE>
 07:agent_message
+08:configuration_update:reasoning={"effort":"medium"}
 -- request 5 (turn) --
-08:function_call/check_release:{}
-09:function_call_output:All release checks passed.
+09:function_call/check_release:{}
+10:function_call_output:All release checks passed.
 
 Woken parent mailbox:
 [

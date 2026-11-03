@@ -39,10 +39,11 @@ Scenario: Settlement helpers deliver fulfilled and rejected records with input i
     <ENVIRONMENT_CONTEXT>
 08:message/user:
     Collect each completed result, including failures, using the settlement helpers.
+09:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-09:custom_tool_call/exec:for await (const result of as_settled([Promise.resolve("ready")])) text(result);
+10:custom_tool_call/exec:for await (const result of as_settled([Promise.resolve("ready")])) text(result);
     await stream_settled(new Map([["failed", Promise.reject("unavailable")], ["completed", "done"]]), text);
-10:custom_tool_call_output:Script completed
+11:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
      | {"index":0,"status":"fulfilled","value":"ready"} | {"index":"failed","status":"rejected","reason":"unavailable"} | {"index":"completed","status":"fulfilled","value":"done"}

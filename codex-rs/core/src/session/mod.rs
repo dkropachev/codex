@@ -104,6 +104,7 @@ use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_otel::current_span_trace_id;
 use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
+use codex_prompts::ResolvedModelMessages;
 use codex_prompts::render_model_instructions;
 use codex_protocol::ResponseUsageMetadata;
 use codex_protocol::SessionId;
@@ -147,10 +148,13 @@ use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::MULTI_AGENT_MODE_OPEN_TAG;
 use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::PrivateSessionEvent;
+use codex_protocol::protocol::PrivateSessionEventPayload;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadSource;
@@ -458,6 +462,7 @@ pub(crate) enum ForkPersistence {
 }
 
 pub(crate) struct SessionSpawnArgs {
+    pub(crate) attached_thread: bool,
     pub(crate) startup: Option<Arc<startup::SessionStartup>>,
     pub(crate) config: Config,
     pub(crate) prompt_cache_key: PromptCacheKey,
@@ -578,6 +583,7 @@ impl Session {
             .ensure_config_server_applied()?;
         args.config.validate_windows_mxc_requirement()?;
         let SessionSpawnArgs {
+            attached_thread,
             startup,
             config,
             prompt_cache_key,
@@ -944,6 +950,7 @@ impl Session {
         let session = Box::pin(Session::new(
             startup.clone(),
             session_configuration,
+            attached_thread,
             prompt_cache_key,
             &environment_selections,
             config.clone(),
@@ -1728,11 +1735,26 @@ impl Session {
                 self.state.lock().await.latest_token_usage_record =
                     Self::last_token_usage_record_from_rollout(&rollout_items);
 
-                // Checkpoint effective settings even when no turn follows the resume.
-                self.persist_rollout_items(&[RolloutItem::EventMsg(
-                    thread_settings::applied_event(self).await,
-                )])
-                .await;
+                let thread_id = self.thread_id();
+                let current_settings = self.thread_settings_snapshot().await;
+                let persisted_settings = rollout_items.iter().rev().find_map(|item| match item {
+                    RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
+                        if event.thread_id == Some(thread_id) =>
+                    {
+                        Some(&event.thread_settings)
+                    }
+                    _ => None,
+                });
+                // Persist changed effective settings even when no turn follows the resume.
+                if persisted_settings != Some(&current_settings) {
+                    self.persist_rollout_items(&[RolloutItem::EventMsg(
+                        EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
+                            thread_id: Some(thread_id),
+                            thread_settings: current_settings,
+                        }),
+                    )])
+                    .await;
+                }
 
                 // Defer seeding the session's initial context until the first turn starts so
                 // turn/start overrides can be merged before we write model-visible context.
@@ -1783,6 +1805,18 @@ impl Session {
                     }
                 }
                 self.persist_rollout_items(&rollout_items).await;
+                if self.preserve_parent_tool_declarations() {
+                    let notice = DeveloperInstructions::new(
+                        "<mcp_tools>\nMCP tools are unavailable for this request.\n</mcp_tools>",
+                    )
+                    .with_metadata(ContentItemMetadata::tool(/*namespace*/ None));
+                    self.record_conversation_items(
+                        &turn_context,
+                        turn_context.model_info(),
+                        &[ContextualUserFragment::into(notice)],
+                    )
+                    .await;
+                }
 
                 // Agent spawn owns its final durability barrier so it can overlap the edge write.
                 let persist_context = match self.fork_persistence {
@@ -2743,6 +2777,30 @@ impl Session {
     }
 
     async fn deliver_event_raw(&self, event: Event) {
+        if let Some(parent_tx) = self.parent_observer_event_tx.get() {
+            let forwarded = match &event.msg {
+                EventMsg::RawResponseItem(item) => {
+                    Some(PrivateSessionEventPayload::RecordedItem(item.clone()))
+                }
+                EventMsg::TurnAborted(aborted) => {
+                    Some(PrivateSessionEventPayload::TurnAborted(aborted.clone()))
+                }
+                _ => None,
+            };
+            if let Some(forwarded) = forwarded {
+                // Queue observer events before the private consumer can finish the review.
+                // They bypass the parent's history and retain the reviewer's identity.
+                let _ = parent_tx
+                    .send(Event {
+                        id: event.id.clone(),
+                        msg: EventMsg::PrivateSessionEvent(PrivateSessionEvent {
+                            thread_id: self.thread_id,
+                            event: forwarded,
+                        }),
+                    })
+                    .await;
+            }
+        }
         // Record the last known agent status.
         if let Some(status) = agent_status_from_event(&event.msg) {
             self.agent_status.send_replace(status);
@@ -4028,6 +4086,13 @@ impl Session {
             {
                 extension_data.insert(messages.clone());
             }
+            let model_messages = ResolvedModelMessages::from_model(&settings.model_info);
+            if let Some(messages) = model_messages.history() {
+                extension_data.insert(messages.clone());
+            }
+            if let Some(messages) = model_messages.notes() {
+                extension_data.insert(messages.clone());
+            }
             let (mcp, prepared_recommendations) = tokio::join!(
                 // MCP refresh can be large; keep it off the sampling request's stack.
                 Box::pin(self.mcp_runtime_for_step(
@@ -4282,6 +4347,16 @@ impl Session {
     ) {
         let mut state = self.state.lock().await;
         state.replace_history(items, reference_context_item);
+    }
+
+    fn preserve_parent_tool_declarations(&self) -> bool {
+        // Only prediction forks and thread/sample set this marker when they disable MCP.
+        self.enabled(Feature::PredictionPreserveParentTools)
+            && self
+                .services
+                .thread_extension_data
+                .get::<crate::McpServersDisabled>()
+                .is_some()
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {

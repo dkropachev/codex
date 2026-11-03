@@ -147,9 +147,10 @@ Settings:
     </environment_context>
 08:message/user:
     List the cloud skills, then read the work skill.
+09:configuration_update:reasoning={"effort":"low"}
 -- request 2 (request) --
-09:function_call/skills.list:{"authority":{"kind":"cloud"}}
-10:function_call_output:{"next_cursor":null,"skills":[{"authority":{"kind":"cloud"},"description":"Inspect and explain the reque...:work","package":"skill://demo/work"}],"warnings":[]} [hash=0a735291ec9e0ec7]
+10:function_call/skills.list:{"authority":{"kind":"cloud"}}
+11:function_call_output:{"next_cursor":null,"skills":[{"authority":{"kind":"cloud"},"description":"Inspect and explain the reque...:work","package":"skill://demo/work"}],"warnings":[]} [hash=0a735291ec9e0ec7]
 -- request 3 (request) --
-11:function_call/skills.read:{"package":"c0/work","source":{"kind":"cloud"}}
-12:function_call_output:{"contents":"# Work\\nInspect the inputs before explaining the result.\\n","installations":[{"package":"sk...cursor":null,"resource":"skill://demo/work/SKILL.md"} [hash=adc0897fa3bc41cf]
+12:function_call/skills.read:{"package":"c0/work","source":{"kind":"cloud"}}
+13:function_call_output:{"contents":"# Work\\nInspect the inputs before explaining the result.\\n","installations":[{"package":"sk...cursor":null,"resource":"skill://demo/work/SKILL.md"} [hash=adc0897fa3bc41cf]

@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 2300
+assertion_line: 2303
 expression: "context_snapshot::format_request_history_snapshot(scenario, &requests,\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Catalog Code Mode instructions and wait parameter descriptions accompany a yielded cell through completion.
@@ -137,15 +137,16 @@ Settings:
     </environment_context>
 07:message/user:
     Start a code cell, yield its initial output, then wait for its completion.
+08:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-08:custom_tool_call/exec:text('started'); yield_control(); text('finished');
-09:custom_tool_call_output:Script running with cell ID 1
+09:custom_tool_call/exec:text('started'); yield_control(); text('finished');
+10:custom_tool_call_output:Script running with cell ID 1
     Wall time <DURATION> seconds
     Output:
      | started
 -- request 3 (turn) --
-10:function_call/functions.wait:{"cell_id":"1"}
-11:function_call_output:Script completed
+11:function_call/functions.wait:{"cell_id":"1"}
+12:function_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
      | finished

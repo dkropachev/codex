@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 731
+assertion_line: 734
 expression: "context_snapshot::format_request_history_snapshot(\"Astra starts in one workspace, switches for the next step of the active turn, and returns to the original workspace on the next turn.\",\n&requests, &ContextSnapshotOptions::default(),)"
 ---
 Scenario: Astra starts in one workspace, switches for the next step of the active turn, and returns to the original workspace on the next turn.
@@ -140,10 +140,11 @@ Scenario: Astra starts in one workspace, switches for the next step of the activ
     </environment_context>
 08:message/user:
     Ask before continuing in the other workspace.
+09:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-09:function_call/functions.request_user_input:{"questions":[{"header":"Continue","id":"continue","options":[{"description":"Continue working.","label"...o"}],"question":"Continue in the other workspace?"}]} [hash=028e565351844d96]
-10:function_call_output:{"answers":{"continue":{"answers":["Yes"]}}}
-11:message/user:
+10:function_call/functions.request_user_input:{"questions":[{"header":"Continue","id":"continue","options":[{"description":"Continue working.","label"...o"}],"question":"Continue in the other workspace?"}]} [hash=028e565351844d96]
+11:function_call_output:{"answers":{"continue":{"answers":["Yes"]}}}
+12:message/user:
     <environment_context>
       <cwd><CWD>/other-workspace</cwd>
       <shell><HOST_SHELL></shell>
@@ -152,9 +153,9 @@ Scenario: Astra starts in one workspace, switches for the next step of the activ
       <filesystem><workspace_roots><root><CWD>/other-workspace</root></workspace_roots><permission_profile t...ntry></file_system></permission_profile></filesystem> [hash=0be8191a0451377a]
     </environment_context>
 -- request 3 (turn) --
-12:message/assistant:
+13:message/assistant:
     I continued in the other workspace.
-13:message/user:
+14:message/user:
     <environment_context>
       <cwd><CWD></cwd>
       <shell><HOST_SHELL></shell>
@@ -162,5 +163,5 @@ Scenario: Astra starts in one workspace, switches for the next step of the activ
       <timezone><HOST_TIMEZONE></timezone>
       <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
     </environment_context>
-14:message/user:
+15:message/user:
     Which workspace are you using now?

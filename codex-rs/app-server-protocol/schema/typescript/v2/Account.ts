@@ -4,4 +4,4 @@
 import type { PlanType } from "../PlanType";
 import type { AccountPoolMember } from "./AccountPoolMember";
 
-export type Account = { "type": "apiKey", } | { "type": "chatgpt", email: string | null, planType: PlanType, } | { "type": "chatgptPool", id: string, activeAccountId: string | null, members: Array<AccountPoolMember>, } | { "type": "amazonBedrock", usesCodexManagedCredentials: boolean, };
+export type Account = { "type": "apiKey", } | { "type": "chatgpt", email: string | null, planType: PlanType, } | { "type": "chatgptPool", id: string, activeAccountId: string | null, members: Array<AccountPoolMember>, } | { "type": "amazonBedrock", usesCodexManagedCredentials: boolean, } | { "type": "gcp", };

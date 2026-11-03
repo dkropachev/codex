@@ -59,8 +59,9 @@ Settings:
     <ENVIRONMENT_CONTEXT>
 07:message/user:
     List my calendar events.
+08:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-08:function_call/mcp__ordinary.calendar_list_events:{}
-09:function_call_output:Wall time: <DURATION> seconds
+09:function_call/mcp__ordinary.calendar_list_events:{}
+10:function_call_output:Wall time: <DURATION> seconds
     Output:
     {"_codex_apps":null}

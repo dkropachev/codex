@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 2036
+assertion_line: 2039
 expression: snapshot
 ---
 Scenario: Astra receives new user input after its unfinished response is interrupted.
@@ -39,8 +39,9 @@ Scenario: Astra receives new user input after its unfinished response is interru
     <ENVIRONMENT_CONTEXT>
 08:message/user:
     Draft a launch update.
+09:configuration_update:reasoning={"effort":"low"}
 -- request 2 (request) --
-09:message/assistant:
+10:message/assistant:
     I will draft the update.
-10:message/user:
+11:message/user:
     Make it a customer update.

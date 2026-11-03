@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 3125
+assertion_line: 3142
 expression: "context_snapshot::format_context_snapshot(\"Astra compacts a completed launch-notes turn in the background. The user switches to Plan mode while it runs. Adoption restores Default mode at the cutoff, then preserves the Plan update, newer user message, and assistant/tool exchange in their original order.\",\n&entries, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
 Scenario: Astra compacts a completed launch-notes turn in the background. The user switches to Plan mode while it runs. Adoption restores Default mode at the cutoff, then preserves the Plan update, newer user message, and assistant/tool exchange in their original order.
@@ -39,12 +39,13 @@ Scenario: Astra compacts a completed launch-notes turn in the background. The us
     <ENVIRONMENT_CONTEXT>
 08:message/user:
     Draft the launch notes.
+09:configuration_update:reasoning={"effort":"low"}
 -- request 2 (request) --
-09:message/assistant:
+10:message/assistant:
     I drafted the launch notes.
-10:compaction_trigger
+11:compaction_trigger
 
-## Window 2 (after request 2: input diverged at item 10)
+## Window 2 (after request 2: input diverged at item 11)
 -- request 3 (request) --
 00:additional_tools/developer (3; hash=68d6cf1d20dc114e):
         - namespace/functions; hash=e1875bbf8d39f064
@@ -78,11 +79,12 @@ Scenario: Astra compacts a completed launch-notes turn in the background. The us
     <ENVIRONMENT_CONTEXT>
 08:message/user:
     Draft the launch notes.
-09:message/assistant:
+09:configuration_update:reasoning={"effort":"low"}
+10:message/assistant:
     I drafted the launch notes.
-10:message/developer:
+11:message/developer:
     <COLLABORATION_MODE>
-11:message/user:
+12:message/user:
     Check who can finish the notes.
 
 ## Window 3 (after request 3: input diverged at item 01)

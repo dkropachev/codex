@@ -223,6 +223,41 @@ impl AuthManager {
         }))
     }
 
+    /// Reads an owner-checked grant without waiting for or excluding account refresh.
+    /// Lease the grant again before exchanging its refresh token.
+    pub async fn account_oauth_grant(
+        self: &Arc<Self>,
+    ) -> std::io::Result<Option<AccountOAuthGrant>> {
+        let owner = if !self.has_external_auth()
+            && let Some(pool) = &self.account_pool
+        {
+            let Some((_, owner)) = pool.cached_auth_with_owner() else {
+                return Ok(None);
+            };
+            owner
+        } else {
+            Arc::clone(self)
+        };
+        let login_generation = self.auth_change_state_tx.borrow().login_generation;
+        let owner_login_generation = owner.auth_change_state_tx.borrow().login_generation;
+        let invalidation_generation = self.account_grant_invalidation.load(Ordering::SeqCst);
+        let Some(tokens) = self.read_account_grant_tokens().await? else {
+            return Ok(None);
+        };
+        let grant = AccountOAuthGrant {
+            manager: Arc::clone(self),
+            owner,
+            owner_login_generation,
+            invalidation_generation,
+            tokens,
+            login_generation,
+        };
+        if !grant.owner_is_current() {
+            return Ok(None);
+        }
+        Ok(Some(grant))
+    }
+
     /// Checks the persisted account owner without requiring an EMA-eligible account grant.
     /// Dedicated enterprise credentials still belong to this account login.
     pub async fn account_login_is_current(&self, expected: &CodexAuth) -> std::io::Result<bool> {

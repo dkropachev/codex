@@ -112,6 +112,7 @@ pub(crate) fn model_router_failure_scope(err: &CodexErr) -> Option<ModelRouterFa
         | CodexErrorDetails::RequestTimeout
         | CodexErrorDetails::RateLimitExceeded(_)
         | CodexErrorDetails::ContextWindowExceeded
+        | CodexErrorDetails::ModelNotFound { .. }
         | CodexErrorDetails::FlexUnavailable
         | CodexErrorDetails::ServerOverloaded => Some(ModelRouterFailureScope::Model),
         CodexErrorDetails::UsageLimitReached(_)
@@ -257,6 +258,10 @@ mod tests {
     use crate::model_router::apply_model_router_with_exclusions;
 
     #[test_case::test_case(CodexErr::ContextWindowExceeded; "model error")]
+    #[test_case::test_case(CodexErrorDetails::ModelNotFound {
+        message: "model is unavailable".to_string(),
+        status: Some(http::StatusCode::NOT_FOUND),
+    }.into(); "missing model")]
     #[test_case::test_case(CodexErrorDetails::ResponseIncomplete(Box::new(
         codex_protocol::error::ResponseIncompleteError {
             reason: "max_output_tokens".to_string(),

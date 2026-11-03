@@ -49,6 +49,11 @@ pub enum Account {
         #[serde(default)]
         uses_codex_managed_credentials: bool,
     },
+
+    /// Google Cloud Vertex AI with externally managed credentials.
+    #[serde(rename = "gcp", rename_all = "camelCase")]
+    #[ts(rename = "gcp", rename_all = "camelCase")]
+    Gcp {},
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -99,6 +104,7 @@ impl From<ProviderAccount> for Account {
             } => Self::AmazonBedrock {
                 uses_codex_managed_credentials,
             },
+            ProviderAccount::Gcp => Self::Gcp {},
         }
     }
 }

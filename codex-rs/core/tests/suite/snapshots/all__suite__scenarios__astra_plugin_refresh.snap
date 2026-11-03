@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 2415
+assertion_line: 2418
 expression: "context_snapshot::format_request_history_snapshot(\"Astra checks for Notes, refreshes its installed plugin without restarting, and uses the new skill and Code Mode MCP tool across turns.\",\n&mock.requests(),\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Astra checks for Notes, refreshes its installed plugin without restarting, and uses the new skill and Code Mode MCP tool across turns.
@@ -137,16 +137,17 @@ Settings:
     </environment_context>
 08:message/user:
     Check whether the Notes plugin echo tool is available.
+09:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-09:custom_tool_call/exec:text(ALL_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
-10:custom_tool_call_output:Script completed
+10:custom_tool_call/exec:text(ALL_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
+11:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
      | []
 -- request 3 (turn) --
-11:message/assistant:
+12:message/assistant:
     The Notes tool is not installed yet.
-12:message/developer:
+13:message/developer:
     <skills_instructions>
     ## Skills
     A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list ...ed into an absolute path using the skill roots table. [hash=ca27c3957f42502b]
@@ -155,9 +156,9 @@ Settings:
     ### Available skills
     - notes:summarize: Summarize team notes (file: r0/notes/local/skills/summarize/SKILL.md)
     </skills_instructions>
-13:message/user:
-    I installed Notes. Use $notes:summarize and the Notes tool to check that Mira owns the kickoff.
 14:message/user:
+    I installed Notes. Use $notes:summarize and the Notes tool to check that Mira owns the kickoff.
+15:message/user:
     <skill>
     <name>notes:summarize</name>
     <path><PLUGINS_CACHE>/test/notes/local/skills/summarize/SKILL.md</path>
@@ -169,31 +170,31 @@ Settings:
     State the owner and date from the notes.
 
     </skill>
-15:message/developer:
+16:message/developer:
     Capabilities from the `notes` plugin:
     - Skills from this plugin are prefixed with `notes:`.
     - MCP servers from this plugin available in this session: `notes`.
     Use these plugin-associated capabilities to help solve the task.
 -- request 4 (turn) --
-16:custom_tool_call/exec:text(ALL_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
-17:custom_tool_call_output:Script completed
+17:custom_tool_call/exec:text(ALL_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));
+18:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
      | ["mcp__notes__echo"]
 -- request 5 (turn) --
-18:custom_tool_call/exec:const result = await tools.mcp__notes__echo({ message: "Mira owns the kickoff" }); text(result.structuredContent?.echo);
-19:custom_tool_call_output:Script completed
+19:custom_tool_call/exec:const result = await tools.mcp__notes__echo({ message: "Mira owns the kickoff" }); text(result.structuredContent?.echo);
+20:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
      | ECHOING: Mira owns the kickoff
 -- request 6 (turn) --
-20:message/assistant:
+21:message/assistant:
     The Notes plugin confirms Mira owns the kickoff.
-21:message/user:
+22:message/user:
     Use the Notes tool again to check that the kickoff is Friday.
 -- request 7 (turn) --
-22:custom_tool_call/exec:const result = await tools.mcp__notes__echo({ message: "The kickoff is Friday" }); text(result.structuredContent?.echo);
-23:custom_tool_call_output:Script completed
+23:custom_tool_call/exec:const result = await tools.mcp__notes__echo({ message: "The kickoff is Friday" }); text(result.structuredContent?.echo);
+24:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
      | ECHOING: The kickoff is Friday

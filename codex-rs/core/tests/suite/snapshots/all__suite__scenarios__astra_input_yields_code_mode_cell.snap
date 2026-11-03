@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 2167
+assertion_line: 2170
 expression: snapshot
 ---
 Scenario: Astra continues after new user input yields a running code cell, then waits for its result.
@@ -140,18 +140,19 @@ Scenario: Astra continues after new user input yields a running code cell, then 
     </environment_context>
 08:message/user:
     Check the release status.
+09:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-09:custom_tool_call/exec:// @exec: {"yield_time_ms": 60000}
+10:custom_tool_call/exec:// @exec: {"yield_time_ms": 60000}
     text(await tools.check_release({}));
-10:custom_tool_call_output:Script running with cell ID <CELL_ID>
+11:custom_tool_call_output:Script running with cell ID <CELL_ID>
     Wall time <DURATION> seconds
     Output:
 
-11:message/user:
+12:message/user:
     Please also highlight the customer impact.
 -- request 3 (turn) --
-12:function_call/functions.wait:{"cell_id":"<CELL_ID>","yield_time_ms":60000}
-13:function_call_output:Script completed
+13:function_call/functions.wait:{"cell_id":"<CELL_ID>","yield_time_ms":60000}
+14:function_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
      | Release ready
