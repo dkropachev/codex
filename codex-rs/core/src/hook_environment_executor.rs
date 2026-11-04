@@ -166,6 +166,7 @@ impl HookEnvironmentExecutor for EnvironmentCommandExecutor {
         let env = env.clone();
         let input_json = input_json.to_owned();
         async move {
+            let deadline = tokio::time::Instant::now() + timeout;
             let environment = self
                 .environments
                 .turn_environments()
@@ -197,14 +198,16 @@ impl HookEnvironmentExecutor for EnvironmentCommandExecutor {
             };
             let argv = shell.derive_exec_args(&script, environment.config().allow_login_shell);
             // Keep network attribution registered until the hook and its output are complete.
-            let (params, _execution_network) = self
-                .launch_params(environment, argv, env)
+            let (params, _execution_network) = tokio::time::timeout_at(
+                deadline,
+                self.launch_params(environment, argv, env),
+            )
                 .await
+                .context("environment command hook timed out during launch")?
                 .map_err(|error| match error {
                     ToolError::Rejected(message) => anyhow::anyhow!("{message}"),
                     ToolError::Codex(error) => anyhow::Error::new(error),
                 })?;
-            let deadline = tokio::time::Instant::now() + timeout;
             let backend = environment.environment.get_exec_backend();
             let process = tokio::time::timeout_at(deadline, backend.start(params))
                 .await
@@ -253,3 +256,7 @@ impl HookEnvironmentExecutor for EnvironmentCommandExecutor {
         .boxed()
     }
 }
+
+#[cfg(test)]
+#[path = "hook_environment_executor_tests.rs"]
+mod tests;
