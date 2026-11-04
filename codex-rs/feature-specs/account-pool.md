@@ -509,6 +509,14 @@ errors.
 - Usage errors after visible output do not retry with next member: codex-rs/core/tests/suite/account_pool__routing.rs:account_pool_does_not_retry_usage_error_after_visible_output
 - Usage-limit errors without account pool surface original error: codex-rs/core/tests/suite/account_pool__routing.rs:usage_limit_without_account_pool_surfaces_original_error
 - Model routing uses the account pool selected by the routed model candidate: codex-rs/core/tests/suite/account_pool__routing.rs:model_router_uses_the_selected_account_pool
+- Recovery prefers included quota and honors reset/credit priority and permissions: codex-rs/core/tests/suite/account_pool__resources.rs:account_pool_resource_recovery
+- Exhausted pools with disabled fallbacks never use other authentication: codex-rs/core/tests/suite/account_pool__resources.rs:no_permitted_capacity_does_not_use_other_authentication
+- Independently authenticated providers bypass unavailable pools: codex-rs/core/tests/suite/account_pool__resources.rs:independent_provider_ignores_unavailable_pool
+- Hot-cache recovery can reset the same account without switching: codex-rs/core/tests/suite/account_pool__resources.rs:hot_cache_can_reset_same_account_below_switch_threshold
+- Visible output and unsupported usage errors prevent automatic reset consumption: codex-rs/core/tests/suite/account_pool__resources.rs:automatic_resets_respect_output_safety
+- Ineffective recovery stays bounded when refreshed usage reports success: codex-rs/core/tests/suite/account_pool__resources.rs:ineffective_model_recovery_is_bounded_even_when_usage_reports_success
+- Later turns reuse uncertain reset request IDs within the retry budget: codex-rs/core/tests/suite/account_pool__recovery_retry.rs:uncertain_reset_can_retry_on_a_later_turn
+- An uncertain reset does not displace the next recovery candidate: codex-rs/core/tests/suite/account_pool__recovery_retry.rs:uncertain_reset_does_not_displace_the_next_recovery_candidate
 
 ### app-server-api (app-server API behavior)
 
