@@ -40,7 +40,12 @@ pub(super) fn normalize_model_items(
 ) -> Result<Vec<NormalizedConversationItem>> {
     let mut normalized_items = Vec::new();
     for item in items {
-        if item.get("type").and_then(Value::as_str) == Some("additional_tools") {
+        // Declarations and request settings stay in the raw payload, outside
+        // the conversational item sequence.
+        if matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("additional_tools" | "configuration_update")
+        ) {
             continue;
         }
 

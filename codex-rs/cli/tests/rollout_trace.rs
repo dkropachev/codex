@@ -65,7 +65,10 @@ async fn accepted_output_survives_success_and_stream_failure() -> Result<()> {
         .map(|event| format!("data: {event}\n\n"))
         .collect();
         let server = create_mock_responses_server_sequence(vec![response]).await;
-        MockResponsesConfig::new(&server.uri()).write(home.path())?;
+        MockResponsesConfig::new(&server.uri())
+            .with_model("gpt-6.1-sol")
+            .with_provider_name("OpenAI")
+            .write(home.path())?;
         let mut app = TestAppServer::builder()
             .with_program(&codex)
             .with_plugin_startup_tasks()
@@ -99,6 +102,25 @@ async fn accepted_output_survives_success_and_stream_failure() -> Result<()> {
             }
         );
         assert!(app.shutdown_gracefully().await?.success());
+
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .iter()
+                .filter(|request| request.url.path().ends_with("/responses"))
+                .any(|request| {
+                    let body: serde_json::Value =
+                        serde_json::from_slice(&request.body).expect("Responses request JSON");
+                    body["input"].as_array().is_some_and(|items| {
+                        items
+                            .iter()
+                            .any(|item| item["type"] == "configuration_update")
+                    })
+                }),
+            "the supported OpenAI model should emit its default reasoning update"
+        );
 
         // Exercise the exported artifact, not just an in-process reducer call.
         // There is no following request to prove acceptance of this final item.

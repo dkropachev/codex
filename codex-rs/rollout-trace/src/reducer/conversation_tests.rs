@@ -1059,6 +1059,41 @@ fn additional_tools_are_excluded_from_request_conversation() -> anyhow::Result<(
 }
 
 #[test]
+fn configuration_updates_preserve_conversation_identity() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let writer = create_started_writer(&temp)?;
+    start_turn(&writer, "turn-1")?;
+
+    for (inference_id, effort) in [("inference-1", "low"), ("inference-2", "high")] {
+        let request = writer.write_json_payload(
+            RawPayloadKind::InferenceRequest,
+            &json!({
+                "input": [
+                    message("user", "find it"),
+                    {"type": "configuration_update", "reasoning": {"effort": effort}}
+                ]
+            }),
+        )?;
+        append_inference_start(&writer, inference_id, "turn-1", request)?;
+    }
+
+    let rollout = replay_bundle(temp.path())?;
+    let first = &rollout.inference_calls["inference-1"].request_item_ids;
+    let second = &rollout.inference_calls["inference-2"].request_item_ids;
+    assert_eq!(first, second);
+    assert_eq!(rollout.conversation_items.len(), 1);
+    assert_eq!(
+        rollout.conversation_items[&first[0]].body,
+        ConversationBody {
+            parts: vec![ConversationPart::Text {
+                text: "find it".to_string(),
+            }],
+        }
+    );
+    Ok(())
+}
+
+#[test]
 fn missing_request_input_is_reducer_error() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let writer = create_started_writer(&temp)?;
