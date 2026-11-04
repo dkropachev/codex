@@ -423,3 +423,73 @@ async fn incremental_metadata_continuations_keep_websocket_connection_and_ids() 
     websocket.shutdown().await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn initial_large_namespace_instructions_keep_declarations_and_history_bounded() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+    let api = responses::start_mock_server().await;
+    let instructions = "escaped \"\0🦀".repeat(/*n*/ 8_000);
+    let mcp = mcp_server(instructions.clone(), "Look up a value.").await;
+    let test = fixture(&api, &mcp, "ws://127.0.0.1:1", ResponsesTransport::Http).await?;
+    let initial = capture(&test, &api).await?;
+    assert_bounded(&initial);
+    assert_eq!(
+        instruction_text(&initial),
+        format!("Updated instructions for the mcp__sample namespace:\n{instructions}")
+    );
+    let definitions = initial
+        .iter()
+        .filter(|item| item["type"] == "additional_tools")
+        .flat_map(|item| item["tools"].as_array().expect("tool declarations"))
+        .collect::<Vec<_>>();
+    assert!(
+        definitions
+            .iter()
+            .any(|namespace| namespace["name"] == "mcp__sample"
+                && namespace["description"] == ""
+                && namespace["tools"][0]["name"] == "lookup")
+    );
+    let repeated = capture(&test, &api).await?;
+    assert_eq!(&repeated[..initial.len()], initial.as_slice());
+    assert_bounded(&repeated);
+    assert_eq!(instruction_text(&repeated[initial.len()..]), "");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn growing_member_preserves_namespace_guidance_when_it_moves_to_text() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let api = responses::start_mock_server().await;
+    let instructions = "namespace guidance "
+        .repeat(/*n*/ 600)
+        .trim_end()
+        .to_string();
+    let initial_mcp = mcp_server(instructions.clone(), "a").await;
+    let changed_mcp = mcp_server(instructions.clone(), &"b".repeat(/*n*/ 32_000)).await;
+    let test = fixture(
+        &api,
+        &initial_mcp,
+        "ws://127.0.0.1:1",
+        ResponsesTransport::Http,
+    )
+    .await?;
+    let initial = capture(&test, &api).await?;
+    assert_bounded(&initial);
+    assert_eq!(instruction_text(&initial), "");
+    refresh(&test, &changed_mcp).await?;
+    let changed = capture(&test, &api).await?;
+    assert_eq!(&changed[..initial.len()], initial.as_slice());
+    let delta = &changed[initial.len()..];
+    assert_bounded(delta);
+    assert_eq!(
+        instruction_text(delta),
+        format!(
+            "This is an incremental tools update. Previously declared tools remain available for direct calls unless explicitly marked unavailable. If a tool is redefined here, its latest definition replaces the earlier one.Updated instructions for the mcp__sample namespace:\n{instructions}"
+        )
+    );
+    let unchanged = capture(&test, &api).await?;
+    assert_eq!(&unchanged[..changed.len()], changed.as_slice());
+    assert_eq!(instruction_text(&unchanged[changed.len()..]), "");
+    Ok(())
+}

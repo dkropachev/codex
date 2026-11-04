@@ -1,6 +1,6 @@
 //! Diffs the one-level Responses Lite catalog: namespaces of callable tools and built-ins.
 //! Missing state starts a fresh catalog; this section does not migrate legacy history.
-//! One developer notice precedes each incremental namespace batch; catalog hashes are unchanged.
+//! Namespace header hashes track whether guidance needs separate text fragments.
 //! Whole namespace removals subsume their members in the removal notice.
 //! Metrics count rendered tool deltas and measure replacement description bytes.
 
@@ -9,6 +9,8 @@ use super::SectionTransition;
 use super::WorldStateHash;
 use super::WorldStateSection;
 use super::WorldStateUpdate;
+use super::tool_declaration_batches::declaration_batches;
+use super::tool_declaration_batches::namespace_instructions_need_text;
 use super::tool_instructions::ToolInstructions;
 use crate::context::ContextualUserFragment;
 use codex_extension_api::ExtensionMetrics;
@@ -52,6 +54,7 @@ impl TopLevelToolsState {
         definitions: Vec<Value>,
         metrics: Option<Arc<dyn ExtensionMetrics>>,
     ) -> Result<Self> {
+        declaration_batches(&definitions)?;
         let mut hashes = BTreeMap::new();
         let mut insert_hash = |name: String, definition: &Value| -> Result<()> {
             let hash = WorldStateHash::from_json(definition);
@@ -71,6 +74,12 @@ impl TopLevelToolsState {
                 for tool in tools.as_array().expect("serialized namespace members") {
                     insert_hash(format!("{name}.{}", definition_name(tool)), tool)?;
                 }
+            }
+            if namespace_instructions_need_text(definition) {
+                // A growing member can move unchanged guidance out of the native header.
+                // Distinguish that representation, including snapshots from older rollouts,
+                // so the transition appends the complete guidance once.
+                header = serde_json::json!({"declaration": header, "instructions_in_text": true});
             }
             insert_hash(name.to_string(), &header)?;
         }
@@ -133,6 +142,10 @@ impl WorldStateSection for TopLevelToolsState {
     const ID: &'static str = "top_level_tools";
     type Snapshot = BTreeMap<String, WorldStateHash>;
 
+    #[expect(
+        clippy::expect_used,
+        reason = "new() validates every atomic declaration before diffing"
+    )]
     fn render_diff(
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
@@ -172,11 +185,17 @@ impl WorldStateSection for TopLevelToolsState {
                     changed_members.push(tool.clone());
                 }
             }
+            let needs_text_update = changed_members.is_empty();
+            let large_namespace_instructions = namespace_instructions_need_text(definition);
             if !changed_members.is_empty() {
                 let mut namespace = definition.clone();
                 namespace["tools"] = Value::Array(changed_members);
+                if large_namespace_instructions {
+                    namespace["description"] = Value::String(String::new());
+                }
                 tools.push(namespace);
-            } else if changed(name) {
+            }
+            if changed(name) && (needs_text_update || large_namespace_instructions) {
                 // Namespace declarations require a member. Update metadata as text without
                 // repeating unchanged tool definitions.
                 let instructions = definition["description"].as_str().unwrap_or_default();
@@ -213,13 +232,15 @@ impl WorldStateSection for TopLevelToolsState {
                     IncrementalToolsHint(self.messages.tool_update_hint.clone()),
                 )));
             }
-            updates.push(WorldStateUpdate::prefix_item(
-                ResponseItem::AdditionalTools {
+            // Every delta is a subset of the declarations validated by new().
+            let batches = declaration_batches(&tools).expect("validated tool declarations");
+            updates.extend(batches.into_iter().map(|tools| {
+                WorldStateUpdate::prefix_item(ResponseItem::AdditionalTools {
                     id: None,
                     role: "developer".to_string(),
                     tools: Arc::from(tools),
-                },
-            ));
+                })
+            }));
         }
         updates.extend(namespace_updates);
         if let Some(previous) = previous {

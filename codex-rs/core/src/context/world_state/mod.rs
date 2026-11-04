@@ -17,6 +17,7 @@ mod pull_request_context;
 mod realtime;
 #[cfg(test)]
 pub(crate) mod test_support;
+mod tool_declaration_batches;
 mod tool_instructions;
 mod tools;
 mod top_level_tools;
