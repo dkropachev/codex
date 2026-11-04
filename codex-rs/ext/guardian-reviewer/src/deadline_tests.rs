@@ -23,16 +23,20 @@ async fn setup_uses_remaining_budget() {
 #[tokio::test(start_paused = true)]
 async fn unlimited_setup_can_be_cancelled() {
     let cancel = CancellationToken::new();
-    let (result, ()) = tokio::join!(
-        run_before_review_deadline(
-            ReviewDeadline::Unlimited,
-            Some(&cancel),
-            std::future::pending::<()>()
-        ),
-        async {
-            tokio::time::sleep(Duration::from_secs(120)).await;
-            cancel.cancel();
-        },
-    );
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(/*secs*/ 121), async {
+        tokio::join!(
+            run_before_review_deadline(
+                ReviewDeadline::Unlimited,
+                Some(&cancel),
+                std::future::pending::<()>()
+            ),
+            async {
+                tokio::time::sleep(Duration::from_secs(/*secs*/ 120)).await;
+                cancel.cancel();
+            },
+        )
+    })
+    .await
+    .expect("unlimited setup should observe cancellation");
     assert!(matches!(result, Err(GuardianReviewSessionOutcome::Aborted)));
 }

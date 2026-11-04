@@ -285,11 +285,13 @@ async fn account_grant_tracks_refresh_replacement_and_logout() -> Result<()> {
     );
     // Inspection must complete even with an IdP lease held and a refresh queued.
     // Unlike inspection, the exchange above must still exclude refresh.
-    let inspected = ctx
-        .auth_manager
-        .account_oauth_grant()
-        .await?
-        .context("account inspection during refresh exclusion")?;
+    let inspected = tokio::time::timeout(
+        StdDuration::from_secs(/*secs*/ 10),
+        ctx.auth_manager.account_oauth_grant(),
+    )
+    .await
+    .context("account inspection should finish while refresh remains excluded")??
+    .context("account inspection during refresh exclusion")?;
     assert_eq!(inspected.tokens(), &initial_tokens);
     // No await between clearing the flag and release: this wake must come from the lease.
     refresh_wake.0.store(false, Ordering::SeqCst);

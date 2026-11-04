@@ -1601,11 +1601,23 @@ async fn each_loader_owns_refresh_until_its_last_clone_is_dropped() {
 
     // Aborting is asynchronous; joining waits for cancellation to finish.
     drop(cloned_loader);
-    assert!(original_task.await.unwrap_err().is_cancelled());
+    assert!(
+        tokio::time::timeout(Duration::from_secs(/*secs*/ 1), original_task)
+            .await
+            .expect("the last original loader should cancel its refresh")
+            .unwrap_err()
+            .is_cancelled()
+    );
     assert!(!replacement_task.is_finished());
 
     drop(replacement_loader);
-    assert!(replacement_task.await.unwrap_err().is_cancelled());
+    assert!(
+        tokio::time::timeout(Duration::from_secs(/*secs*/ 1), replacement_task)
+            .await
+            .expect("the last replacement loader should cancel its refresh")
+            .unwrap_err()
+            .is_cancelled()
+    );
     tokio::time::advance(CLOUD_CONFIG_BUNDLE_CACHE_REFRESH_INTERVAL + Duration::from_secs(1)).await;
     tokio::task::yield_now().await;
     assert_eq!(replacement_fetcher.request_count.load(Ordering::SeqCst), 2);
