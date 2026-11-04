@@ -83,3 +83,35 @@ fn catalog_overrides_preserve_tool_fields_and_encryption_with_independent_fallba
         );
     }
 }
+
+#[test]
+fn oversized_catalog_fields_fall_back_independently() {
+    let bundled = ResponsesApiTool {
+        name: "example".to_string(),
+        description: "Bundled guidance.".to_string(),
+        strict: false,
+        defer_loading: None,
+        output_schema: None,
+        parameters: serde_json::from_value(json!({"type": "object", "properties": {}})).unwrap(),
+    };
+    for oversized in ["x".repeat(/*n*/ 100_000), "\0".repeat(/*n*/ 1_000)] {
+        let messages = ToolMessage {
+            description: Some(oversized.clone()),
+            parameters: Some(json!({"type": "object", "description": oversized}).to_string()),
+        };
+        assert_eq!(
+            with_catalog_tool_message(bundled.clone(), Some(&messages)),
+            bundled
+        );
+    }
+    let messages = ToolMessage {
+        description: Some("Catalog guidance.".to_string()),
+        parameters: Some("x".repeat(/*n*/ 100_000)),
+    };
+    let mut expected = bundled.clone();
+    expected.description = "Catalog guidance.".to_string();
+    assert_eq!(
+        with_catalog_tool_message(bundled, Some(&messages)),
+        expected
+    );
+}

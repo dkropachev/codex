@@ -24,6 +24,7 @@ mod tool_payload;
 mod tool_search;
 mod tool_spec;
 
+pub use catalog_tool_message::catalog_tool_description;
 pub use catalog_tool_message::with_catalog_tool_message;
 pub use code_mode::augment_tool_spec_for_code_mode;
 pub use code_mode::code_mode_name_for_tool_name;

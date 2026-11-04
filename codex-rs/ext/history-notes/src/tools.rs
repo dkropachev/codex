@@ -19,6 +19,7 @@ use codex_tools::JsonToolOutput;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolExposure;
+use codex_tools::catalog_tool_description;
 use codex_tools::with_catalog_tool_message;
 use serde_json::Value;
 use serde_json::json;
@@ -286,9 +287,11 @@ impl HistoryNotesAction {
         );
         ToolSpec::Namespace(ResponsesApiNamespace {
             name: self.namespace().to_string(),
-            description: namespace_description
-                .unwrap_or(self.namespace_description())
-                .to_string(),
+            description: catalog_tool_description(
+                self.namespace_description(),
+                namespace_description,
+            )
+            .to_string(),
             tools: vec![ResponsesApiNamespaceTool::Function(tool)],
         })
     }
