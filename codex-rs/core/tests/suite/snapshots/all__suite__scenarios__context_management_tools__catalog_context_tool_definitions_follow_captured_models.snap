@@ -1,5 +1,5 @@
 ---
-source: core/tests/suite/scenarios_context_management_tools.rs
+source: core/tests/suite/scenarios_context_management_tools_tests.rs
 assertion_line: 86
 expression: "context_snapshot::format_request_history_snapshot(\"Context tool descriptions and parameters use the captured model; selecting a model with explicit empty descriptions preserves empty text and prior history.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---

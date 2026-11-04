@@ -4,6 +4,7 @@ mod account_pool_app_server_account;
 #[path = "account_system_proxy_tests.rs"]
 mod account_system_proxy;
 
+#[path = "account_gcp_tests.rs"]
 mod account_gcp;
 mod account_thread_usage;
 mod agent_message_board;
@@ -70,6 +71,7 @@ mod experimental_api;
 mod experimental_feature_list;
 mod external_agent_config;
 mod external_agent_import_sync;
+#[path = "external_agent_memory_concurrency_tests.rs"]
 mod external_agent_memory_concurrency;
 mod feedback;
 mod frozen_cloud_skills;

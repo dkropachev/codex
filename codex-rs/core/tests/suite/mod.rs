@@ -45,6 +45,7 @@ mod additional_context;
 #[path = "agent_control_tests.rs"]
 mod agent_control;
 mod agent_execution;
+#[path = "agent_message_wake_tests.rs"]
 mod agent_message_wake;
 mod agent_websocket;
 mod agents_md;
@@ -91,6 +92,7 @@ mod exec_policy;
 mod extension_sandbox;
 mod external_auth;
 mod fork_thread;
+#[path = "gcp_tests.rs"]
 mod gcp;
 mod git_enrichment;
 mod guardian_authorization;
