@@ -107,7 +107,8 @@ fn real_encoder_produces_twenty_millisecond_opus_packets() {
             let mut frame = Frame {
                 samples: [0.0; 256],
                 len: 256,
-                at: start + Duration::from_secs_f64(block as f64 * 256.0 / f64::from(rate)),
+                // Synthetic samples are contiguous even when the test thread is descheduled.
+                at: start + Duration::from_secs_f64(f64::from(block * 256) / f64::from(rate)),
                 generation: 2,
             };
             for (index, sample) in frame.samples.iter_mut().enumerate() {

@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios_mcp_ema.rs
-assertion_line: 719
+assertion_line: 758
 expression: "context_snapshot::format_request_history_snapshot(\"Enterprise access disappears after revocation. Prior calls remain in history and ordinary tools still work.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
 Scenario: Enterprise access disappears after revocation. Prior calls remain in history and ordinary tools still work.
@@ -63,9 +63,10 @@ Settings:
     <ENVIRONMENT_CONTEXT>
 07:message/user:
     List my work events.
+08:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-08:function_call/mcp__enterprise.calendar_list_events:{}
-09:function_call_output:Wall time: <DURATION> seconds
+09:function_call/mcp__enterprise.calendar_list_events:{}
+10:function_call_output:Wall time: <DURATION> seconds
     Output:
     {"_codex_apps":null}
 
@@ -91,16 +92,17 @@ Settings: relative to window 1
     <ENVIRONMENT_CONTEXT>
 07:message/user:
     List my work events.
-08:function_call/mcp__enterprise.calendar_list_events:{}
-09:function_call_output:Wall time: <DURATION> seconds
+08:configuration_update:reasoning={"effort":"low"}
+09:function_call/mcp__enterprise.calendar_list_events:{}
+10:function_call_output:Wall time: <DURATION> seconds
     Output:
     {"_codex_apps":null}
-10:message/assistant:
+11:message/assistant:
     Here are your work events.
-11:message/user:
+12:message/user:
     List my other calendar events.
 -- request 4 (turn) --
-12:function_call/mcp__ordinary.calendar_list_events:{}
-13:function_call_output:Wall time: <DURATION> seconds
+13:function_call/mcp__ordinary.calendar_list_events:{}
+14:function_call_output:Wall time: <DURATION> seconds
     Output:
     {"_codex_apps":null}

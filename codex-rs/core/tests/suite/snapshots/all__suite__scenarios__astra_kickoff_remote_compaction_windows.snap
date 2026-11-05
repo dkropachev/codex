@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 846
+assertion_line: 849
 expression: "context_snapshot::format_request_history_snapshot(\"Astra plans a kickoff with local and plugin skills, remotely compacts, and checks an image brief.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Astra plans a kickoff with local and plugin skills, remotely compacts, and checks an image brief.
@@ -195,12 +195,13 @@ Settings:
     Capabilities from the `calendar` plugin:
     - Skills from this plugin are prefixed with `calendar:`.
     Use these plugin-associated capabilities to help solve the task.
+12:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-12:message/assistant:
+13:message/assistant:
     Agenda drafted for the kickoff.
-13:message/user:
-    Summarize the kickoff notes with $notes:summarize.
 14:message/user:
+    Summarize the kickoff notes with $notes:summarize.
+15:message/user:
     <skill>
     <name>notes:summarize</name>
     <path><PLUGINS_CACHE>/test/notes/local/skills/summarize/SKILL.md</path>
@@ -212,14 +213,14 @@ Settings:
     Extract decisions and action items.
 
     </skill>
-15:message/developer:
+16:message/developer:
     Capabilities from the `notes` plugin:
     - Skills from this plugin are prefixed with `notes:`.
     Use these plugin-associated capabilities to help solve the task.
 -- request 3 (compaction) --
-16:message/assistant:
+17:message/assistant:
     The team chose Friday and assigned owners.
-17:compaction_trigger
+18:compaction_trigger
 
 ## Window 2 (after request 3: input diverged at item 01)
 Settings: same as window 1

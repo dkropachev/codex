@@ -787,3 +787,144 @@ fn snapshots_oversized_removal_notice() {
         .collect::<Vec<_>>();
     insta::assert_snapshot!(texts.join("\n\n---\n\n"));
 }
+
+#[test]
+fn catalog_batches_preserve_all_members_and_bound_final_items() {
+    let members = (0..30)
+        .map(|index| {
+            let mut tool = declaration(&format!("tool_{index}"));
+            tool["description"] = json!("\\\"\0🦀".repeat(/*n*/ 400));
+            tool
+        })
+        .collect::<Vec<_>>();
+    let definitions = vec![namespace("sample", members.clone())];
+    let batches = declaration_batches(&definitions).unwrap();
+    assert!(batches.len() > 1);
+    let mut restored = Vec::new();
+    for batch in batches {
+        let mut response = item(batch.clone());
+        crate::session::session::Session::assign_missing_response_item_id(&mut response);
+        assert!(serde_json::to_vec(&response).unwrap().len() <= 40_000);
+        for namespace in batch {
+            assert_eq!(namespace["name"], "sample");
+            restored.extend(namespace["tools"].as_array().unwrap().clone());
+        }
+    }
+    assert_eq!(restored, members);
+}
+
+#[test]
+fn oversized_atomic_declaration_is_rejected_before_context_is_built() {
+    let mut tool = declaration("oversized");
+    tool["description"] = json!("x".repeat(/*n*/ 40_001));
+    let result = TopLevelToolsState::new(
+        /*messages*/ Default::default(),
+        vec![tool],
+        /*metrics*/ None,
+    );
+    let Err(error) = result else {
+        panic!("an atomic tool declaration cannot exceed the final item budget");
+    };
+    assert!(error.to_string().contains("context budget"));
+}
+
+#[test]
+fn legacy_namespace_hash_appends_guidance_before_adopting_text_representation() {
+    let guidance = "legacy instructions ".repeat(/*n*/ 2_500);
+    let mut definition = namespace("sample", vec![declaration("lookup")]);
+    definition["description"] = json!(guidance);
+    let state = TopLevelToolsState::new(
+        /*messages*/ Default::default(),
+        vec![definition.clone()],
+        /*metrics*/ None,
+    )
+    .unwrap();
+    let mut legacy_header = definition;
+    legacy_header.as_object_mut().unwrap().remove("tools");
+    let mut previous = state.hashes.clone();
+    previous.insert(
+        "sample".to_string(),
+        WorldStateHash::from_json(&legacy_header),
+    );
+    let (snapshot, updates) = state.render_diff(PreviousSectionState::Known(&previous));
+    assert_eq!(
+        merge_world_state_updates(updates),
+        vec![ContextualUserFragment::into(ToolInstructions::new(
+            format!("Updated instructions for the sample namespace:\n{guidance}"),
+            "sample".to_string().into(),
+        ))]
+    );
+    let (_, unchanged) = state.render_diff(PreviousSectionState::Known(&snapshot.unwrap()));
+    assert!(unchanged.is_empty());
+}
+
+#[test]
+fn fitting_namespace_guidance_and_members_share_one_declaration() {
+    let members = (0..20)
+        .map(|index| declaration(&format!("tool_{index}")))
+        .collect();
+    let mut definition = namespace("sample", members);
+    definition["description"] = json!("x".repeat(/*n*/ 30_000));
+    let mut preceding = declaration("preceding");
+    preceding["description"] = json!("p".repeat(/*n*/ 10_000));
+    let state = TopLevelToolsState::new(
+        /*messages*/ Default::default(),
+        vec![preceding.clone(), definition.clone()],
+        /*metrics*/ None,
+    )
+    .unwrap();
+    let (_, updates) = state.render_diff(PreviousSectionState::Absent);
+    assert_eq!(
+        merge_world_state_updates(updates),
+        vec![item(vec![preceding]), item(vec![definition])]
+    );
+}
+
+#[test]
+fn oversized_namespace_guidance_is_carried_once_for_many_small_members() {
+    let members = (0..20)
+        .map(|index| declaration(&format!("tool_{index}")))
+        .collect();
+    let guidance = "x".repeat(/*n*/ 39_700);
+    let mut definition = namespace("sample", members);
+    definition["description"] = json!(guidance);
+    let state = TopLevelToolsState::new(
+        /*messages*/ Default::default(),
+        vec![definition.clone()],
+        /*metrics*/ None,
+    )
+    .unwrap();
+    let (_, updates) = state.render_diff(PreviousSectionState::Absent);
+    definition["description"] = json!("");
+    assert_eq!(
+        merge_world_state_updates(updates),
+        vec![
+            item(vec![definition]),
+            ContextualUserFragment::into(ToolInstructions::new(
+                format!("Updated instructions for the sample namespace:\n{guidance}"),
+                "sample".to_string().into()
+            )),
+        ]
+    );
+}
+
+#[test]
+fn atomic_declaration_fitting_the_exact_final_item_budget_is_accepted() {
+    let mut tool = declaration("exact_boundary");
+    tool["description"] = json!("");
+    let mut empty_description = item(vec![tool.clone()]);
+    crate::session::session::Session::assign_missing_response_item_id(&mut empty_description);
+    let description_bytes = 40_000 - serde_json::to_vec(&empty_description).unwrap().len();
+    tool["description"] = json!("x".repeat(description_bytes));
+    let state = TopLevelToolsState::new(
+        /*messages*/ Default::default(),
+        vec![tool.clone()],
+        /*metrics*/ None,
+    )
+    .unwrap();
+    let (_, updates) = state.render_diff(PreviousSectionState::Absent);
+    let mut items = merge_world_state_updates(updates);
+    assert_eq!(items, vec![item(vec![tool])]);
+    crate::session::session::Session::assign_missing_response_item_id(&mut items[0]);
+    assert_eq!(serde_json::to_vec(&items[0]).unwrap().len(), 40_000);
+}

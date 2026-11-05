@@ -119,6 +119,7 @@ async fn released_fork_migration_history_upgrades_without_rewriting_versions() {
         vec![
             (68, "guardian review feedback".to_string()),
             (69, "thread read state".to_string()),
+            (70, "threads attached parent".to_string()),
         ]
     );
 

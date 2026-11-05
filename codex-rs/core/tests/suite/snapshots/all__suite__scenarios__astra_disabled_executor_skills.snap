@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 1222
+assertion_line: 1225
 expression: "context_snapshot::format_context_snapshot(description, &entries,\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Astra keeps disabled skills hidden and uses each step's selected skills after the environment changes during preparation.
@@ -159,10 +159,11 @@ Settings:
     </environment_context>
 08:message/user:
     Which workflow skills are available?
+09:configuration_update:reasoning={"effort":"low"}
 -- request 2 (request) --
-09:function_call/skills.list:{"authority":{"kind":"executor"}}
-10:function_call_output:{"next_cursor":null,"skills":[{"authority":{"id":"workspace-skills","kind":"executor"},"description":"Us.../<SKILLS_ROOT>/skills/active-helper"}],"warnings":[]} [hash=b72a3cc66e4d3c51]
-11:message/developer:
+10:function_call/skills.list:{"authority":{"kind":"executor"}}
+11:function_call_output:{"next_cursor":null,"skills":[{"authority":{"id":"workspace-skills","kind":"executor"},"description":"Us.../<SKILLS_ROOT>/skills/active-helper"}],"warnings":[]} [hash=b72a3cc66e4d3c51]
+12:message/developer:
     <skills_instructions>
     ## Skills
     A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that ...locators can be expanded using the skill roots table. [hash=f00d6a4d3e192f06]

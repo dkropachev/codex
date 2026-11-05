@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 2300
+assertion_line: 2303
 expression: "context_snapshot::format_request_history_snapshot(scenario, &requests,\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Ranked search prints a deferred tool declaration before a later code cell invokes it, yields, and completes through wait.
@@ -137,12 +137,13 @@ Settings:
     </environment_context>
 07:message/user:
     Find calendar timezone option 99, call it with UTC, then yield and wait for completion.
+08:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-08:custom_tool_call/exec:const result = await tools.tool_search({query: "calendar_timezone_option_99", limit: 1});
+09:custom_tool_call/exec:const result = await tools.tool_search({query: "calendar_timezone_option_99", limit: 1});
     store("calendarToolName", result.tools[0].name);
     text(result.tools[0].name);
     text(result.tools[0].description);
-09:custom_tool_call_output:Script completed
+10:custom_tool_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
      | mcp__codex_apps__calendar_timezone_option_99 | Plan events and manage your calendar.
@@ -154,16 +155,16 @@ Settings:
     declare const tools: { mcp__codex_apps__calendar_timezone_option_99(args: { timezone?: string; }): Promise<CallToolResult>; };
     ```
 -- request 3 (turn) --
-10:custom_tool_call/exec:const name = load("calendarToolName");
+11:custom_tool_call/exec:const name = load("calendarToolName");
     text((await tools[name]({ timezone: "UTC" })).content[0].text);
     text('started'); yield_control(); text('finished');
-11:custom_tool_call_output:Script running with cell ID 2
+12:custom_tool_call_output:Script running with cell ID 2
     Wall time <DURATION> seconds
     Output:
      | called calendar_timezone_option_99 for  at  with | started
 -- request 4 (turn) --
-12:function_call/functions.wait:{"cell_id":"2"}
-13:function_call_output:Script completed
+13:function_call/functions.wait:{"cell_id":"2"}
+14:function_call_output:Script completed
     Wall time <DURATION> seconds
     Output:
      | finished

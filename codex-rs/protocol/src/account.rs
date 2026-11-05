@@ -64,6 +64,7 @@ pub enum ProviderAccount {
     AmazonBedrock {
         uses_codex_managed_credentials: bool,
     },
+    Gcp,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

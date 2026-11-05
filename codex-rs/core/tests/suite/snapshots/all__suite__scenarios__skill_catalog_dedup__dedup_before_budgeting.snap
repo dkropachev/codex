@@ -154,8 +154,9 @@ Settings:
     </environment_context>
 08:message/user:
     Which skills are available?
+09:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-09:message/assistant:
+10:message/assistant:
     Skills are available.
-10:message/user:
+11:message/user:
     Are those same skills still available?

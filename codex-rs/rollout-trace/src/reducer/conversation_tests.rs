@@ -68,7 +68,54 @@ fn request_snapshots_reuse_history_without_deduping_new_identical_items() -> any
 }
 
 #[test]
-fn response_outputs_enter_thread_conversation_on_completion() -> anyhow::Result<()> {
+fn repeated_image_output_matches_content_instead_of_payload_location() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let writer = create_started_writer(&temp)?;
+    start_turn(&writer, "turn-1")?;
+    let mut output = json!({
+        "type": "function_call_output",
+        "id": "image-output",
+        "call_id": "call-image",
+        "output": [
+            {"type": "input_text", "text": "Image:"},
+            {"type": "input_image", "image_url": "data:image/png;base64,first"}
+        ]
+    });
+    let empty_output = json!({
+        "type": "function_call_output",
+        "call_id": "call-empty",
+        "output": []
+    });
+    for inference_id in ["inference-1", "inference-2"] {
+        let request = writer.write_json_payload(
+            RawPayloadKind::InferenceRequest,
+            &json!({"input": [output.clone(), empty_output.clone()]}),
+        )?;
+        append_inference_start(&writer, inference_id, "turn-1", request)?;
+    }
+
+    let rollout = replay_bundle(temp.path())?;
+    assert_eq!(
+        rollout.inference_calls["inference-1"].request_item_ids,
+        rollout.inference_calls["inference-2"].request_item_ids,
+    );
+    assert_eq!(rollout.conversation_items.len(), 2);
+
+    // Keeping the call and item IDs must not hide a changed image.
+    output["output"][1]["image_url"] = json!("data:image/png;base64,second");
+    let request = writer.write_json_payload(
+        RawPayloadKind::InferenceRequest,
+        &json!({"input": [output]}),
+    )?;
+    append_inference_start(&writer, "inference-3", "turn-1", request)?;
+    expect_replay_error(
+        &temp,
+        "model-visible call id call-image was reused with different content",
+    )
+}
+
+#[test]
+fn response_outputs_require_harness_acceptance() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let writer = create_started_writer(&temp)?;
     start_turn(&writer, "turn-1")?;
@@ -88,12 +135,14 @@ fn response_outputs_enter_thread_conversation_on_completion() -> anyhow::Result<
             "output_items": [
                 {
                     "type": "message",
+                    "id": "msg-observed",
                     "role": "assistant",
                     "phase": "partial_answer",
                     "content": [{"type": "output_text", "text": "first tests passed"}]
                 },
                 {
                     "type": "message",
+                    "id": "msg-accepted",
                     "role": "assistant",
                     "phase": "final_answer",
                     "content": [{"type": "output_text", "text": "tests passed"}]
@@ -103,10 +152,22 @@ fn response_outputs_enter_thread_conversation_on_completion() -> anyhow::Result<
     )?;
     append_inference_completion(&writer, "inference-1", "resp-1", response)?;
 
+    let observed = replay_bundle(temp.path())?;
+    assert_eq!(
+        observed.threads["thread-root"].conversation_item_ids,
+        observed.inference_calls["inference-1"].request_item_ids,
+    );
+    writer.append_with_context(
+        trace_context("turn-1"),
+        RawTraceEventPayload::HistoryItemAccepted {
+            item_id: "msg-accepted".into(),
+        },
+    )?;
+
     let rollout = replay_bundle(temp.path())?;
     let inference = &rollout.inference_calls["inference-1"];
     let mut expected_thread_items = inference.request_item_ids.clone();
-    expected_thread_items.extend(inference.response_item_ids.clone());
+    expected_thread_items.push(inference.response_item_ids[1].clone());
 
     assert_eq!(
         inference
@@ -994,6 +1055,41 @@ fn additional_tools_are_excluded_from_request_conversation() -> anyhow::Result<(
         }
     );
 
+    Ok(())
+}
+
+#[test]
+fn configuration_updates_preserve_conversation_identity() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let writer = create_started_writer(&temp)?;
+    start_turn(&writer, "turn-1")?;
+
+    for (inference_id, effort) in [("inference-1", "low"), ("inference-2", "high")] {
+        let request = writer.write_json_payload(
+            RawPayloadKind::InferenceRequest,
+            &json!({
+                "input": [
+                    message("user", "find it"),
+                    {"type": "configuration_update", "reasoning": {"effort": effort}}
+                ]
+            }),
+        )?;
+        append_inference_start(&writer, inference_id, "turn-1", request)?;
+    }
+
+    let rollout = replay_bundle(temp.path())?;
+    let first = &rollout.inference_calls["inference-1"].request_item_ids;
+    let second = &rollout.inference_calls["inference-2"].request_item_ids;
+    assert_eq!(first, second);
+    assert_eq!(rollout.conversation_items.len(), 1);
+    assert_eq!(
+        rollout.conversation_items[&first[0]].body,
+        ConversationBody {
+            parts: vec![ConversationPart::Text {
+                text: "find it".to_string(),
+            }],
+        }
+    );
     Ok(())
 }
 

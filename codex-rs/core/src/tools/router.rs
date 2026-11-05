@@ -421,6 +421,7 @@ impl ToolRouter {
             tool_name,
             source,
             payload,
+            environments: Default::default(),
         };
 
         let result = self

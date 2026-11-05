@@ -1,3 +1,8 @@
+mod environment;
+
+pub(crate) use environment::discover_environment_hooks;
+pub use environment::validate_environment_hooks;
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
@@ -39,11 +44,21 @@ use crate::output_spill::DEFAULT_HOOK_OUTPUT_TOKEN_LIMIT;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
 
+#[derive(Default)]
 pub(crate) struct DiscoveryResult {
     pub handlers: Vec<ConfiguredHandler>,
     pub hook_entries: Vec<HookListEntry>,
     pub warnings: Vec<String>,
     pub required_load_errors: Vec<String>,
+}
+
+pub(crate) fn ensure_required_hooks_loaded(errors: &[String]) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        errors.is_empty(),
+        "failed to load required managed hooks: {}",
+        errors.join("; ")
+    );
+    Ok(())
 }
 
 struct HookHandlerSource<'a> {
@@ -801,6 +816,7 @@ fn append_matcher_groups(
                 source_path: source.path.clone(),
                 source: source.source,
                 plugin_id: source.plugin_id.clone(),
+                environment_id: None,
                 display_order: *display_order,
                 enabled,
                 is_managed: source.is_managed,

@@ -109,6 +109,7 @@ pub(crate) async fn run_codex_thread_interactive(
         Arc::clone(&parent_session.services.extensions)
     };
     let spawn_result = Box::pin(Session::spawn(SessionSpawnArgs {
+        attached_thread: false,
         startup: Some(Arc::clone(&startup)),
         config,
         prompt_cache_key: parent_session

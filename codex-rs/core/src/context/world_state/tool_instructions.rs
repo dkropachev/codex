@@ -1,5 +1,5 @@
 //! Bounds newly appended tool instruction text after history IDs and metadata are present.
-//! Original structured tool declarations and already retained history are never partitioned.
+//! Structured declarations are bounded separately; already retained history is never partitioned.
 
 use crate::context::ContextualUserFragment;
 use codex_protocol::ResponseItemId;
