@@ -118,3 +118,17 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: python3 .github/scripts/check_ci_results.py
+
+      # Failed-job retries preserve earlier successful jobs. Refresh advisories
+      # inside the terminal gate so a retry checks the current database too.
+      - name: Refresh release advisories
+        uses: EmbarkStudios/cargo-deny-action@82eb9f621fbc699dd0918f3ea06864c14cc84246 # v2
+        with:
+          rust-version: 1.99.1
+          manifest-path: ./codex-rs/Cargo.toml
+          command-arguments: advisories
+          use-git-cli: "true"
+
+      - name: Check for a clean worktree
+        if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
