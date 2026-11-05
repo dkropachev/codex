@@ -27,10 +27,28 @@ fn gov_cloud_startup_persists_only_acknowledgment() -> Result<()> {
         terminal.wait_for_screen("Using Codex with AWS GovCloud")?;
         let original = std::fs::read_to_string(&path)?;
         let deadline = Instant::now() + STARTUP_TIMEOUT;
+        let mut terminal_closed = false;
         loop {
             // Startup drains pending keys after drawing the guidance; retry until it handles one.
-            terminal.write_input(if action == "quit" { b"q" } else { b"\r" })?;
-            terminal.read_output(Duration::from_millis(/*millis*/ 50))?;
+            if !terminal_closed {
+                match terminal
+                    .write_input(if action == "quit" { b"q" } else { b"\r" })
+                    .and_then(|()| terminal.read_output(Duration::from_millis(/*millis*/ 50)))
+                {
+                    Ok(()) => {}
+                    Err(error)
+                        if action == "quit"
+                            && error
+                                .downcast_ref::<std::io::Error>()
+                                .and_then(std::io::Error::raw_os_error)
+                                == Some(libc::EIO) =>
+                    {
+                        // A closing PTY can report EIO before the child is ready to reap.
+                        terminal_closed = true;
+                    }
+                    Err(error) => return Err(error).context("drive GovCloud startup guidance"),
+                }
+            }
             if action == "quit" {
                 if let Some(status) = terminal.child.try_wait()? {
                     ensure!(status.success(), "quit exited with {status}");
@@ -40,6 +58,9 @@ fn gov_cloud_startup_persists_only_acknowledgment() -> Result<()> {
                 break;
             }
             ensure!(Instant::now() < deadline, "{action} did not complete");
+            if terminal_closed {
+                std::thread::sleep(Duration::from_millis(/*millis*/ 10));
+            }
         }
         let saved = std::fs::read_to_string(&path)?;
         if action == "acknowledge" {
