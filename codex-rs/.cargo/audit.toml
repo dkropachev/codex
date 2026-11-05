@@ -18,4 +18,6 @@ ignore = [
     "RUSTSEC-2026-0372", # zvariant_derive via zbus 4 in codex-tui/keyring 3.6/secret-service 4; remove when credential-store dependencies and TUI migrate to zbus 6
     # Reviewed 2026-10-20: maintenance-only advisory; i18n-config has not released its toml migration.
     "RUSTSEC-2026-0374", # basic-toml via i18n-config 0.4.8/age 0.12.1 in codex-secrets; remove when i18n dependencies adopt toml
+    # Reviewed 2026-11-05: maintenance-only advisory with no patched release.
+    "RUSTSEC-2026-0441", # pin-utils 0.1.0 via aws-smithy-http 0.62.6, aws-smithy-runtime 1.9.5, aws-smithy-types 1.4.7, and loom 0.7.2; remove when AWS SDK and loom dependency paths drop pin-utils
 ]

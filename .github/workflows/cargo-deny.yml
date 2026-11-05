@@ -1,6 +1,8 @@
 name: cargo-deny
 
 on:
+  # Run a fresh dependency check on the selected ref immediately before tagging.
+  workflow_dispatch:
   workflow_call:
 
 # Cargo's libgit2 transport has been flaky when fetching git dependencies with
