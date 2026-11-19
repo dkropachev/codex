@@ -136,7 +136,7 @@ impl ChatWidget {
         }
         if matches!(feature, Feature::FastMode | Feature::UltrafastMode) {
             self.refresh_effective_service_tier();
-            self.sync_service_tier_commands();
+            self.refresh_model_dependent_surfaces();
         }
         if feature == Feature::Workflows {
             self.sync_workflow_commands();
@@ -221,10 +221,17 @@ impl ChatWidget {
         self.model_catalog.clone()
     }
 
-    pub(crate) fn on_account_email_loaded(&mut self, current_email: Option<String>) {
-        if let Some(StatusAccountDisplay::ChatGpt { email, .. }) = &mut self.status_account_display
+    pub(crate) fn on_account_email_loaded(
+        &mut self,
+        current_email: Option<String>,
+        current_workspace: Option<String>,
+    ) {
+        if let Some(StatusAccountDisplay::ChatGpt {
+            email, workspace, ..
+        }) = &mut self.status_account_display
         {
             *email = current_email;
+            *workspace = current_workspace;
         }
     }
 

@@ -38,11 +38,19 @@ fn modern_compaction_ids_survive_history_reconstruction() {
     assert_eq!(
         builder.finish()[0].items,
         vec![
-            ThreadItem::ContextCompaction {
-                id: "compact-1".to_string()
+            ThreadItem {
+                payload: ThreadItemPayload::ContextCompaction {
+                    id: "compact-1".to_string(),
+                },
+                started_at_ms: None,
+                completed_at_ms: None,
             },
-            ThreadItem::ContextCompaction {
-                id: "compact-2".to_string()
+            ThreadItem {
+                payload: ThreadItemPayload::ContextCompaction {
+                    id: "compact-2".to_string(),
+                },
+                started_at_ms: None,
+                completed_at_ms: None,
             },
         ]
     );
@@ -53,11 +61,19 @@ fn modern_compaction_ids_survive_history_reconstruction() {
     assert_eq!(
         legacy.finish()[0].items,
         vec![
-            ThreadItem::ContextCompaction {
-                id: "item-1".to_string()
+            ThreadItem {
+                payload: ThreadItemPayload::ContextCompaction {
+                    id: "item-1".to_string(),
+                },
+                started_at_ms: None,
+                completed_at_ms: None,
             },
-            ThreadItem::ContextCompaction {
-                id: "item-2".to_string()
+            ThreadItem {
+                payload: ThreadItemPayload::ContextCompaction {
+                    id: "item-2".to_string(),
+                },
+                started_at_ms: None,
+                completed_at_ms: None,
             },
         ]
     );

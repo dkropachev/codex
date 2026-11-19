@@ -18,6 +18,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -242,7 +243,7 @@ async fn thread_workflow_command_reports_canonical_and_legacy_contract_failures(
             .turns
             .iter()
             .flat_map(|turn| &turn.items)
-            .all(|item| !matches!(item, ThreadItem::AgentMessage { .. })),
+            .all(|item| !matches!(&item.payload, ThreadItemPayload::AgentMessage { .. })),
         "contract failures must not persist formatted workflow output"
     );
     Ok(())
@@ -629,7 +630,7 @@ async fn thread_workflow_command_interrupt_clears_pending_user_input() -> Result
             .turns
             .iter()
             .flat_map(|turn| &turn.items)
-            .all(|item| !matches!(item, ThreadItem::AgentMessage { .. })),
+            .all(|item| !matches!(&item.payload, ThreadItemPayload::AgentMessage { .. })),
         "interrupted workflow should not persist partial assistant output"
     );
 
@@ -970,7 +971,7 @@ async fn wait_for_agent_message_completed(
 }
 
 fn assert_agent_message(item: &ThreadItem, expected_text: &str) {
-    let ThreadItem::AgentMessage { text, phase, .. } = item else {
+    let ThreadItemPayload::AgentMessage { text, phase, .. } = &item.payload else {
         panic!("expected agent message item, got {item:?}");
     };
     assert_eq!(text, expected_text);
@@ -978,8 +979,8 @@ fn assert_agent_message(item: &ThreadItem, expected_text: &str) {
 }
 
 fn agent_message_text(item: &ThreadItem) -> Option<&str> {
-    match item {
-        ThreadItem::AgentMessage { text, .. } => Some(text.as_str()),
+    match &item.payload {
+        ThreadItemPayload::AgentMessage { text, .. } => Some(text.as_str()),
         _ => None,
     }
 }

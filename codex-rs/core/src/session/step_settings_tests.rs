@@ -440,6 +440,7 @@ async fn model_resolution_preserves_startup_overrides_and_instruction_provenance
         /*auth_manager*/ None,
         catalog.clone(),
         codex_models_manager::collaboration_mode_presets::CollaborationModesConfig::default(),
+        codex_models_manager::ModelOrigin::ExplicitConfig,
     );
 
     let mut config = test_config().await;

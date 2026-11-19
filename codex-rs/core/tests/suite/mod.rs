@@ -104,7 +104,9 @@ mod guardian_checkpoint_migration;
 #[path = "incremental_tool_item_budget_tests.rs"]
 mod incremental_tool_item_budget;
 // Uses the same command-approval harness as guardian_review below.
+mod builtin_model_catalog;
 mod canonical_plugin_connectors;
+mod critical_path_runtime;
 mod gateway_auth;
 mod guardian_connector_trust;
 #[cfg(not(target_os = "windows"))]

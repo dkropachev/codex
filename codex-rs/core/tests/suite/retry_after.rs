@@ -1918,6 +1918,103 @@ async fn websocket_overload_with_nested_retry_after_retries_until_recovery() -> 
     Ok(())
 }
 
+/// Policy-restricted capacity retries only when advised and preserves its terminal error.
+#[test_case::test_case(Some("1"); "with_retry_advice")]
+#[test_case::test_case(None; "without_retry_advice")]
+#[tokio::test(flavor = "current_thread")]
+async fn websocket_policy_capacity_preserves_terminal_error(
+    retry_after: Option<&str>,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut telemetry = RetryTelemetryCapture::install();
+    let mut error = json!({
+        "code": "policy_capacity_unavailable",
+        "message": "This model is disabled.",
+    });
+    if let Some(retry_after) = retry_after {
+        error["headers"] = json!({"Retry-After": retry_after});
+    }
+    let mut batches = vec![vec![
+        vec![
+            responses::ev_response_created("prewarm"),
+            responses::ev_completed("prewarm"),
+        ],
+        vec![json!({"type": "error", "status": 503, "error": error})],
+    ]];
+    if retry_after.is_some() {
+        batches.push(vec![vec![json!({
+            "type": "error", "status": 503,
+            "error": {"code": "policy_capacity_unavailable"}
+        })]]);
+    }
+    let server = responses::start_websocket_server(batches).await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.model_catalog =
+                Some(bundled_models_response().expect("bundled models.json should parse"));
+            config.model_provider.request_max_retries = Some(2);
+            config.model_provider.stream_max_retries = Some(3);
+        })
+        .build_with_websocket_server(&server)
+        .await?;
+
+    let warmup = server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await;
+    assert_eq!(warmup.body_json()["generate"].as_bool(), Some(false));
+    submit_user_input(&test, "surface policy-restricted capacity").await?;
+    if retry_after.is_some() {
+        let retry = telemetry.next_retry().await;
+        assert_eq!(retry.attempt, 1);
+        assert!(retry.delay <= Duration::from_secs(1));
+        assert!(wait_for_retry(&mut telemetry, &retry).await >= Duration::from_secs(1));
+    }
+    let mut stream_error_events = 0;
+    let mut error_events = 0;
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::Error(error) => {
+                error_events += 1;
+                assert_eq!(
+                    error.codex_error_info,
+                    Some(CodexErrorInfo::PolicyCapacityUnavailable)
+                );
+                assert_eq!(
+                    error.message,
+                    "Policy-restricted capacity is unavailable. Please try again later."
+                );
+            }
+            EventMsg::StreamError(_) => stream_error_events += 1,
+            EventMsg::Warning(warning)
+                if warning.message.contains("Falling back from WebSockets") =>
+            {
+                panic!("unexpected HTTP fallback: {warning:?}");
+            }
+            EventMsg::TurnComplete(event) => {
+                assert_eq!(
+                    event.error.and_then(|error| error.codex_error_info),
+                    Some(CodexErrorInfo::PolicyCapacityUnavailable)
+                );
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(error_events, 1);
+    assert_eq!(stream_error_events, usize::from(retry_after.is_some()));
+    assert_eq!(
+        server.connections().iter().map(Vec::len).sum::<usize>(),
+        2 + usize::from(retry_after.is_some())
+    );
+    assert_eq!(
+        telemetry.events.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    );
+    server.shutdown().await;
+    Ok(())
+}
+
 /// A streamed websocket overload without retry advice recovers despite a zero retry budget.
 #[tokio::test(flavor = "current_thread")]
 async fn websocket_overload_without_retry_after_retries_until_recovery() -> Result<()> {

@@ -217,6 +217,7 @@ impl ChatWidget {
                 .queued_user_messages
                 .push_back(QueuedUserMessage {
                     user_message,
+                    prepared_images: None,
                     action,
                     delivery: MessageDelivery::Unsent,
                     pending_pastes,
@@ -283,6 +284,7 @@ impl ChatWidget {
                 QueuedInputAction::Literal => {
                     let QueuedUserMessage {
                         user_message,
+                        prepared_images,
                         pending_pastes,
                         source,
                         ..
@@ -311,11 +313,12 @@ impl ChatWidget {
                             );
                     }
                     submitted_follow_up = self
-                        .submit_user_message_with_history_and_shell_escape_policy(
+                        .submit_user_message_with_prepared_images(
                             user_message,
                             history_record,
                             ShellEscapePolicy::Disallow,
                             source,
+                            prepared_images,
                         )
                         .0;
                     if !submitted_follow_up {

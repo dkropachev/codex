@@ -71,7 +71,19 @@ impl SessionTask for RegularTask {
             || current_account_pool != previous_account_pool
             || ctx.config.service_tier != previous_service_tier
             || ctx.config.model_reasoning_effort != previous_reasoning_effort;
-        let run_turn_span = trace_span!("run_turn");
+        if ctx
+            .config
+            .features
+            .enabled(codex_features::Feature::CriticalPathTiming)
+            && !ctx.session_source.is_non_root_agent()
+        {
+            ctx.turn_timing_state.enable_critical_path();
+        }
+        let run_turn_span = trace_span!(
+            "run_turn",
+            conversation.id = %sess.thread_id,
+            turn.id = %ctx.sub_id,
+        );
         // Regular turns emit `TurnStarted` inline so first-turn lifecycle does
         // not wait on startup prewarm resolution.
         let prewarmed_client_session = async {

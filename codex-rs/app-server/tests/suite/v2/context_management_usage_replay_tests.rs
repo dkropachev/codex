@@ -4,6 +4,7 @@ use app_test_support::create_fake_rollout_with_token_usage;
 use app_test_support::rollout_path;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_protocol::ThreadId;
@@ -109,9 +110,9 @@ async fn resume_replays_usage_with_its_completed_compaction_item_id() -> Result<
     );
     assert_eq!(
         thread.turns.last().expect("compaction turn").items,
-        vec![ThreadItem::ContextCompaction {
+        vec![ThreadItem::untimed(ThreadItemPayload::ContextCompaction {
             id: "compact-stable".to_string()
-        }]
+        })]
     );
     Ok(())
 }

@@ -3,14 +3,13 @@ use codex_agent_extension::AgentRunner;
 mod review;
 use super::*;
 use codex_app_server_protocol::ImageReference as V2ImageReference;
+use codex_app_server_protocol::ThreadItem;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageReference as CoreImageReference;
-use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
-use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
 use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
@@ -101,18 +100,15 @@ fn map_additional_context(
         .unwrap_or_default()
         .into_iter()
         .map(|(key, entry)| {
-            (
-                key,
-                CoreAdditionalContextEntry {
-                    value: entry.value,
-                    kind: match entry.kind {
-                        AdditionalContextKind::Untrusted => CoreAdditionalContextKind::Untrusted,
-                        AdditionalContextKind::Application => {
-                            CoreAdditionalContextKind::Application
-                        }
-                    },
+            let entry = CoreAdditionalContextEntry {
+                value: entry.value,
+                kind: match entry.kind {
+                    AdditionalContextKind::Untrusted => CoreAdditionalContextKind::Untrusted,
+                    AdditionalContextKind::Application => CoreAdditionalContextKind::Application,
                 },
-            )
+                name: entry.name,
+            };
+            (key, entry)
         })
         .collect()
 }
@@ -280,8 +276,9 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeStartParams,
+        sideband_base_url: Option<String>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_realtime_start_inner(request_id, params)
+        self.thread_realtime_start_inner(request_id, params, sideband_base_url)
             .await
             .map(|response| response.map(Into::into))
     }
@@ -454,7 +451,7 @@ impl TurnRequestProcessor {
         self.ensure_direct_input_allowed(&request_id, thread.as_ref())
             .await?;
         self.config_manager
-            .check_thread_model_provider(thread.config().await.as_ref())
+            .check_thread_model_provider_for_input(thread.config().await.as_ref())
             .await
             .map_err(|error| config_load_error(&error))?;
         if let Some(tool_output) = &params.tool_output {
@@ -500,13 +497,21 @@ impl TurnRequestProcessor {
             app_server_client_name.as_deref(),
             app_server_client_version.as_deref(),
         );
+        // Validate before changing the thread's live MCP policy.
+        let additional_context = map_additional_context(params.additional_context);
+        additional_context
+            .values()
+            .try_for_each(CoreAdditionalContextEntry::validate)
+            .map_err(invalid_request)
+            .inspect_err(|error| {
+                self.track_error_response(&request_id, error, /*error_type*/ None);
+            })?;
         let runtime_workspace_roots = params
             .runtime_workspace_roots
             .map(resolve_runtime_workspace_roots);
         let environment_requests =
             resolve_turn_environment_requests(self.thread_manager.as_ref(), params.environments)?;
 
-        let additional_context = map_additional_context(params.additional_context);
         let turn_has_input = !params.input.is_empty();
         let input = if let Some(tool_output) = params.tool_output {
             let item = ResponseItem::FunctionCallOutput {
@@ -939,7 +944,7 @@ impl TurnRequestProcessor {
         self.ensure_direct_input_allowed(request_id, thread.as_ref())
             .await?;
         self.config_manager
-            .check_thread_model_provider(thread.config().await.as_ref())
+            .check_thread_model_provider_for_input(thread.config().await.as_ref())
             .await
             .map_err(|error| config_load_error(&error))?;
 
@@ -978,7 +983,10 @@ impl TurnRequestProcessor {
             )
             .await
             .map_err(|err| {
-                let error = internal_error(format!("failed to steer turn: {err}"));
+                let error = match err.details() {
+                    CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),
+                    _ => internal_error(format!("failed to steer turn: {err}")),
+                };
                 self.track_error_response(request_id, &error, /*error_type*/ None);
                 error
             })?;
@@ -1098,6 +1106,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRealtimeStartParams,
+        sideband_base_url: Option<String>,
     ) -> Result<Option<ThreadRealtimeStartResponse>, JSONRPCErrorError> {
         let attaches_existing_call = matches!(
             &params.transport,
@@ -1176,10 +1185,10 @@ impl TurnRequestProcessor {
                     ThreadRealtimeStartTransport::Webrtc { sdp } => {
                         ConversationStartTransport::Webrtc { sdp }
                     }
-                    ThreadRealtimeStartTransport::ExistingCall { call_id } => {
+                    ThreadRealtimeStartTransport::ExistingCall { call_id, .. } => {
                         ConversationStartTransport::ExistingCall {
                             call_id,
-                            sideband_base_url: None,
+                            sideband_base_url,
                         }
                     }
                 }),
