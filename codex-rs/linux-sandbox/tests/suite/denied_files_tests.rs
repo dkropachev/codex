@@ -23,6 +23,51 @@ enum DeniedFileRules {
     GlobsWithNativeFallback,
 }
 
+#[tokio::test]
+async fn denied_proc_blocks_descriptor_paths_in_child_processes() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let workspace = tempfile::tempdir().expect("workspace");
+    let cwd = AbsolutePathBuf::try_from(workspace.path()).expect("absolute workspace");
+    let mut policy = FileSystemSandboxPolicy::read_only();
+    policy.entries.push(FileSystemSandboxEntry::new(
+        AbsolutePathBuf::from_absolute_path("/proc")
+            .expect("absolute proc path")
+            .into(),
+        FileSystemAccessMode::Deny,
+    ));
+    let permissions =
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
+    let output = run_cmd_result_with_permission_profile_for_cwd(
+        &[
+            "/bin/sh",
+            "-c",
+            r#"set -eu
+test ! -r /proc/self/status
+exec 9</dev/null
+test ! -r /dev/fd/9
+/bin/sh -c 'test ! -r /proc/self/status && test ! -r /dev/fd/9'
+printf 'proc denied\n'
+"#,
+        ],
+        cwd,
+        permissions,
+        create_env_from_core_vars(),
+        LONG_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+    )
+    .await
+    .expect("sandbox should start with denied proc");
+
+    assert_eq!(
+        (output.exit_code, output.stdout.text, output.stderr.text),
+        (0, "proc denied\n".to_string(), String::new())
+    );
+}
+
 #[test_case::test_case(DeniedFileRules::ExactPaths; "exact_paths")]
 #[test_case::test_case(DeniedFileRules::Globs; "globs")]
 #[test_case::test_case(DeniedFileRules::GlobsWithProtectedRg; "globs_with_protected_rg")]

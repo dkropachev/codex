@@ -126,6 +126,7 @@ pub(crate) fn model_router_failure_scope(err: &CodexErr) -> Option<ModelRouterFa
         CodexErrorDetails::ResponseIncomplete(error) => message_failure_scope(&error.to_string()),
         CodexErrorDetails::InvalidRequest(message) => message_failure_scope(message),
         CodexErrorDetails::TurnAborted
+        | CodexErrorDetails::PolicyCapacityUnavailable
         | CodexErrorDetails::ContentFilter
         | CodexErrorDetails::Interrupted
         | CodexErrorDetails::EnvVar(_)

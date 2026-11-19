@@ -1,4 +1,5 @@
 use super::*;
+use codex_app_server_protocol::ThreadItem as AppServerThreadItem;
 use pretty_assertions::assert_eq;
 
 fn history_text(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> String {
@@ -50,7 +51,9 @@ fn compaction_started_on_turn(id: &str, turn_id: &str) -> ServerNotification {
         thread_id: "thread-1".to_string(),
         turn_id: turn_id.to_string(),
         started_at_ms: chrono::Utc::now().timestamp_millis(),
-        item: AppServerThreadItem::ContextCompaction { id: id.to_string() },
+        item: AppServerThreadItem::untimed(AppServerThreadItemPayload::ContextCompaction {
+            id: id.to_string(),
+        }),
     })
 }
 
@@ -59,7 +62,9 @@ fn compaction_completed_on_turn(id: &str, turn_id: &str) -> ServerNotification {
         thread_id: "thread-1".to_string(),
         turn_id: turn_id.to_string(),
         completed_at_ms: 0,
-        item: AppServerThreadItem::ContextCompaction { id: id.to_string() },
+        item: AppServerThreadItem::untimed(AppServerThreadItemPayload::ContextCompaction {
+            id: id.to_string(),
+        }),
     })
 }
 
@@ -70,7 +75,9 @@ fn compacted_turn(turn_id: &str, id: &str) -> AppServerTurn {
         /*duration_ms*/ None,
         /*error*/ None,
     );
-    turn.items = vec![AppServerThreadItem::ContextCompaction { id: id.to_string() }];
+    turn.items = vec![AppServerThreadItem::untimed(
+        AppServerThreadItemPayload::ContextCompaction { id: id.to_string() },
+    )];
     turn
 }
 

@@ -21,7 +21,7 @@ use crate::protocol::v2::ItemGuardianApprovalReviewCompletedNotification;
 use crate::protocol::v2::ItemGuardianApprovalReviewStartedNotification;
 use crate::protocol::v2::PatchApplyStatus;
 use crate::protocol::v2::PatchChangeKind;
-use crate::protocol::v2::ThreadItem;
+use crate::protocol::v2::ThreadItemPayload;
 use codex_protocol::ThreadId;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
@@ -73,34 +73,34 @@ pub(crate) fn review_finding_count(output: Option<&ReviewOutputEvent>) -> usize 
 
 pub fn build_file_change_approval_request_item(
     payload: &ApplyPatchApprovalRequestEvent,
-) -> ThreadItem {
-    ThreadItem::FileChange {
+) -> ThreadItemPayload {
+    ThreadItemPayload::FileChange {
         id: payload.call_id.clone(),
         changes: convert_patch_changes(&payload.changes),
         status: PatchApplyStatus::InProgress,
     }
 }
 
-pub fn build_file_change_begin_item(payload: &PatchApplyBeginEvent) -> ThreadItem {
-    ThreadItem::FileChange {
+pub fn build_file_change_begin_item(payload: &PatchApplyBeginEvent) -> ThreadItemPayload {
+    ThreadItemPayload::FileChange {
         id: payload.call_id.clone(),
         changes: convert_patch_changes(&payload.changes),
         status: PatchApplyStatus::InProgress,
     }
 }
 
-pub fn build_file_change_end_item(payload: &PatchApplyEndEvent) -> ThreadItem {
-    ThreadItem::FileChange {
+pub fn build_file_change_end_item(payload: &PatchApplyEndEvent) -> ThreadItemPayload {
+    ThreadItemPayload::FileChange {
         id: payload.call_id.clone(),
         changes: convert_patch_changes(&payload.changes),
         status: (&payload.status).into(),
     }
 }
 
-pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> ThreadItem {
+pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> ThreadItemPayload {
     let presentation =
         CommandExecutionPresentation::from_raw(&payload.command, &payload.parsed_cmd, &payload.cwd);
-    ThreadItem::CommandExecution {
+    ThreadItemPayload::CommandExecution {
         model_context: None,
         sandbox_type: None,
         id: payload.call_id.clone(),
@@ -118,7 +118,7 @@ pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> Th
     }
 }
 
-pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> ThreadItem {
+pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> ThreadItemPayload {
     let aggregated_output = if payload.aggregated_output.is_empty() {
         None
     } else {
@@ -128,7 +128,7 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
     let presentation =
         CommandExecutionPresentation::from_raw(&payload.command, &payload.parsed_cmd, &payload.cwd);
 
-    ThreadItem::CommandExecution {
+    ThreadItemPayload::CommandExecution {
         model_context: None,
         sandbox_type: None,
         id: payload.call_id.clone(),
@@ -191,13 +191,13 @@ fn command_actions_for_path_uri(parsed_cmd: &[ParsedCommand], cwd: &PathUri) -> 
 
 /// Build a guardian-derived [`ThreadItem`].
 ///
-/// Currently this only synthesizes [`ThreadItem::CommandExecution`] for
+/// Currently this only synthesizes [`ThreadItemPayload::CommandExecution`] for
 /// [`GuardianAssessmentAction::Command`] and [`GuardianAssessmentAction::Execve`].
 /// Stdin reviews are child approvals and must not change the parent item lifecycle.
 pub fn build_item_from_guardian_event(
     assessment: &GuardianAssessmentEvent,
     status: CommandExecutionStatus,
-) -> Option<ThreadItem> {
+) -> Option<ThreadItemPayload> {
     match &assessment.action {
         GuardianAssessmentAction::Command { command, cwd, .. } => {
             let id = assessment.target_item_id.as_ref()?;
@@ -205,7 +205,7 @@ pub fn build_item_from_guardian_event(
             let command_actions = vec![CommandAction::Unknown {
                 command: command.clone(),
             }];
-            Some(ThreadItem::CommandExecution {
+            Some(ThreadItemPayload::CommandExecution {
                 id: id.clone(),
                 model_context: assessment.model_context.clone(),
                 sandbox_type: None,
@@ -245,7 +245,7 @@ pub fn build_item_from_guardian_event(
                     .map(|parsed| CommandAction::from_core_with_cwd(parsed, cwd))
                     .collect()
             };
-            Some(ThreadItem::CommandExecution {
+            Some(ThreadItemPayload::CommandExecution {
                 id: id.clone(),
                 model_context: assessment.model_context.clone(),
                 sandbox_type: None,

@@ -4,7 +4,7 @@ use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::turn_diff_tracker::TurnDiffTracker;
-use crate::unified_exec::format_output_omission_marker;
+use crate::unified_exec::output::CapturedStream;
 use crate::unified_exec::resolve_max_tokens;
 use codex_protocol::ResponseItemId;
 use codex_protocol::mcp::CallToolResult;
@@ -19,14 +19,11 @@ use codex_tools::ToolName;
 use codex_tools::ToolOutputTokenUsage;
 use codex_utils_audio::estimate_audio_token_count;
 use codex_utils_output_truncation::TruncationPolicy;
-use codex_utils_output_truncation::approx_token_count;
-use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_output_truncation::truncate_function_output_payload;
-use codex_utils_output_truncation::truncate_text;
 use codex_utils_output_truncation::with_serialization_allowance;
+use codex_utils_path_uri::PathUri;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
@@ -52,6 +49,7 @@ pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 pub(crate) struct ToolCallState {
     pub(crate) terminal_outcome_reached: AtomicBool,
     pub(crate) delivered_assistant_message: OnceLock<String>,
+    pub(crate) invocation: crate::agent::host::InvocationReservation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -426,17 +424,18 @@ pub struct ExecCommandToolOutput {
     pub event_call_id: String,
     pub chunk_id: String,
     pub wall_time: Duration,
-    /// Raw bytes returned for this unified exec call before any truncation.
-    pub raw_output: Vec<u8>,
+    /// Output retained by collection, before model-facing truncation.
+    pub(crate) raw_output: CapturedStream,
     pub compaction: Option<ExecOutputCompaction>,
     pub truncation_policy: TruncationPolicy,
     pub max_output_tokens: Option<usize>,
     pub process_id: Option<i32>,
     pub exit_code: Option<i32>,
     pub original_token_count: Option<usize>,
-    /// Bytes omitted by the output collection cap before model-facing truncation.
-    pub output_omitted_bytes: Option<NonZeroUsize>,
     pub hook_command: Option<String>,
+    /// Local execution cwd retained for PostToolUse, independent of the collecting
+    /// turn. Remote commands leave this unset to retain the host hook cwd.
+    pub tool_cwd: Option<PathUri>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -449,13 +448,9 @@ pub struct ExecOutputCompaction {
 impl ToolOutput for ExecCommandToolOutput {
     fn log_output(&self) -> String {
         // The telemetry budget must not inherit the model's output-token limit.
-        let mut output = String::from_utf8_lossy(&self.raw_output).into_owned();
-        if let Some(omitted_bytes) = self.output_omitted_bytes {
-            let marker = format_output_omission_marker(omitted_bytes.get());
-            if !output.contains(&marker) {
-                output = format!("{marker}\n{output}");
-            }
-        }
+        let output = self
+            .raw_output
+            .render(/*policy*/ None, self.original_token_count);
         format!("{}\n{output}", self.response_header())
     }
 
@@ -496,6 +491,10 @@ impl ToolOutput for ExecCommandToolOutput {
         self.hook_command
             .as_ref()
             .map(|command| serde_json::json!({ "command": command }))
+    }
+
+    fn post_tool_use_cwd(&self) -> Option<PathUri> {
+        self.tool_cwd.clone()
     }
 
     fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
@@ -563,32 +562,11 @@ impl ExecCommandToolOutput {
     }
 
     fn truncated_output_with_policy(&self, policy: TruncationPolicy) -> String {
-        let text = self.model_output_text();
-        let Some(omitted_bytes) = self.output_omitted_bytes else {
-            return formatted_truncate_text(&text, policy);
-        };
-
-        let marker = format_output_omission_marker(omitted_bytes.get());
-        if text.len() <= policy.byte_budget() {
-            return if text.contains(&marker) {
-                text
-            } else {
-                format!("{marker}\n{text}")
-            };
+        CapturedStream {
+            text: self.model_output_text(),
+            omitted_bytes: self.raw_output.omitted_bytes,
         }
-
-        let original_token_count = self
-            .original_token_count
-            .unwrap_or_else(|| approx_token_count(&text));
-        let truncated = truncate_text(&text, policy);
-        let omission_notice = if truncated.contains(&marker) {
-            String::new()
-        } else {
-            format!("{marker}\n")
-        };
-        format!(
-            "Warning: truncated output (original token count: {original_token_count})\n{omission_notice}\n{truncated}"
-        )
+        .render(Some(policy), self.original_token_count)
     }
 
     fn output_for_model(&self, max_output_tokens: Option<usize>) -> String {
@@ -600,7 +578,7 @@ impl ExecCommandToolOutput {
 
     fn model_output_text(&self) -> String {
         self.compaction.as_ref().map_or_else(
-            || String::from_utf8_lossy(&self.raw_output).to_string(),
+            || self.raw_output.text.clone(),
             |compaction| compaction.compacted_output.clone(),
         )
     }

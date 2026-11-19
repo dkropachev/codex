@@ -26,7 +26,7 @@ use codex_app_server_protocol::ThreadCompactStartSource;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -440,10 +440,10 @@ async fn auto_compaction_emits_started_and_completed_items(route: CompactionRout
     let started = wait_for_context_compaction_started(&mut mcp).await?;
     let completed = wait_for_context_compaction_completed(&mut mcp).await?;
 
-    let ThreadItem::ContextCompaction { id: started_id } = started.item else {
+    let ThreadItemPayload::ContextCompaction { id: started_id } = started.item.payload else {
         unreachable!("started item should be context compaction");
     };
-    let ThreadItem::ContextCompaction { id: completed_id } = completed.item else {
+    let ThreadItemPayload::ContextCompaction { id: completed_id } = completed.item.payload else {
         unreachable!("completed item should be context compaction");
     };
 
@@ -569,10 +569,10 @@ async fn thread_compact_start_triggers_compaction_and_returns_exact_turn_id(
     let completed = wait_for_context_compaction_completed(&mut mcp).await?;
     wait_for_turn_completed(&mut mcp, &started.turn_id).await?;
 
-    let ThreadItem::ContextCompaction { id: started_id } = started.item else {
+    let ThreadItemPayload::ContextCompaction { id: started_id } = started.item.payload else {
         unreachable!("started item should be context compaction");
     };
-    let ThreadItem::ContextCompaction { id: completed_id } = completed.item else {
+    let ThreadItemPayload::ContextCompaction { id: completed_id } = completed.item.payload else {
         unreachable!("completed item should be context compaction");
     };
 
@@ -916,7 +916,7 @@ async fn wait_for_context_compaction_started(
     loop {
         let started: ItemStartedNotification =
             timeout(DEFAULT_READ_TIMEOUT, mcp.read_notification("item/started")).await??;
-        if let ThreadItem::ContextCompaction { .. } = started.item {
+        if let ThreadItemPayload::ContextCompaction { .. } = started.item.payload {
             return Ok(started);
         }
     }
@@ -931,7 +931,7 @@ async fn wait_for_context_compaction_completed(
             mcp.read_notification("item/completed"),
         )
         .await??;
-        if let ThreadItem::ContextCompaction { .. } = completed.item {
+        if let ThreadItemPayload::ContextCompaction { .. } = completed.item.payload {
             return Ok(completed);
         }
     }

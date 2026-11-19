@@ -534,6 +534,13 @@ def _normalized_schema_bundle_text(schema_dir: Path) -> str:
         response = definitions.get("ThreadCompactStartResponse")
         if isinstance(response, dict) and isinstance(response.get("required"), list):
             response["required"] = [field for field in response["required"] if field != "turnId"]
+        # Pydantic represents the tagged item union as its existing nominal variant classes.
+        # Give each variant the shared fields so live and persisted items parse identically.
+        thread_item = definitions.get("ThreadItem", {})
+        timing = thread_item.pop("properties", {})
+        for variant in thread_item.get("oneOf", []):
+            variant["properties"].update(timing)
+
         # Older SDKs accept omission for these nullable project and section IDs.
         for model, field in (
             ("Thread", "projectId"),
@@ -545,6 +552,9 @@ def _normalized_schema_bundle_text(schema_dir: Path) -> str:
                 required.remove(field)
         for name, definition in definitions.items():
             if isinstance(definition, dict):
+                if name == "ReviewDelivery":
+                    # Preserve ReviewDelivery.inline when only one delivery mode remains.
+                    definition["x-enum-field-as-literal"] = False
                 if name == "CodexErrorInfo":
                     _normalize_open_ended_enum(definition)
                 _flatten_string_enum_one_of(definition)

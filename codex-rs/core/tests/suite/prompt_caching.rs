@@ -160,6 +160,7 @@ async fn prompt_tools_are_consistent_across_requests(
             models: vec![model],
         },
         codex_models_manager::collaboration_mode_presets::CollaborationModesConfig::default(),
+        codex_models_manager::ModelOrigin::ExplicitConfig,
     ));
 
     let server = start_mock_server().await;

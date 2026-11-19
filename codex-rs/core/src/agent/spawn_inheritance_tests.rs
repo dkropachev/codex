@@ -169,7 +169,10 @@ async fn fresh_child_inherits_tools_when_reservation_evicts_idle_parent() {
         terminal_or_tool_event(&parent).await,
         EventMsg::TurnComplete(_)
     );
-    assert_eq!(parent.session.dynamic_tools().await, tools);
+    assert_eq!(
+        parent.session.dynamic_tools().await.as_ref(),
+        tools.as_slice()
+    );
     assert_matches!(parent.agent_status().await, AgentStatus::Completed(_));
     let worker = spawn_fresh(
         &harness,
@@ -215,7 +218,10 @@ async fn fresh_child_inherits_tools_when_reservation_evicts_idle_parent() {
     );
     assert!(worker.session.active_turn.lock().await.is_some());
     assert_eq!(worker.agent_status().await, AgentStatus::Running);
-    assert_eq!(child.session.dynamic_tools().await, tools);
+    assert_eq!(
+        child.session.dynamic_tools().await.as_ref(),
+        tools.as_slice()
+    );
     child.ensure_rollout_materialized().await;
     child
         .flush_rollout()

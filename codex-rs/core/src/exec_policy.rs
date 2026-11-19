@@ -272,6 +272,7 @@ pub enum ExecPolicyUpdateError {
     AddRule { source: ExecPolicyRuleError },
 }
 
+// Rust 1.99's Clippy autofix misreads thiserror's named-field `#[from]` expansion.
 impl From<ExecPolicyRuleError> for ExecPolicyUpdateError {
     fn from(source: ExecPolicyRuleError) -> Self {
         Self::AddRule { source }

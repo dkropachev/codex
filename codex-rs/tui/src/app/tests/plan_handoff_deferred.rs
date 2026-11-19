@@ -408,7 +408,7 @@ async fn deferred_plan_survives_thread_navigation_and_replay() -> Result<()> {
         .set_turns(vec![test_turn(
             "planning-turn",
             TurnStatus::Completed,
-            vec![ThreadItem::Plan {
+            vec![ThreadItemPayload::Plan {
                 id: "plan-1".to_string(),
                 text: "- Finish the focused work".to_string(),
             }],

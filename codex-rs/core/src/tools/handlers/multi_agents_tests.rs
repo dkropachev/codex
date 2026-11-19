@@ -578,6 +578,7 @@ async fn spawn_agent_service_tier_inheritance_uses_root_preference_and_child_mod
             /*auth_manager*/ None,
             service_tier_test_catalog(),
             codex_models_manager::collaboration_mode_presets::CollaborationModesConfig::default(),
+            codex_models_manager::ModelOrigin::ExplicitConfig,
         ));
         session.thread_id = root.thread_id;
 
@@ -632,6 +633,7 @@ async fn spawn_agent_service_tier_inheritance_uses_root_preference_and_child_mod
             /*auth_manager*/ None,
             service_tier_test_catalog(),
             codex_models_manager::collaboration_mode_presets::CollaborationModesConfig::default(),
+            codex_models_manager::ModelOrigin::ExplicitConfig,
         ));
         session.thread_id = root.thread_id;
 

@@ -60,10 +60,10 @@ async fn prepare_handoff_plan_on_server(
             thread_id: source_thread_id.to_string(),
             turn_id: "planning-turn".to_string(),
             completed_at_ms: 0,
-            item: ThreadItem::Plan {
+            item: ThreadItem::untimed(ThreadItemPayload::Plan {
                 id: "plan-1".to_string(),
                 text: "- Finish the focused work".to_string(),
-            },
+            }),
         }),
         /*replay_kind*/ None,
     );
@@ -123,10 +123,10 @@ async fn accepted_steer_notification_invalidates_earlier_handoff_plan() -> Resul
             thread_id: source_thread_id.to_string(),
             turn_id: "planning-turn".to_string(),
             completed_at_ms: 0,
-            item: ThreadItem::Plan {
+            item: ThreadItem::untimed(ThreadItemPayload::Plan {
                 id: "plan-before-steer".to_string(),
                 text: "- Stale plan".to_string(),
-            },
+            }),
         }),
         /*replay_kind*/ None,
     );
@@ -135,14 +135,14 @@ async fn accepted_steer_notification_invalidates_earlier_handoff_plan() -> Resul
             thread_id: source_thread_id.to_string(),
             turn_id: "planning-turn".to_string(),
             completed_at_ms: 0,
-            item: ThreadItem::UserMessage {
+            item: ThreadItem::untimed(ThreadItemPayload::UserMessage {
                 id: "accepted-steer".to_string(),
                 client_id: None,
                 content: vec![codex_app_server_protocol::UserInput::Text {
                     text: "Revise this first".to_string(),
                     text_elements: Vec::new(),
                 }],
-            },
+            }),
         }),
         /*replay_kind*/ None,
     );

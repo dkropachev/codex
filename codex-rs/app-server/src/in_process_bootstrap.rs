@@ -126,11 +126,7 @@ pub(super) async fn configure(
     )
     .await
     .map_err(IoError::other)?;
-    config_manager.replace_cloud_config_bundle_loader(
-        bootstrap_auth_manager,
-        bootstrap_config.chatgpt_base_url.clone(),
-        bootstrap_config.http_client_factory(),
-    );
+    config_manager.update_managed_config_loader(bootstrap_auth_manager, &bootstrap_config);
     let policy_config = config_manager
         .load_startup_config(Some(config.cwd.to_path_buf()))
         .await?
@@ -156,6 +152,7 @@ pub(super) async fn configure(
     .map_err(IoError::other)?;
     let config = Arc::make_mut(config);
     config.chatgpt_base_url = policy_config.chatgpt_base_url;
+    config.chatgpt_base_url_is_explicit = policy_config.chatgpt_base_url_is_explicit;
     config.enforce_residency = policy_config.enforce_residency;
     config.application_network_policy = policy_config.application_network_policy;
     config.application_auth_route_config = policy_config.application_auth_route_config;
@@ -176,11 +173,7 @@ pub(super) async fn configure(
     } else {
         policy_auth_manager.clone()
     };
-    config_manager.replace_cloud_config_bundle_loader(
-        policy_auth_manager,
-        config.chatgpt_base_url.clone(),
-        config.http_client_factory(),
-    );
+    config_manager.update_managed_config_loader(policy_auth_manager, config);
     codex_login::default_client::set_default_client_residency_requirement(
         config.enforce_residency.value(),
     );

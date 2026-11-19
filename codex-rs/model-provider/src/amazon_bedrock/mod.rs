@@ -462,11 +462,17 @@ impl ModelProvider for AmazonBedrockModelProvider {
         config_model_catalog: Option<ModelsResponse>,
         collaboration_modes_config: CollaborationModesConfig,
     ) -> SharedModelsManager {
+        let origin = if config_model_catalog.is_some() {
+            codex_models_manager::ModelOrigin::ExplicitConfig
+        } else {
+            codex_models_manager::ModelOrigin::Provider
+        };
         Arc::new(StaticModelsManager::new(
             /*auth_manager*/ None,
             config_model_catalog
                 .map_or_else(|| self.default_model_catalog(), normalize_bedrock_catalog),
             collaboration_modes_config,
+            origin,
         ))
     }
 
@@ -474,12 +480,11 @@ impl ModelProvider for AmazonBedrockModelProvider {
         &self,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
-        Arc::new(StaticModelsManager::new(
-            /*auth_manager*/ None,
-            config_model_catalog
-                .map_or_else(|| self.default_model_catalog(), normalize_bedrock_catalog),
+        self.models_manager(
+            PathBuf::new(),
+            config_model_catalog,
             CollaborationModesConfig::default(),
-        ))
+        )
     }
 }
 
