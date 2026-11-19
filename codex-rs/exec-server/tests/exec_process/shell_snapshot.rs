@@ -130,7 +130,9 @@ async fn shell_snapshot_concurrent_replays_keep_independent_readers(
             _server: None,
         }
     } else {
-        create_process_context(deny_fd_path).await?
+        create_process_context(deny_fd_path)
+            .await
+            .context("create snapshot replay backend")?
     };
     let home = TempDir::new()?;
     let cwd = PathUri::from_host_native_path(home.path())?;
@@ -243,13 +245,17 @@ async fn shell_snapshot_concurrent_replays_keep_independent_readers(
                     managed_network: None,
                     network_proxy: None,
                 })
-                .await?;
+                .await
+                .with_context(|| format!("start snapshot replay {index}"))?;
             started
                 .process
                 .write(format!("input-{index}\n").into_bytes())
-                .await?;
+                .await
+                .with_context(|| format!("write input for snapshot replay {index}"))?;
             let (output, errors, status, closed) =
-                collect_process_output_from_events(started.process).await?;
+                collect_process_output_from_events(started.process)
+                    .await
+                    .with_context(|| format!("collect output for snapshot replay {index}"))?;
             assert!(
                 output.ends_with(&format!("restored:input-{index}")),
                 "{output:?}"

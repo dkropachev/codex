@@ -26,6 +26,7 @@ use codex_login::CodexAuth;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashSet;
@@ -698,6 +699,14 @@ async fn discovery_warns_once_per_invalid_manifest() {
     let logs = String::from_utf8(buffer.lock().expect("buffer lock").clone())
         .expect("utf8 logs")
         .replace('\\', "/");
+    let fixture_root = PathUri::from_host_native_path(&curated_root)
+        .expect("fixture root URI")
+        .to_string();
+    let logs = logs
+        .lines()
+        .filter(|line| line.contains(&fixture_root))
+        .collect::<Vec<_>>()
+        .join("\n");
     assert_eq!(logs.matches("ignoring interface.defaultPrompt").count(), 2);
     assert_eq!(logs.matches("gmail/.codex-plugin/plugin.json").count(), 1);
     assert_eq!(

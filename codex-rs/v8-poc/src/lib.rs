@@ -71,8 +71,11 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_feature_matches_linked_v8() {
-        assert_eq!(super::linked_v8_has_sandbox(), cfg!(feature = "sandbox"));
+    #[cfg(feature = "sandbox")]
+    fn sandbox_feature_enables_linked_v8_sandbox() {
+        // Other workspace crates can also enable V8's sandbox through Cargo's
+        // feature unification, so an absent local feature cannot disable it.
+        assert!(super::linked_v8_has_sandbox());
     }
 
     #[test]
@@ -153,8 +156,10 @@ mod tests {
             let expression = format!("new Uint8Array({length}).fill(90)");
             let value = evaluate_script(scope, &expression);
             let view = v8::Local::<v8::ArrayBufferView>::try_from(value).unwrap();
-            let on_heap =
-                v8::TYPED_ARRAY_MAX_SIZE_IN_HEAP != 0 && length <= v8::TYPED_ARRAY_MAX_SIZE_IN_HEAP;
+            let on_heap = match v8::TYPED_ARRAY_MAX_SIZE_IN_HEAP {
+                0 => false,
+                inline_limit => length <= inline_limit,
+            };
             // Check native placement before asking C++ to copy into storage:
             // stale size-zero bindings must fail here rather than abort in FFI.
             assert_eq!(view.has_buffer(), !on_heap, "byte length {length}");
