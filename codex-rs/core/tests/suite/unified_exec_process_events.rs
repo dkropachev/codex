@@ -422,6 +422,7 @@ async fn serve_exec_with_pushed_events(
             _ => b"x",
         }
     };
+    let replay_stream = |seq| if seq == 1 { "stderr" } else { "stdout" };
     if matches!(scenario, PushedExecScenario::ReplayGap) {
         // The process replay log retains 256 events. This burst is much larger
         // than both that log and the JSON-RPC event queue, so the reader must
@@ -437,7 +438,7 @@ async fn serve_exec_with_pushed_events(
                     "params": {
                         "processId": &process_id,
                         "seq": seq,
-                        "stream": "stdout",
+                        "stream": replay_stream(seq),
                         "chunk": BASE64_STANDARD.encode(replay_output(seq)),
                     }
                 }),
@@ -801,7 +802,7 @@ async fn serve_exec_with_pushed_events(
                             .map(|seq| {
                                 json!({
                                     "seq": seq,
-                                    "stream": "stdout",
+                                    "stream": replay_stream(seq),
                                     "chunk": BASE64_STANDARD.encode(replay_output(seq)),
                                 })
                             })

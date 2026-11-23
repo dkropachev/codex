@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadHistoryBuilder;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
 use codex_app_server_protocol::Turn;
@@ -42,6 +42,9 @@ pub(super) async fn send_thread_token_usage_update_to_connection(
     conversation: &CodexThread,
     attribution: RestoredTokenUsageAttribution,
 ) {
+    if attribution.turn_id.is_empty() {
+        return;
+    }
     let Some(info) = conversation.token_usage_info().await else {
         return;
     };
@@ -92,8 +95,8 @@ fn latest_usage_after_completed_compaction(
         .iter()
         .rev()
         .flat_map(|turn| turn.items.iter().rev())
-        .find_map(|item| match item {
-            ThreadItem::ContextCompaction { id } => Some(id),
+        .find_map(|item| match &item.payload {
+            ThreadItemPayload::ContextCompaction { id } => Some(id),
             _ => None,
         })?;
     if latest_completed.is_some_and(|completed_id| completed_id != last_item_id) {

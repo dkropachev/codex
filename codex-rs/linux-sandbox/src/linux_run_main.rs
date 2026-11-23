@@ -271,8 +271,14 @@ pub fn run_main() -> ! {
         } else {
             (None, Vec::new())
         };
+        // A fresh procfs mount would reopen an explicitly denied /proc after
+        // the filesystem masks have been applied. Preserve that denial instead.
+        let proc_is_denied = file_system_sandbox_policy
+            .get_unreadable_roots_with_cwd(&sandbox_policy_cwd)
+            .iter()
+            .any(|root| Path::new("/proc").starts_with(root.as_path()));
         let options = BwrapOptions {
-            mount_proc: !no_proc && !inherit_pid_namespace,
+            mount_proc: !no_proc && !inherit_pid_namespace && !proc_is_denied,
             inherit_pid_namespace,
             network_mode: bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy),
             mask_wsl_interop: !file_system_sandbox_policy.has_full_disk_write_access()

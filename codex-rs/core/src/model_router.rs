@@ -2975,12 +2975,16 @@ mod tests {
             /*auth_manager*/ None,
             ModelsResponse { models: Vec::new() },
             codex_models_manager::collaboration_mode_presets::CollaborationModesConfig::default(),
+            codex_models_manager::ModelOrigin::ExplicitConfig,
         ))
     }
 
     fn custom_provider_for_base_url(base_url: String) -> ModelProviderInfo {
         ModelProviderInfo {
             name: "DeepSeek".to_string(),
+            project_id: None,
+            location: None,
+            credential_file: None,
             base_url: Some(base_url),
             model_catalog_url: None,
             env_key: None,

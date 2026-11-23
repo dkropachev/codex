@@ -107,6 +107,9 @@ pub(super) fn parse_failed_response(
                 .message
                 .unwrap_or_else(|| "Invalid request.".to_string()),
         },
+        Some("policy_capacity_unavailable") => ApiError::PolicyCapacityUnavailable {
+            retry_after: retry_after_header,
+        },
         Some("server_is_overloaded") => ApiError::ServerOverloaded {
             retry_after: retry_after_header,
         },

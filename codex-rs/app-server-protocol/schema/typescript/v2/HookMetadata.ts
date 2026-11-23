@@ -12,4 +12,8 @@ export type HookMetadata = { key: string, eventName: HookEventName, handlerType:
  * Configured `additionalContext` spill threshold.
  * `null` uses 2,500 tokens; `0` disables spilling.
  */
-additionalContextLimit: number | null, sourcePath: AbsolutePathBuf, source: HookSource, pluginId: string | null, displayOrder: bigint, enabled: boolean, isManaged: boolean, currentHash: string, trustStatus: HookTrustStatus, };
+additionalContextLimit: number | null, sourcePath: AbsolutePathBuf, source: HookSource, pluginId: string | null,
+/**
+ * The owning execution environment, if this hook came from its requirements.
+ */
+environmentId: string | null, displayOrder: bigint, enabled: boolean, isManaged: boolean, currentHash: string, trustStatus: HookTrustStatus, };

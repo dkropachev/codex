@@ -1,0 +1,67 @@
+---
+source: core/tests/suite/scenarios_reserved_spawn.rs
+assertion_line: 515
+expression: history
+---
+Scenario: A prepares a child. After A and its manager shut down, a second manager creates the idle child and then starts its first turn.
+
+## Window 1
+-- request 1 (turn) --
+00:additional_tools/developer (2; hash=68f569d02c33c4d1):
+        - namespace/functions; hash=207454039aa29771
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
+    <MODEL_INSTRUCTIONS>
+04:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+05:message/developer:
+    <MULTI_AGENT_ROLE>
+06:message/developer:
+    <MULTI_AGENT_MODE>
+07:message/user:
+    <ENVIRONMENT_CONTEXT>
+08:message/user:
+    Remember PRIOR_CONTEXT_5241.
+09:configuration_update:reasoning={"effort":"low"}
+-- request 2 (turn) --
+10:message/user:
+    Remember TRANSFERRED_CONTEXT_7391 and ask the host to start a worker.
+
+## Window 2 (after request 2: input diverged at item 00)
+-- request 3 (turn) --
+00:additional_tools/developer (2; hash=b28fac7e8d2c9c74):
+        - namespace/functions; hash=f7fa5c182c343f56
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
+    <MODEL_INSTRUCTIONS>
+04:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+05:message/developer:
+    <MULTI_AGENT_ROLE>
+06:message/developer:
+    <MULTI_AGENT_MODE>
+07:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT>
+08:message/user:
+    Report TRANSFERRED_TASK_8812 and the remembered context.
+09:configuration_update:reasoning={"effort":"low"}

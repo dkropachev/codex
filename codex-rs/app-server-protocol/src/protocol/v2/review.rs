@@ -1,15 +1,16 @@
 use super::Turn;
-use super::shared::v2_enum_from_core;
 use crate::JsonSchema;
 use crate::TS;
 use serde::Deserialize;
 use serde::Serialize;
 
-v2_enum_from_core!(
-    pub enum ReviewDelivery from codex_protocol::protocol::ReviewDelivery {
-        Inline, Detached
-    }
-);
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ReviewDelivery {
+    Inline,
+    Detached,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -30,10 +31,7 @@ pub struct ReviewStartParams {
 #[ts(export_to = "v2/")]
 pub struct ReviewStartResponse {
     pub turn: Turn,
-    /// Identifies the thread where the review runs.
-    ///
-    /// For inline reviews, this is the original thread id.
-    /// For detached reviews, this is the id of the new review thread.
+    /// The thread where the review runs; detached reviews return a new thread id.
     pub review_thread_id: String,
 }
 

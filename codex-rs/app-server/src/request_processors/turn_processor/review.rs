@@ -48,6 +48,10 @@ impl TurnRequestProcessor {
         let (parent_thread_id, thread) = self.load_thread(&thread_id).await?;
         self.ensure_direct_input_allowed(request_id, thread.as_ref())
             .await?;
+        self.config_manager
+            .check_thread_model_provider_for_input(thread.config().await.as_ref())
+            .await
+            .map_err(|error| config_load_error(&error))?;
         let target = match target {
             ReviewTarget::UncommittedChanges => CoreReviewTarget::UncommittedChanges,
             ReviewTarget::BaseBranch { branch } => CoreReviewTarget::BaseBranch { branch },
@@ -96,14 +100,14 @@ impl TurnRequestProcessor {
         let turn = Turn {
             id: turn_id.clone(),
             root_turn_id: None,
-            items: vec![ThreadItem::UserMessage {
+            items: vec![ThreadItem::untimed(ThreadItemPayload::UserMessage {
                 id: turn_id,
                 client_id: None,
                 content: vec![V2UserInput::Text {
                     text: display_text,
                     text_elements: Vec::new(),
                 }],
-            }],
+            })],
             items_view: TurnItemsView::NotLoaded,
             error: None,
             status: TurnStatus::InProgress,
@@ -197,14 +201,14 @@ impl TurnRequestProcessor {
         let turn = Turn {
             id: turn_id.clone(),
             root_turn_id: None,
-            items: vec![ThreadItem::UserMessage {
+            items: vec![ThreadItem::untimed(ThreadItemPayload::UserMessage {
                 id: turn_id,
                 client_id: None,
                 content: vec![V2UserInput::Text {
                     text: prompt.to_string(),
                     text_elements: Vec::new(),
                 }],
-            }],
+            })],
             items_view: TurnItemsView::NotLoaded,
             error: None,
             status: TurnStatus::InProgress,

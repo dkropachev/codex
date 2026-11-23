@@ -130,21 +130,39 @@ async fn shell_snapshot_concurrent_replays_keep_independent_readers(
             _server: None,
         }
     } else {
-        create_process_context(deny_fd_path).await?
+        create_process_context(deny_fd_path)
+            .await
+            .context("create snapshot replay backend")?
     };
     let home = TempDir::new()?;
     let cwd = PathUri::from_host_native_path(home.path())?;
+    let command_path = if deny_fd_path && cfg!(target_os = "linux") {
+        // Some distributions use Rust coreutils that require /proc/self/exe.
+        // Use their GNU alternatives when installed so the fixture can deny
+        // procfs while still capturing state with real command-line utilities.
+        let bin = home.path().join("bin");
+        std::fs::create_dir(&bin)?;
+        for command in ["env", "wc", "tr"] {
+            let gnu_command = std::path::Path::new("/usr/bin").join(format!("gnu{command}"));
+            if gnu_command.is_file() {
+                std::os::unix::fs::symlink(gnu_command, bin.join(command))?;
+            }
+        }
+        format!("{}:/usr/bin:/bin", bin.display())
+    } else {
+        "/usr/bin:/bin".to_string()
+    };
     // Keep full-size state in a function, below the 512 KiB state + environment cap.
     // The blocked-path case still exercises the smaller environment fallback.
     let payload_len = if deny_fd_path { 1 } else { 480 * 1024 };
     let payload = "x".repeat(payload_len);
     let source = if shell == "bash" {
-        "${BASH_SOURCE[0]}"
+        "${BASH_SOURCE[0]-}"
     } else {
         "${(%):-%x}"
     };
     let source_check = if deny_fd_path {
-        String::new()
+        format!("case \"{source}\" in /dev/fd/*) return 42 ;; esac; ")
     } else {
         format!("case \"{source}\" in /dev/fd/*) ;; *) return 42 ;; esac; ")
     };
@@ -182,8 +200,16 @@ async fn shell_snapshot_concurrent_replays_keep_independent_readers(
             FileSystemAccessMode::Write,
         ));
         if deny_fd_path {
+            // Linux's /dev/fd is a dynamic procfs symlink that bubblewrap
+            // cannot mask directly. Deny procfs to block descriptor sources
+            // for the shell and its children while retaining ordinary devices.
+            let descriptor_path = if cfg!(target_os = "linux") {
+                "/proc"
+            } else {
+                "/dev/fd"
+            };
             policy.entries.push(FileSystemSandboxEntry::new(
-                PathUri::from_host_native_path("/dev/fd")?.into(),
+                PathUri::from_host_native_path(descriptor_path)?.into(),
                 FileSystemAccessMode::Deny,
             ));
         } else {
@@ -205,6 +231,7 @@ async fn shell_snapshot_concurrent_replays_keep_independent_readers(
         let home = home.path();
         let sandbox = sandbox.clone();
         let command = command.clone();
+        let command_path = &command_path;
         let protected_path = protected_file.path();
         async move {
             let started = backend
@@ -220,7 +247,7 @@ async fn shell_snapshot_concurrent_replays_keep_independent_readers(
                         exclude: Vec::new(),
                         r#set: HashMap::from([
                             ("HOME".to_string(), home.to_string_lossy().into_owned()),
-                            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+                            ("PATH".to_string(), command_path.clone()),
                             (
                                 "SNAPSHOT_TRANSPORT_PROBE".to_string(),
                                 protected_path.to_string_lossy().into_owned(),
@@ -243,16 +270,20 @@ async fn shell_snapshot_concurrent_replays_keep_independent_readers(
                     managed_network: None,
                     network_proxy: None,
                 })
-                .await?;
+                .await
+                .with_context(|| format!("start snapshot replay {index}"))?;
             started
                 .process
                 .write(format!("input-{index}\n").into_bytes())
-                .await?;
+                .await
+                .with_context(|| format!("write input for snapshot replay {index}"))?;
             let (output, errors, status, closed) =
-                collect_process_output_from_events(started.process).await?;
+                collect_process_output_from_events(started.process)
+                    .await
+                    .with_context(|| format!("collect output for snapshot replay {index}"))?;
             assert!(
                 output.ends_with(&format!("restored:input-{index}")),
-                "{output:?}"
+                "output={output:?}, stderr={errors:?}, status={status:?}, closed={closed}"
             );
             if shell == "zsh" {
                 assert!(

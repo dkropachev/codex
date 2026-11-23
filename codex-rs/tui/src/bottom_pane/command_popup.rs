@@ -324,6 +324,7 @@ impl CommandPopup {
                     is_disabled: is_disabled || unavailable,
                     disabled_reason: unavailable
                         .then(|| "not available in a side conversation".to_string()),
+                    ..Default::default()
                 }
             })
             .collect()

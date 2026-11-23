@@ -235,7 +235,7 @@ async fn skill_toggle_enables_disabled_skill_and_preserves_draft() -> Result<()>
         &mut output_rx,
         &mut screen,
         "skill toggle summary",
-        |contents| contents.contains("1 skills enabled, 0 skills disabled"),
+        |contents| contents.contains("Enabled 1 skill"),
     )
     .await?;
 

@@ -159,7 +159,7 @@ async fn unavailable_thread_new_and_clear_start_a_writable_session() -> Result<(
                     failure_reason: None,
                 }),
                 /*replay_kind*/ None,
-            )
+            );
         }
         app.chat_widget.pause_unavailable_thread();
         app.chat_widget

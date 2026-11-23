@@ -80,6 +80,9 @@ def _write_fake_codex_package(package_dir: Path, script) -> Path:
     (package_dir / "bin" / script.runtime_code_mode_host_name()).write_text("fake code mode host\n")
     (package_dir / "codex-resources" / "bwrap").write_text("fake bwrap\n")
     (package_dir / "codex-path" / "rg").write_text("fake rg\n")
+    for path in package_dir.rglob("*"):
+        if path.is_file():
+            path.chmod(0o644)
     return package_dir
 
 

@@ -32,7 +32,6 @@ use std::sync::Weak;
 
 use codex_features::Feature;
 use codex_network_proxy::NetworkProxy;
-use codex_protocol::models::AdditionalPermissionProfile;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::formatted_truncate_text;
@@ -43,19 +42,17 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
-use crate::session::turn_context::TurnEnvironment;
-use crate::shell::ShellInvocation;
+use crate::tools::handlers::unified_exec::preparation::PreparedExecCommand;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use codex_core_plugins::PluginMetricsSidecar;
 
 mod async_watcher;
 mod errors;
-mod head_tail_buffer;
 mod oneshot;
+pub(crate) mod output;
 mod process;
 mod process_manager;
 pub(crate) use process_manager::exec_env_policy_from_shell_policy;
@@ -117,22 +114,9 @@ impl UnifiedExecContext {
 
 #[derive(Debug)]
 pub(crate) struct ExecCommandRequest {
-    pub command: Vec<String>,
-    pub shell: ShellInvocation,
-    pub hook_command: String,
+    pub prepared: PreparedExecCommand,
     pub process_id: i32,
-    pub yield_time_ms: u64,
-    pub max_output_tokens: Option<usize>,
-    pub cwd: PathUri,
-    pub sandbox_cwd: PathUri,
-    pub turn_environment: TurnEnvironment,
     pub network: Option<NetworkProxy>,
-    pub tty: bool,
-    pub sandbox_permissions: SandboxPermissions,
-    pub additional_permissions: Option<AdditionalPermissionProfile>,
-    pub additional_permissions_preapproved: bool,
-    pub justification: Option<String>,
-    pub prefix_rule: Option<Vec<String>>,
 }
 
 /// The process and environment behind a terminal session ID at the time of lookup.
@@ -251,10 +235,6 @@ pub(crate) fn clamp_yield_time(yield_time_ms: u64) -> u64 {
 
 pub(crate) fn resolve_max_tokens(max_tokens: Option<usize>) -> usize {
     max_tokens.unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
-}
-
-pub(crate) fn format_output_omission_marker(omitted_bytes: usize) -> String {
-    format!("... {omitted_bytes} bytes omitted ...")
 }
 
 pub(crate) fn generate_chunk_id() -> String {

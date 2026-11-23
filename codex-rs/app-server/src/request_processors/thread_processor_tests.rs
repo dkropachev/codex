@@ -39,36 +39,49 @@ fn storage_failure_classification_does_not_change_mutation_error_policy() {
     );
 }
 
-mod retired_review_item_tests {
+mod review_item_tests {
     use super::super::stored_thread_item_to_entry;
+    use codex_app_server_protocol::ThreadItem;
+    use codex_app_server_protocol::ThreadItemEntry;
+    use codex_app_server_protocol::ThreadItemPayload;
     use codex_thread_store::StoredThreadItem;
+    use pretty_assertions::assert_eq;
 
     #[test]
-    fn skips_retired_review_items_from_paginated_history() {
-        for item_type in [
-            "enteredReviewMode",
-            "exitedReviewMode",
-            "EnteredReviewMode",
-            "ExitedReviewMode",
+    fn preserves_review_items_and_timestamps_in_paginated_history() {
+        for payload in [
+            ThreadItemPayload::EnteredReviewMode {
+                id: "entered-review".into(),
+                review: "Review requested.".into(),
+            },
+            ThreadItemPayload::ExitedReviewMode {
+                id: "exited-review".into(),
+                review: "No findings.".into(),
+                finding_count: 0,
+            },
         ] {
             let item = StoredThreadItem {
-                turn_id: "turn-1".to_string(),
-                item_id: format!("item-{item_type}"),
+                turn_id: "turn-1".into(),
+                item_id: "review-item".into(),
                 updated_at_ordinal: 1,
                 created_at_ms: 1,
-                started_at_ms: None,
-                completed_at_ms: None,
-                item_json: serde_json::to_vec(&serde_json::json!({
-                    "type": item_type,
-                    "id": format!("item-{item_type}"),
-                }))
-                .expect("serialize retired review item"),
+                started_at_ms: Some(2),
+                completed_at_ms: Some(3),
+                item_json: serde_json::to_vec(&payload).expect("serialize review item"),
             };
 
-            assert!(
-                stored_thread_item_to_entry(item)
-                    .expect("retired review item should be accepted")
-                    .is_none()
+            assert_eq!(
+                stored_thread_item_to_entry(item).expect("review item should be accepted"),
+                Some(ThreadItemEntry {
+                    turn_id: "turn-1".into(),
+                    item: ThreadItem {
+                        payload,
+                        started_at_ms: Some(2),
+                        completed_at_ms: Some(3),
+                    },
+                    started_at_ms: Some(2),
+                    completed_at_ms: Some(3),
+                })
             );
         }
     }
@@ -188,6 +201,7 @@ mod thread_processor_behavior_tests {
     use chrono::Utc;
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::ThreadItem;
+    use codex_app_server_protocol::ThreadItemPayload;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_config::CloudConfigBundleLoader;
     use codex_config::LoaderOverrides;
@@ -368,14 +382,14 @@ mod thread_processor_behavior_tests {
         let active_turn = Turn {
             id: "live-turn".to_string(),
             root_turn_id: None,
-            items: vec![ThreadItem::UserMessage {
+            items: vec![ThreadItem::untimed(ThreadItemPayload::UserMessage {
                 id: "live-user-message".to_string(),
                 client_id: None,
                 content: vec![V2UserInput::Text {
                     text: "live".to_string(),
                     text_elements: Vec::new(),
                 }],
-            }],
+            })],
             items_view: TurnItemsView::Full,
             error: None,
             status: TurnStatus::InProgress,
@@ -690,6 +704,9 @@ mod thread_processor_behavior_tests {
             supports_websockets: true,
             supports_standalone_web_search: false,
             capabilities: None,
+            project_id: None,
+            location: None,
+            credential_file: None,
             include_internal_metadata: false,
         };
         let config_manager = ConfigManager::new(
@@ -889,7 +906,10 @@ mod thread_processor_behavior_tests {
         );
 
         assert_eq!(typesafe_overrides.model, Some("gpt-5.2-codex".to_string()));
-        assert_eq!(typesafe_overrides.model_provider, None);
+        assert_eq!(
+            typesafe_overrides.model_provider,
+            Some("mock_provider".to_string())
+        );
         assert_eq!(
             request_overrides,
             Some(HashMap::from([(
@@ -901,8 +921,7 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
-    fn merge_persisted_resume_metadata_skips_persisted_values_when_model_overridden() -> Result<()>
-    {
+    fn merge_persisted_resume_metadata_preserves_provider_when_model_overridden() -> Result<()> {
         let mut request_overrides = Some(HashMap::from([(
             "model".to_string(),
             serde_json::Value::String("gpt-5.2-codex".to_string()),
@@ -918,7 +937,10 @@ mod thread_processor_behavior_tests {
         );
 
         assert_eq!(typesafe_overrides.model, None);
-        assert_eq!(typesafe_overrides.model_provider, None);
+        assert_eq!(
+            typesafe_overrides.model_provider,
+            Some("mock_provider".to_string())
+        );
         assert_eq!(
             request_overrides,
             Some(HashMap::from([(
@@ -953,7 +975,7 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
-    fn merge_persisted_resume_metadata_skips_persisted_values_when_reasoning_effort_overridden()
+    fn merge_persisted_resume_metadata_preserves_provider_when_reasoning_effort_overridden()
     -> Result<()> {
         let mut request_overrides = Some(HashMap::from([(
             "model_reasoning_effort".to_string(),
@@ -970,7 +992,10 @@ mod thread_processor_behavior_tests {
         );
 
         assert_eq!(typesafe_overrides.model, None);
-        assert_eq!(typesafe_overrides.model_provider, None);
+        assert_eq!(
+            typesafe_overrides.model_provider,
+            Some("mock_provider".to_string())
+        );
         assert_eq!(
             request_overrides,
             Some(HashMap::from([(
@@ -1267,12 +1292,12 @@ mod thread_processor_behavior_tests {
         manager
             .connection_initialized(connection, ConnectionCapabilities::default())
             .await;
-        manager
-            .try_ensure_connection_subscribed(
-                thread_id, connection, /*experimental_raw_events*/ false,
-            )
-            .await
-            .expect("connection should be live");
+        assert!(
+            manager
+                .try_add_connection_to_thread(thread_id, connection)
+                .await,
+            "connection should be live"
+        );
         {
             let state = manager.thread_state(thread_id).await;
             let mut state = state.lock().await;
@@ -1318,22 +1343,18 @@ mod thread_processor_behavior_tests {
         manager
             .connection_initialized(connection_b, ConnectionCapabilities::default())
             .await;
-        manager
-            .try_ensure_connection_subscribed(
-                thread_id,
-                connection_a,
-                /*experimental_raw_events*/ false,
-            )
-            .await
-            .expect("connection_a should be live");
-        manager
-            .try_ensure_connection_subscribed(
-                thread_id,
-                connection_b,
-                /*experimental_raw_events*/ false,
-            )
-            .await
-            .expect("connection_b should be live");
+        assert!(
+            manager
+                .try_add_connection_to_thread(thread_id, connection_a)
+                .await,
+            "connection_a should be live"
+        );
+        assert!(
+            manager
+                .try_add_connection_to_thread(thread_id, connection_b)
+                .await,
+            "connection_b should be live"
+        );
         {
             let state = manager.thread_state(thread_id).await;
             state.lock().await.cancel_tx = Some(cancel_tx);
@@ -1367,14 +1388,12 @@ mod thread_processor_behavior_tests {
         manager
             .connection_initialized(connection_b, ConnectionCapabilities::default())
             .await;
-        manager
-            .try_ensure_connection_subscribed(
-                thread_id,
-                connection_a,
-                /*experimental_raw_events*/ false,
-            )
-            .await
-            .expect("connection_a should be live");
+        assert!(
+            manager
+                .try_add_connection_to_thread(thread_id, connection_a)
+                .await,
+            "connection_a should be live"
+        );
         let mut has_connections = manager
             .subscribe_to_has_connections(thread_id)
             .await
@@ -1443,12 +1462,9 @@ mod thread_processor_behavior_tests {
         assert_eq!(threads_to_unload, Vec::<ThreadId>::new());
 
         assert!(
-            manager
-                .try_ensure_connection_subscribed(
-                    thread_id, connection, /*experimental_raw_events*/ false
-                )
+            !manager
+                .try_add_connection_to_thread(thread_id, connection)
                 .await
-                .is_none()
         );
         assert!(!manager.has_subscribers(thread_id).await);
         Ok(())

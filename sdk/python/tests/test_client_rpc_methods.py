@@ -25,6 +25,8 @@ from openai_codex.generated.v2_all import (
     PlanType,
     ReasoningEffort,
     ReasoningEffortOption,
+    ReviewDelivery,
+    ReviewStartParams,
     ThreadCompactStartResponse,
     ThreadForkParams,
     ThreadListParams,
@@ -57,6 +59,14 @@ class _ClosedProcess:
 
     def kill(self) -> None:
         pass
+
+
+def test_inline_review_delivery_round_trips_as_an_enum() -> None:
+    wire = {"threadId": "thread-1", "target": {"type": "uncommittedChanges"}, "delivery": "inline"}
+    params = ReviewStartParams.model_validate(wire)
+
+    assert params.delivery is ReviewDelivery.inline
+    assert params.model_dump(mode="json", by_alias=True) == wire
 
 
 @pytest.mark.parametrize(

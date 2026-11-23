@@ -32,6 +32,10 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
 
     session.multi_agent_version = std::sync::OnceLock::from(MultiAgentVersion::V2);
     let expected = CompactionResumeMetadata {
+        dynamic_tools: Some(Box::new(DynamicToolsSnapshot {
+            thread_id: session.thread_id(),
+            tools: Vec::new(),
+        })),
         multi_agent_version: Some(MultiAgentVersion::V2),
         last_started_turn_id: Some(turn_context.sub_id.clone()),
         turn_attribution: Some(codex_history::TurnAttribution {

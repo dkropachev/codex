@@ -2,6 +2,7 @@ mod access_token;
 mod account_pool;
 mod account_pool_selection;
 mod agent_identity;
+mod api_key;
 mod auth_headers;
 mod bedrock_access_keys;
 mod bedrock_api_key;
@@ -19,6 +20,7 @@ mod manager;
 mod revoke;
 
 pub use account_pool_selection::*;
+pub use api_key::is_fedramp_api_key;
 pub use auth_headers::AuthHeaders;
 pub use bedrock_access_keys::BedrockAccessKeysAuth;
 pub use bedrock_access_keys::login_with_bedrock_access_keys;
