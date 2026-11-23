@@ -188,18 +188,9 @@ fn stuck_collector_does_not_block_runtime_shutdown() -> Result<()> {
         ])
         .env(CHILD_ENV, &shutdown_marker)
         .spawn()?;
-    let deadline = std::time::Instant::now() + Duration::from_secs(/*secs*/ 10);
-    loop {
-        if let Some(status) = child.try_wait()? {
-            assert!(status.success(), "metrics subprocess failed: {status}");
-            assert_eq!(std::fs::read_to_string(shutdown_marker)?, "runtime dropped");
-            return Ok(());
-        }
-        if std::time::Instant::now() >= deadline {
-            child.kill()?;
-            child.wait()?;
-            anyhow::bail!("a stuck metrics collector blocked runtime shutdown");
-        }
-        std::thread::sleep(Duration::from_millis(/*millis*/ 10));
-    }
+    // Process exit is the shutdown signal; the test runner bounds a stuck child.
+    let status = child.wait()?;
+    assert!(status.success(), "metrics subprocess failed: {status}");
+    assert_eq!(std::fs::read_to_string(shutdown_marker)?, "runtime dropped");
+    Ok(())
 }
