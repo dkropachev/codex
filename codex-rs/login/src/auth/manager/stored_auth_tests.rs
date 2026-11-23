@@ -184,9 +184,14 @@ async fn shared_storage_hydration_preserves_errors_and_restriction_order() -> an
         keyring_backend_kind: AuthKeyringBackendKind::Direct,
         agent_identity_authapi_base_url: None,
         auth_route_config: &route,
+        cached_auth: None,
+        allowed_auth_modes: None,
     };
     let error = context
-        .load(&UnavailableStorage, AuthCredentialsStoreMode::File)
+        .load(
+            std::sync::Arc::new(UnavailableStorage),
+            AuthCredentialsStoreMode::File,
+        )
         .await
         .err()
         .context("storage errors should propagate")?;
@@ -198,10 +203,10 @@ async fn shared_storage_hydration_preserves_errors_and_restriction_order() -> an
         )
     );
 
-    let file = FileAuthStorage::new(home.path().to_path_buf());
+    let file = std::sync::Arc::new(FileAuthStorage::new(home.path().to_path_buf()));
     assert!(
         context
-            .load(&file, AuthCredentialsStoreMode::File)
+            .load(file.clone(), AuthCredentialsStoreMode::File)
             .await?
             .is_none()
     );
@@ -220,14 +225,14 @@ async fn shared_storage_hydration_preserves_errors_and_restriction_order() -> an
     file.save(&agent)?;
     assert!(
         context
-            .load(&file, AuthCredentialsStoreMode::File)
+            .load(file.clone(), AuthCredentialsStoreMode::File)
             .await?
             .is_none()
     );
 
     context.allowed_login_methods = None;
     let error = context
-        .load(&file, AuthCredentialsStoreMode::File)
+        .load(file.clone(), AuthCredentialsStoreMode::File)
         .await
         .err()
         .context("workspace validation must precede Agent Identity hydration")?;

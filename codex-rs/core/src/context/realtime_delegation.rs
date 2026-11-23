@@ -3,7 +3,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::input_text;
 
-const MAX_REALTIME_DELEGATION_FIELD_BYTES: usize = 4 * 1024;
 const TRUNCATION_MARKER: &str = "…";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +19,8 @@ pub(crate) struct RealtimeDelegation<'a> {
 }
 
 impl<'a> RealtimeDelegation<'a> {
+    pub(crate) const FIELD_BYTES: usize = 4 * 1024;
+
     pub(crate) fn new(
         input: &'a str,
         transcript_delta: Option<&'a str>,
@@ -77,10 +78,10 @@ enum Retain {
 
 fn escape_xml_text_bounded(input: &str, retain: Retain) -> String {
     let escaped = escape_xml_text(input);
-    if escaped.len() <= MAX_REALTIME_DELEGATION_FIELD_BYTES {
+    if escaped.len() <= RealtimeDelegation::FIELD_BYTES {
         return escaped;
     }
-    let retained_bytes = MAX_REALTIME_DELEGATION_FIELD_BYTES - TRUNCATION_MARKER.len();
+    let retained_bytes = RealtimeDelegation::FIELD_BYTES - TRUNCATION_MARKER.len();
     match retain {
         Retain::Start => {
             let mut end = retained_bytes;

@@ -61,6 +61,7 @@ class RunBazelCiTest(unittest.TestCase):
                                 "--noexperimental_remote_repo_contents_cache",
                                 "test",
                                 *options,
+                                "--test_env=INSTA_UPDATE=no",
                                 *defaults,
                                 *([] if options else ["--local_test_jobs=2"]),
                                 "--",

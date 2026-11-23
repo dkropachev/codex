@@ -159,6 +159,7 @@ impl AccountPoolManager {
                 let mut manager = AuthManager::new_from_auth_config(
                     member_auth_config,
                     /*enable_codex_api_key_env*/ false,
+                    /*allowed_auth_modes*/ None,
                 )
                 .await;
                 manager.pool_refresh_gate = Arc::clone(&refresh_gate);

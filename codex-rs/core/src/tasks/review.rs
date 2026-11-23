@@ -12,6 +12,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelOrigin;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
@@ -175,7 +176,7 @@ async fn start_review_conversation(
         .await;
     if let Some(current_effort) = sub_agent_config.model_reasoning_effort.as_ref()
         && model_info.slug != ctx.model_info().slug
-        && !model_info.used_fallback_model_metadata
+        && model_info.origin != ModelOrigin::Synthetic
         && !model_info
             .supported_reasoning_levels
             .iter()

@@ -31,6 +31,7 @@ struct GateServer {
 
 async fn connect(url: &str) -> RemoteAppServerClient {
     RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+        required_human_approval: true,
         endpoint: RemoteAppServerEndpoint::WebSocket {
             websocket_url: url.to_string(),
             auth_token: None,

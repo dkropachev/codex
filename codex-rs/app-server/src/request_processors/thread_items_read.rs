@@ -1,5 +1,6 @@
 //! Reads selected durable thread items through the existing thread-store projection.
 
+use super::thread_processor::THREAD_ITEMS_MAX_LIMIT;
 use super::thread_processor::stored_thread_item_to_entry;
 use super::*;
 use crate::error_code::method_not_found;
@@ -9,16 +10,16 @@ impl ThreadRequestProcessor {
         &self,
         params: ThreadItemsReadParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_items_read_response_inner(params)
+        Self::read_thread_items(self.thread_store.as_ref(), params)
             .await
             .map(|response| Some(response.into()))
     }
 
-    async fn thread_items_read_response_inner(
-        &self,
+    pub(super) async fn read_thread_items(
+        store: &dyn ThreadStore,
         params: ThreadItemsReadParams,
     ) -> Result<ThreadItemsReadResponse, JSONRPCErrorError> {
-        if !(1..=100).contains(&params.item_ids.len()) {
+        if !(1..=THREAD_ITEMS_MAX_LIMIT).contains(&params.item_ids.len()) {
             return Err(invalid_request(
                 "itemIds must contain 1 to 100 IDs".to_string(),
             ));
@@ -31,8 +32,7 @@ impl ThreadRequestProcessor {
         let thread_id = ThreadId::from_string(&thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
         let page_size = item_ids.len();
-        let page = self
-            .thread_store
+        let page = store
             .list_items(StoreListItemsParams {
                 item_ids: Some(item_ids),
                 thread_id,

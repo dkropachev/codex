@@ -13,8 +13,12 @@ Scenario: Manual /compact with prior user history compacts existing history and 
     <MODEL_INSTRUCTIONS>
 02:message/developer:
     <MODEL_INSTRUCTIONS>
-03:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+03:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 04:message/user:
     <ENVIRONMENT_CONTEXT>
 05:message/user:
@@ -28,8 +32,12 @@ Scenario: Manual /compact with prior user history compacts existing history and 
     <MODEL_INSTRUCTIONS>
 02:message/developer:
     <MODEL_INSTRUCTIONS>
-03:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+03:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 04:message/user:
     <ENVIRONMENT_CONTEXT>
 05:message/user:
@@ -47,8 +55,12 @@ Scenario: Manual /compact with prior user history compacts existing history and 
     <MODEL_INSTRUCTIONS>
 02:message/developer:
     <MODEL_INSTRUCTIONS>
-03:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+03:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 04:message/user:
     <ENVIRONMENT_CONTEXT>
 05:message/user:
@@ -67,8 +79,12 @@ Scenario: Manual /compact with prior user history compacts existing history and 
     <MODEL_INSTRUCTIONS>
 02:message/developer:
     <MODEL_INSTRUCTIONS>
-03:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+03:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 04:message/user:
     <ENVIRONMENT_CONTEXT>
 05:message/user:
@@ -93,8 +109,12 @@ Scenario: Manual /compact with prior user history compacts existing history and 
     <MODEL_INSTRUCTIONS>
 03:message/user:
     first manual turn
-04:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+04:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 05:message/user:
     <ENVIRONMENT_CONTEXT>
 06:message/user:

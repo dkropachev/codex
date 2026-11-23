@@ -485,6 +485,20 @@ pub(super) fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> 
     s
 }
 
+impl ChatWidget {
+    pub(crate) fn status_line_text(&self) -> Option<String> {
+        self.status_line_content()
+            .cloned()
+            .map(|content| content.into_hyperlink_line().line.to_string())
+    }
+
+    pub(crate) fn status_line_content(
+        &self,
+    ) -> Option<&crate::bottom_pane::footer_content::FooterContent> {
+        self.bottom_pane.status_line_content()
+    }
+}
+
 pub(super) fn status_line_text(chat: &ChatWidget) -> Option<String> {
     chat.status_line_text()
 }

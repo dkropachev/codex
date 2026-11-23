@@ -61,14 +61,26 @@ impl ChatgptAuth {
             endpoint == format!("{}/oauth/token", provenance.issuer.trim_end_matches('/'))
         });
 
-        persist_tokens(
-            self.storage(),
-            &tokens,
-            provenance,
-            refresh_response.id_token,
-            refresh_response.access_token,
-            refresh_response.refresh_token,
-        )
+        let storage = Arc::clone(self.storage());
+        let originator = codex_otel::auth_storage::AuthStorageOriginator::current();
+        tokio::task::spawn_blocking(move || {
+            originator.sync_scope(|| {
+                persist_tokens(
+                    &storage,
+                    &tokens,
+                    provenance,
+                    refresh_response.id_token,
+                    refresh_response.access_token,
+                    refresh_response.refresh_token,
+                )
+            })
+        })
+        .await
+        .map_err(|_| {
+            RefreshTokenError::Transient(std::io::Error::other(
+                "credential persistence task failed",
+            ))
+        })?
         .map_err(RefreshTokenError::from)
     }
 }

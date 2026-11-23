@@ -319,3 +319,109 @@ async fn failed_attachment_leaves_core_disconnected() -> Result<()> {
     test.codex.shutdown_and_wait().await?;
     Ok(())
 }
+
+#[test_case::test_case(true; "record unfinished tail")]
+#[test_case::test_case(false; "drop unfinished tail")]
+#[tokio::test]
+async fn completed_turns_reach_history_before_the_next_handoff(flush_tail: bool) -> Result<()> {
+    use codex_protocol::protocol::RealtimeEvent;
+    use core_test_support::responses;
+    use core_test_support::wait_for_event;
+
+    let api = start_mock_server().await;
+    let replies = ["handoff", "text"].map(|id| {
+        responses::sse(vec![
+            responses::ev_response_created(id),
+            responses::ev_completed(id),
+        ])
+    });
+    let model = responses::mount_sse_sequence(&api, replies.into()).await;
+    let test = test_codex().build_with_auto_env(&api).await?;
+    let mut sideband = Sideband::new().await?;
+    let mut params = params("transcript", &sideband.url);
+    params.flush_transcript_tail_on_session_end = flush_tail;
+    let (reply, attached) = oneshot::channel();
+    test.codex
+        .submit(Op::RealtimeConversationAttach { params, reply })
+        .await?;
+    let connection = sideband.connected().await;
+    connection
+        .accept
+        .send(/*value*/ true)
+        .expect("pending handshake");
+    timeout(Duration::from_secs(10), attached).await???;
+    let send = |event| connection.events.send(event);
+
+    let speech = format!("<&>{}<&>", "u".repeat(12 * 1024));
+    let final_text = format!("{speech}!");
+    send(json!({"type":"input_transcript.added", "item":{"text":speech}}))?;
+    send(json!({"type":"turn.done", "turn":{"role":"assistant","transcript":"yes"}}))?;
+    send(json!({"type":"turn.done", "turn":{"role":"user","transcript":final_text}}))?;
+    wait_for_event(&test.codex, |event| matches!(event, EventMsg::RealtimeConversationRealtime(event) if matches!(event.payload, RealtimeEvent::InputTranscriptDone(_)))).await;
+    assert!(model.requests().is_empty());
+
+    // The handoff repeats the user input. Only the new partial belongs in its transcript.
+    let partial = format!("{}<&>", "p".repeat(12 * 1024));
+    send(json!({"type":"output_transcript.added", "item":{"text":partial}}))?;
+    send(
+        json!({"type":"delegation.created","item":{"id":"handoff","type":"delegation","target":"client","content":[{"type":"input_text","text":final_text}]}}),
+    )?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let transcript = |request: ResponsesRequest| {
+        request
+            .message_input_texts("user")
+            .into_iter()
+            .filter(|text| text.contains("<transcript_delta>"))
+            .collect::<Vec<_>>()
+    };
+    let completed = transcript(model.single_request());
+    const FIELD_BYTES: usize = 4 * 1024;
+    let retained_bytes = FIELD_BYTES - "…".len();
+    let escaped_marker = "&lt;&amp;&gt;";
+    let completed_suffix = format!("{escaped_marker}!\nassistant: yes");
+    let completed_delta = format!(
+        "…{}{completed_suffix}",
+        "u".repeat(retained_bytes - completed_suffix.len())
+    );
+    let handoff_input = format!(
+        "{escaped_marker}{}…",
+        "u".repeat(retained_bytes - escaped_marker.len())
+    );
+    let partial_delta = format!(
+        "…{}{escaped_marker}",
+        "p".repeat(retained_bytes - escaped_marker.len())
+    );
+    assert_eq!(
+        completed,
+        vec![
+            format!(
+                "<realtime_delegation>\n  <input></input>\n  <transcript_delta>{completed_delta}</transcript_delta>\n</realtime_delegation>"
+            ),
+            format!(
+                "<realtime_delegation>\n  <input>{handoff_input}</input>\n  <transcript_delta>{partial_delta}</transcript_delta>\n</realtime_delegation>"
+            ),
+        ]
+    );
+
+    let unfinished = format!("{}<&>", "a".repeat(12 * 1024));
+    send(json!({"type":"output_transcript.added", "item":{"text":unfinished}}))?;
+    wait_for_event(&test.codex, |event| matches!(event, EventMsg::RealtimeConversationRealtime(event) if matches!(event.payload, RealtimeEvent::OutputTranscriptDelta(_)))).await;
+    detach(&test, "transcript").await?;
+    test.submit_text_turn("continue").await?;
+    let after_close = transcript(model.last_request().expect("text turn"));
+    let mut expected_after_close = completed;
+    if flush_tail {
+        let unfinished_delta = format!(
+            "…{}{escaped_marker}",
+            "a".repeat(retained_bytes - escaped_marker.len())
+        );
+        expected_after_close.push(format!(
+            "<realtime_delegation>\n  <source>transcript_tail_flush</source>\n  <input>The user just ended their realtime session. Here is the remaining handoff/transcript tail. You probably do not have to do anything; acknowledge the handoff unless the transcript itself asks for something.</input>\n  <transcript_delta>{unfinished_delta}</transcript_delta>\n</realtime_delegation>"
+        ));
+    }
+    assert_eq!(after_close, expected_after_close);
+    Ok(())
+}

@@ -16,7 +16,7 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (9; hash=9f3e83cc78abb501):
+  tools (9; hash=0536c57c93b3558b):
     - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
     - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
     - function/wait_for_environment: Wait for the selected environment.; args=[environment_id]; hash=aac8552da86b3b20
@@ -26,7 +26,7 @@ Settings:
     - namespace/skills: Tools in the skills namespace.; hash=998a720eb0f017bc
       - function/list
       - function/read
-    - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+    - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
     - web_search; hash=f103e327c6870a46
 -- request 1 (turn) --
 00:message/developer:
@@ -35,7 +35,7 @@ Settings:
     <MODEL_INSTRUCTIONS>
 02:message/developer:
     <MODEL_INSTRUCTIONS>
-03:message/developer[3]:
+03:message/developer[4]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <environments_instructions>
         ## Execution environments
@@ -45,7 +45,11 @@ Settings:
 
         Wait only when the current task needs that environment. Continue using tools that are already available for unrelated work.
         </environments_instructions>
-    [03] <SKILLS_INSTRUCTIONS>
+    [03] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+    [04] <SKILLS_INSTRUCTIONS>
 04:message/user:
     <ENVIRONMENT_CONTEXT>
 05:message/user:
@@ -83,7 +87,7 @@ Settings: relative to window 1
     <MODEL_INSTRUCTIONS>
 02:message/developer:
     <MODEL_INSTRUCTIONS>
-03:message/developer[3]:
+03:message/developer[4]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <environments_instructions>
         ## Execution environments
@@ -93,7 +97,11 @@ Settings: relative to window 1
 
         Wait only when the current task needs that environment. Continue using tools that are already available for unrelated work.
         </environments_instructions>
-    [03] <SKILLS_INSTRUCTIONS>
+    [03] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+    [04] <SKILLS_INSTRUCTIONS>
 04:message/user:
     <ENVIRONMENT_CONTEXT>
 05:message/user:
@@ -121,7 +129,7 @@ Settings: same as window 1
     <MODEL_INSTRUCTIONS>
 03:message/user:
     Inspect the available skills.
-04:message/developer[4]:
+04:message/developer[5]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <environments_instructions>
         ## Execution environments
@@ -131,8 +139,12 @@ Settings: same as window 1
 
         Wait only when the current task needs that environment. Continue using tools that are already available for unrelated work.
         </environments_instructions>
-    [03] <SKILLS_INSTRUCTIONS>
+    [03] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
     [04] <SKILLS_INSTRUCTIONS>
+    [05] <SKILLS_INSTRUCTIONS>
 05:message/user:
     <ENVIRONMENT_CONTEXT>
 06:message/user:

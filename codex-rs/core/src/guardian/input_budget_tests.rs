@@ -61,7 +61,7 @@ async fn finalization_exports_loss_totals_only_for_accepted_input(window: i64) {
     session
         .services
         .thread_extension_data
-        .insert(PendingReviewContext(context));
+        .insert(PendingReviewContext { context });
     assert_eq!(
         finalize(&session, &step, &mut input, HistoryTruncation::Preserve)
             .await
@@ -217,7 +217,7 @@ async fn finalization_bounds_the_complete_model_visible_item() {
     session
         .services
         .thread_extension_data
-        .insert(PendingReviewContext(context));
+        .insert(PendingReviewContext { context });
 
     finalize(&session, &step, &mut input, HistoryTruncation::Allow)
         .await
@@ -269,7 +269,7 @@ async fn cancelled_startup_does_not_record_unselected_review_evidence() {
     session
         .services
         .thread_extension_data
-        .insert(PendingReviewContext(context));
+        .insert(PendingReviewContext { context });
     session
         .set_session_startup_prewarm(
             crate::session::startup_prewarm::SessionStartupPrewarmHandle::new(
@@ -326,7 +326,7 @@ async fn feasibility_rejects_required_evidence_inside_the_reserved_margin() {
     session
         .services
         .thread_extension_data
-        .insert(PendingReviewContext(context));
+        .insert(PendingReviewContext { context });
 
     assert!(check_pending(&session, &turn).await.is_err());
 }
@@ -349,7 +349,7 @@ async fn finalization_overflow_marks_the_reviewer_exhausted() {
     session
         .services
         .thread_extension_data
-        .insert(PendingReviewContext(context));
+        .insert(PendingReviewContext { context });
 
     assert!(
         finalize(&session, &step, &mut input, HistoryTruncation::Preserve)

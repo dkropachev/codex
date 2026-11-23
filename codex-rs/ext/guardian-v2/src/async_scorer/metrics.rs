@@ -55,7 +55,9 @@ pub(super) fn sampler_failure_reason(error: &LunaSamplerError) -> &'static str {
             | ApiError::RateLimit(_)
             | ApiError::UsageLimitReached(_) => "rate_limit",
             ApiError::ModelNotFound { .. } => "model_not_found",
-            ApiError::InvalidRequest { .. } | ApiError::InvalidPrompt { .. } => "invalid_request",
+            ApiError::InvalidRequest { .. }
+            | ApiError::InvalidAudioInput { .. }
+            | ApiError::InvalidPrompt { .. } => "invalid_request",
             ApiError::CyberPolicy { .. }
             | ApiError::BioPolicy { .. }
             | ApiError::MisalignmentPolicyViolation { .. } => "policy_error",

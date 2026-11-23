@@ -38,8 +38,10 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::AsyncClassifierMode;
 use codex_protocol::openai_models::AutoReviewMessages;
+use codex_protocol::openai_models::CatalogModel;
 use codex_protocol::openai_models::GuardianV2ModelConfig;
 use codex_protocol::openai_models::GuardianV2TranscriptModelConfig;
+use codex_protocol::openai_models::ModelOrigin;
 use codex_protocol::openai_models::ModelTokenBudgetConfig;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -395,7 +397,7 @@ impl ModelsManager for GatedModelsManager {
         &'a self,
         model: &'a str,
         config: &'a ModelsManagerConfig,
-    ) -> ModelsManagerFuture<'a, ModelInfo> {
+    ) -> ModelsManagerFuture<'a, CatalogModel> {
         Box::pin(async move {
             let pause = if model == MODEL_B {
                 self.first_b_lookup.lock().expect("lookup gate").take()
@@ -682,7 +684,13 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
         ]
     );
     assert!(Arc::ptr_eq(&before.turn, &after.turn));
-    assert_eq!(after.settings.model_info.as_ref(), &expected_destination);
+    assert_eq!(
+        after.settings.model_info.as_ref(),
+        &CatalogModel {
+            model: expected_destination.into(),
+            origin: ModelOrigin::ExplicitConfig
+        }
+    );
     let initial_budget = turn
         .config
         .token_budget
@@ -740,6 +748,16 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
     assert_eq!(step_values(&retained), step_values(&after));
     assert_eq!(before.settings.model_info.slug, MODEL_A);
     assert_eq!(turn.model_info().slug, MODEL_A);
+    for step in [&before, &during, &after, &retained] {
+        let extension_model = step
+            .extension_data
+            .get::<ModelInfo>()
+            .expect("step metadata");
+        assert!(Arc::ptr_eq(
+            &step.settings.model_info.model,
+            &extension_model
+        ));
+    }
     drop(submissions);
     loop_task.await.expect("submission loop teardown");
 }
@@ -1041,7 +1059,7 @@ async fn activation_must_match_the_retained_turn_authority(change: ManagedPolicy
         });
         let model_info = Arc::make_mut(&mut settings.model_info);
         model_info.model_specialty = None;
-        model_info.used_fallback_model_metadata = false;
+        model_info.origin = ModelOrigin::Provider;
     });
     assert!(
         !turn
@@ -1145,7 +1163,7 @@ async fn activation_must_match_the_retained_turn_authority(change: ManagedPolicy
     );
 }
 
-fn safety_models() -> (ModelInfo, ModelInfo) {
+fn safety_models() -> (CatalogModel, CatalogModel) {
     let [mut admitted, mut destination]: [ModelInfo; 2] = activation_models()
         .try_into()
         .expect("two activation models");
@@ -1154,12 +1172,20 @@ fn safety_models() -> (ModelInfo, ModelInfo) {
         model.node_repl_auto_review_required = false;
         model.node_repl_disabled = false;
         model.auto_review_model_override = None;
-        model.used_fallback_model_metadata = false;
         let messages = model.model_messages.as_mut().expect("model messages");
         messages.auto_review = None;
         messages.guardian_v2 = None;
     }
-    (admitted, destination)
+    (
+        CatalogModel {
+            model: admitted.into(),
+            origin: ModelOrigin::Provider,
+        },
+        CatalogModel {
+            model: destination.into(),
+            origin: ModelOrigin::Provider,
+        },
+    )
 }
 
 fn parent_review_messages(model: &mut ModelInfo) -> &mut AutoReviewMessages {
@@ -1219,7 +1245,7 @@ async fn model_safety_rejects_fallback_metadata() {
     let (_, turn) = make_session_and_context().await;
     let (admitted, destination) = safety_models();
     let mut fallback = admitted.clone();
-    fallback.used_fallback_model_metadata = true;
+    fallback.origin = ModelOrigin::Synthetic;
     for (old, current, next, reason) in [
         (
             &fallback,
@@ -1288,7 +1314,7 @@ async fn parent_fallback_preserves_explicit_empty_and_bundled_defaults() {
     let mut config = turn.config.as_ref().clone();
     config.guardian_policy_config = None;
     let (admitted, mut destination) = safety_models();
-    let check = |destination: &ModelInfo| {
+    let check = |destination: &CatalogModel| {
         check_legacy_model_safety(&admitted, &admitted, destination, &config, &config)
     };
     parent_review_messages(&mut destination).policy = Some(defaults.policy.to_string());

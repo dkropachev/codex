@@ -126,6 +126,7 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
             startup_submission: None,
             status_surface_overrides: Default::default(),
             deferred_handoff: None,
+            provider_error: None,
             pending_thread_settings: None,
             questions: None,
             composer: None,
