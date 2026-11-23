@@ -59,6 +59,7 @@ async fn background_api_key_timeouts_bound_unanswered_feature_requests() {
         counts
     });
     let client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+        required_human_approval: true,
         endpoint: RemoteAppServerEndpoint::WebSocket {
             websocket_url: url,
             auth_token: None,
@@ -189,6 +190,7 @@ impl FeatureServer {
             requests
         });
         let client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            required_human_approval: true,
             endpoint: RemoteAppServerEndpoint::WebSocket {
                 websocket_url: url,
                 auth_token: None,

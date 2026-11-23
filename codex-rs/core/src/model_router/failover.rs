@@ -132,6 +132,7 @@ pub(crate) fn model_router_failure_scope(err: &CodexErr) -> Option<ModelRouterFa
         | CodexErrorDetails::EnvVar(_)
         | CodexErrorDetails::Fatal(_)
         | CodexErrorDetails::InvalidImageRequest()
+        | CodexErrorDetails::InvalidAudioInput { .. }
         | CodexErrorDetails::InvalidPrompt { .. }
         | CodexErrorDetails::GatewayLoginRequired(_)
         | CodexErrorDetails::RefreshTokenFailed(_)
@@ -265,6 +266,7 @@ mod tests {
     }.into(); "missing model")]
     #[test_case::test_case(CodexErrorDetails::ResponseIncomplete(Box::new(
         codex_protocol::error::ResponseIncompleteError {
+            partial_output: Vec::new(),
             reason: "max_output_tokens".to_string(),
             response_id: None,
             token_usage: None,
@@ -272,6 +274,7 @@ mod tests {
     )).into(); "incomplete max output tokens")]
     #[test_case::test_case(CodexErrorDetails::ResponseIncomplete(Box::new(
         codex_protocol::error::ResponseIncompleteError {
+            partial_output: Vec::new(),
             reason: "unknown".to_string(),
             response_id: None,
             token_usage: None,

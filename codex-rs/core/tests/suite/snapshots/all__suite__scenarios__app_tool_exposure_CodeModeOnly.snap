@@ -28,9 +28,14 @@ Settings:
     <MODEL_INSTRUCTIONS>
 02:message/developer:
     <MODEL_INSTRUCTIONS>
-03:message/developer[2]:
+03:message/developer[3]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <APPS_INSTRUCTIONS>
+    [03] <tools>
+        Deferred tool namespaces:
+        - mcp__codex_apps__notes: Tools for working with notes.
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 04:message/user:
     <ENVIRONMENT_CONTEXT>
 05:message/user:

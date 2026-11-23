@@ -13,8 +13,12 @@ Scenario: Pre-sampling compaction on model switch to a smaller context window: c
     <MODEL_INSTRUCTIONS>
 02:message/developer:
     <MODEL_INSTRUCTIONS>
-03:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+03:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 04:message/user:
     <ENVIRONMENT_CONTEXT>
 05:message/user:
@@ -28,8 +32,12 @@ Scenario: Pre-sampling compaction on model switch to a smaller context window: c
     <MODEL_INSTRUCTIONS>
 02:message/developer:
     <MODEL_INSTRUCTIONS>
-03:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+03:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 04:message/user:
     <ENVIRONMENT_CONTEXT>
 05:message/user:
@@ -85,8 +93,12 @@ Scenario: Pre-sampling compaction on model switch to a smaller context window: c
 
     </model_switch>
     </model_switch>
-06:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+06:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 07:message/user:
     <ENVIRONMENT_CONTEXT>
 08:message/user:

@@ -32,6 +32,13 @@ use crate::tls_backend_fallback::should_retry_with_rustls;
 
 const PROTOCOL_VERSION_TLS_ALERT: &[u8] = &[21, 3, 3, 0, 2, 2, 70];
 
+// Schannel ARM needs TLS 1.1 to expose the protocol-version alert; the x64 CI image
+// disables TLS 1.1, so x64 and other platforms retain TLS 1.2.
+#[cfg(all(windows, target_arch = "aarch64"))]
+const NATIVE_TLS_TEST_VERSION: reqwest::tls::Version = reqwest::tls::Version::TLS_1_1;
+#[cfg(not(all(windows, target_arch = "aarch64")))]
+const NATIVE_TLS_TEST_VERSION: reqwest::tls::Version = reqwest::tls::Version::TLS_1_2;
+
 type SuccessfulTlsFallbackServer = (
     String,
     TransportClient,
@@ -50,10 +57,12 @@ fn native_tls_fallback_pool() -> RouteAwareClientPool {
         ClientRouteClass::Other,
         tls,
     );
-    match client.backend {
+    let pool = match client.backend {
         HttpClientBackend::Routed(pool) => Arc::unwrap_or_clone(pool),
         HttpClientBackend::Direct(_) => panic!("explicit TLS configuration should create a pool"),
-    }
+    };
+    use_native_tls_for_direct_route(&pool);
+    pool
 }
 
 #[tokio::test]
@@ -65,6 +74,7 @@ async fn default_pool_does_not_retry_a_native_tls_protocol_failure() {
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         ClientRouteClass::Other,
     );
+    use_native_tls_for_direct_route(&pool);
     let request = reqwest::Request::new(
         Method::POST,
         reqwest::Url::parse(&url).expect("valid HTTPS URL"),
@@ -339,6 +349,20 @@ async fn does_not_retry_a_non_replayable_streaming_request() {
             .expect("TLS server should finish")
             .expect("TLS server should reject one connection"),
         1
+    );
+}
+
+fn use_native_tls_for_direct_route(pool: &RouteAwareClientPool) {
+    // Start with reqwest's default native backend even when the environment supplies a CA bundle.
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .min_tls_version(NATIVE_TLS_TEST_VERSION)
+        .max_tls_version(NATIVE_TLS_TEST_VERSION)
+        .build()
+        .expect("native TLS client should build");
+    pool.clients.lock().expect("client cache lock").insert(
+        OutboundProxyRoute::Direct,
+        TransportClient::new(client, RequestLogging::Enabled, http::HeaderMap::new()),
     );
 }
 

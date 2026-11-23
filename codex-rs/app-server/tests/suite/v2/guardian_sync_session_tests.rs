@@ -7,6 +7,10 @@ use codex_app_server_protocol::GuardianWarningNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ReviewDelivery;
+use codex_app_server_protocol::ReviewStartParams;
+use codex_app_server_protocol::ReviewStartResponse;
+use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadListResponse;
@@ -631,5 +635,105 @@ async fn managed_reviewers_reuse_fork_and_resume_after_parent_shutdown(
     app.shutdown_gracefully().await?;
     mcp_server.abort();
     server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn inline_review_delegate_runs_strict_guardian_assessment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let requests = responses::mount_sse_sequence(
+        &server,
+        vec![
+            tool_response("node_repl", "js", &["inline-tool"]),
+            assistant_response(ALLOW)?,
+            assistant_response(r#"{"findings":[]}"#)?,
+        ],
+    )
+    .await;
+    let (mcp_url, mcp_server) =
+        start_mcp_server_with_tools(&["js"], /*sensitive_action*/ None).await?;
+    let codex_home = TempDir::new()?;
+    sync_config(&server.uri())
+        .with_extra_config(&format!("[mcp_servers.node_repl]\nurl = \"{mcp_url}/mcp\"\ndefault_tools_approval_mode = \"auto\""))
+        .write(codex_home.path())?;
+    let config = load_default_config_for_test(&codex_home).await;
+    let mut model = codex_core::test_support::construct_model_info_offline(MODEL, &config);
+    // Strict MCP approvals must work under the inline delegate's `never` policy.
+    model.node_repl_auto_review_required = true;
+    write_models_cache_with_models(codex_home.path(), vec![model]).await?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(TIMEOUT)
+        .await?;
+    let parent = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let _: ReviewStartResponse = app
+        .request(|request_id| ClientRequest::ReviewStart {
+            request_id,
+            params: ReviewStartParams {
+                thread_id: parent.id,
+                delivery: Some(ReviewDelivery::Inline),
+                target: ReviewTarget::Custom {
+                    instructions: "Run the configured tool to check this change.".to_owned(),
+                },
+            },
+        })
+        .await?;
+    let completed: TurnCompletedNotification =
+        timeout(TIMEOUT, app.read_notification("turn/completed")).await??;
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
+    let output = requests
+        .function_call_output_text("inline-tool")
+        .expect("MCP tool output");
+    assert!(output.contains(r#""echoed":"inline-tool""#), "{output}");
+    assert_eq!(
+        requests
+            .requests()
+            .iter()
+            .map(|request| request.body_json()["client_metadata"]["x-openai-subagent"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!("review"), json!("guardian"), json!("review")]
+    );
+    app.shutdown_gracefully().await?;
+    mcp_server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn guardian_review_returns_assessment_for_injected_exec() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let verdict = r#"{"outcome":"allow","risk_level":"medium","user_authorization":"high","rationale":"User requested this command."}"#;
+    let requests = responses::mount_sse_once(&server, assistant_response(verdict)?).await;
+    let codex_home = TempDir::new()?;
+    sync_config(&server.uri()).write(codex_home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let inject = app.send_raw_request("thread/inject_items", Some(json!({
+        "threadId": thread.id,
+        "items": [
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"Create guardian-direct.txt."}]},
+            {"type":"function_call","name":"exec_command","call_id":"exec-review",
+             "arguments":r#"{"cmd":"echo reviewed > guardian-direct.txt","sandbox_permissions":"require_escalated","justification":"Create the requested file."}"#}
+        ]
+    }))).await?;
+    let _: Value = app.read_response(inject).await?;
+    let review = app
+        .send_raw_request("thread/guardianReview", Some(json!({"threadId":thread.id})))
+        .await?;
+    let result: Value = app.read_response(review).await?;
+    assert_eq!(
+        result,
+        json!({
+            "callId":"exec-review",
+            "assessment":{"outcome":"allow","riskLevel":"medium","userAuthorization":"high","rationale":"User requested this command."}
+        })
+    );
+    assert_eq!(
+        requests.single_request().body_json()["client_metadata"]["x-openai-subagent"],
+        "guardian"
+    );
     Ok(())
 }

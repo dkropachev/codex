@@ -1,8 +1,12 @@
 //! Shared stored-credential hydration and per-home loading without credential overrides.
 
 use std::path::Path;
+use std::sync::Arc;
+
+use codex_protocol::auth::AuthMode;
 
 use super::AuthCredentialsStoreMode;
+use super::AuthDotJson;
 use super::AuthKeyringBackendKind;
 use super::AuthRouteConfig;
 use super::AuthStorageBackend;
@@ -13,6 +17,7 @@ use super::auth_mode_is_allowed;
 use super::create_auth_storage;
 use super::ensure_agent_identity_workspace_allowed;
 use super::ensure_auth_workspace_allowed;
+use super::load_stored_auth;
 
 pub(super) struct AuthStorageContext<'a> {
     pub(super) codex_home: &'a Path,
@@ -22,18 +27,32 @@ pub(super) struct AuthStorageContext<'a> {
     pub(super) keyring_backend_kind: AuthKeyringBackendKind,
     pub(super) agent_identity_authapi_base_url: Option<&'a str>,
     pub(super) auth_route_config: &'a AuthRouteConfig,
+    pub(super) cached_auth: Option<&'a CodexAuth>,
+    pub(super) allowed_auth_modes: Option<&'a [AuthMode]>,
 }
 
 impl AuthStorageContext<'_> {
     pub(super) async fn load(
         &self,
-        storage: &dyn AuthStorageBackend,
+        storage: Arc<dyn AuthStorageBackend>,
         source_mode: AuthCredentialsStoreMode,
     ) -> std::io::Result<Option<CodexAuth>> {
-        let Some(auth_dot_json) = storage.load()? else {
+        let Some(auth_dot_json) = load_stored_auth(storage).await? else {
             return Ok(None);
         };
-        if !auth_mode_is_allowed(self.allowed_login_methods, auth_dot_json.resolved_mode()) {
+        self.hydrate(auth_dot_json, source_mode).await
+    }
+
+    pub(super) async fn hydrate(
+        &self,
+        auth_dot_json: AuthDotJson,
+        source_mode: AuthCredentialsStoreMode,
+    ) -> std::io::Result<Option<CodexAuth>> {
+        if !auth_mode_is_allowed(self.allowed_login_methods, auth_dot_json.resolved_mode())
+            || self
+                .allowed_auth_modes
+                .is_some_and(|modes| !modes.contains(&auth_dot_json.resolved_mode()))
+        {
             return Ok(None);
         }
         if let Some(agent_identity) = auth_dot_json.agent_identity.as_ref() {
@@ -50,6 +69,7 @@ impl AuthStorageContext<'_> {
             self.keyring_backend_kind,
             self.agent_identity_authapi_base_url,
             self.auth_route_config,
+            self.cached_auth,
         )
         .await?;
         if let CodexAuth::PersonalAccessToken(auth) = &auth {
@@ -81,6 +101,8 @@ impl CodexAuth {
             keyring_backend_kind,
             agent_identity_authapi_base_url: agent_identity_authapi_base_url.as_deref(),
             auth_route_config,
+            cached_auth: None,
+            allowed_auth_modes: None,
         };
         let ephemeral_storage = create_auth_storage(
             codex_home.to_path_buf(),
@@ -88,10 +110,7 @@ impl CodexAuth {
             AuthKeyringBackendKind::default(),
         );
         if let Some(auth) = context
-            .load(
-                ephemeral_storage.as_ref(),
-                AuthCredentialsStoreMode::Ephemeral,
-            )
+            .load(ephemeral_storage, AuthCredentialsStoreMode::Ephemeral)
             .await?
         {
             return Ok(Some(auth));
@@ -104,9 +123,7 @@ impl CodexAuth {
             auth_credentials_store_mode,
             keyring_backend_kind,
         );
-        context
-            .load(storage.as_ref(), auth_credentials_store_mode)
-            .await
+        context.load(storage, auth_credentials_store_mode).await
     }
 }
 

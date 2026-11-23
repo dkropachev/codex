@@ -16,7 +16,7 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (9; hash=1106fc721058a2c6):
+  tools (9; hash=00f1fa181d50a76a):
     - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
     - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
     - function/request_user_input: Request user input for one to three short questions and wait for the response. Set autoResolution...; args=[autoResolutionMs, questions]; hash=dbb20a8935aee54b
@@ -24,7 +24,7 @@ Settings:
     - function/get_context_remaining: Catalog context guidance.; args=[]; hash=802b1cf4a796b439
     - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
     - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=3b766d5bdec5d50e
-    - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=400cd6ac61d524a9
+    - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
     - web_search; hash=f103e327c6870a46
 -- request 1 (turn) --
 00:message/developer:
@@ -33,8 +33,12 @@ Settings:
     <MODEL_INSTRUCTIONS>
 02:message/developer:
     <MODEL_INSTRUCTIONS>
-03:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+03:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 04:message/developer[3]:
     [01] <context_window>
     [02]
@@ -51,7 +55,7 @@ Settings:
 ## Window 2 (after request 1)
 Settings: relative to window 1
   model: "context-tools-updated"
-  tools (9; hash=bf92740471532aac):
+  tools (9; hash=f2a512ac508b5578):
     ~ function/new_context; args=[]; hash=b9263827b0adbb78
     ~ function/get_context_remaining; args=[]; hash=3e96d66806c56bdd
 -- request 2 (turn) --
@@ -61,8 +65,12 @@ Settings: relative to window 1
     <MODEL_INSTRUCTIONS>
 02:message/developer:
     <MODEL_INSTRUCTIONS>
-03:message/developer:
-    <PERMISSIONS_INSTRUCTIONS>
+03:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <tools>
+        Deferred tool namespaces:
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
 04:message/developer[3]:
     [01] <context_window>
     [02]

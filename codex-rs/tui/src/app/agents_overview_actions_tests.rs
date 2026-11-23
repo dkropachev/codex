@@ -48,9 +48,28 @@ async fn pin_action_updates_shared_section_state() -> Result<()> {
         assert_eq!(
             threads
                 .iter()
-                .any(|thread| thread.id == started.session.thread_id.to_string()),
+                .any(|(thread, _)| thread.id == started.session.thread_id.to_string()),
             pinned
         );
+        // Pin completion starts a dashboard refresh on the same channel. Finish it before
+        // the next action so its reply cannot race that action's pin completion.
+        if let Some(refresh_request_id) = app.agents_overview.request_id {
+            let refreshed =
+                tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), rx.recv())
+                    .await
+                    .expect("dashboard refresh finishes before the next action")
+                    .expect("dashboard refresh completes");
+            assert!(
+                matches!(
+                    &refreshed,
+                    AppEvent::AgentsOverviewThreadsLoaded { request_id, result: Ok(_) }
+                        if *request_id == refresh_request_id
+                ),
+                "unexpected dashboard refresh: {refreshed:?}"
+            );
+            Box::pin(app.handle_event(&mut tui, &mut app_server, refreshed)).await?;
+            assert_eq!(app.agents_overview.request_id, None);
+        }
     }
 
     app_server.shutdown().await?;
@@ -481,8 +500,8 @@ async fn hiding_tasks_keeps_selection_adjacent_in_display_order() -> Result<()> 
             app.agents_overview.visible_thread_ids = view.thread_ids();
             app.chat_widget.show_bottom_pane_view(Box::new(view));
             let expected = match (grouping, filtered) {
-                // The preceding filtered case retains Other 2; rediscovered tasks append.
-                (AgentsOverviewGrouping::Status, false) => vec![3, 1, 4, 2],
+                // Status displays tasks newest first: 4, 3, 2, 1.
+                (AgentsOverviewGrouping::Status, false) => vec![3, 2, 1, 4],
                 (AgentsOverviewGrouping::Status, true) => vec![3, 1, 4],
                 (
                     AgentsOverviewGrouping::Project
@@ -654,7 +673,8 @@ async fn hidden_task_stays_hidden_through_activity_and_seed_until_explicit_resum
         &app_server,
         request_id,
         Ok(AgentsOverviewThreadRefresh {
-            threads: HashMap::from([(id, Some(thread.clone()))]),
+            cleared_unread: Vec::new(),
+            threads: HashMap::from([(id, Some((thread.clone(), false)))]),
             last_messages: HashMap::new(),
             recent_seed_complete: true,
             discovery: None,
@@ -935,7 +955,11 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
             &app_server,
             request_id,
             Ok(AgentsOverviewThreadRefresh {
-                threads: stale_threads,
+                cleared_unread: Vec::new(),
+                threads: stale_threads
+                    .into_iter()
+                    .map(|(id, thread)| (id, thread.map(|thread| (thread, false))))
+                    .collect(),
                 last_messages: HashMap::new(),
                 recent_seed_complete: true,
                 discovery: None,
@@ -1038,6 +1062,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
             .send(AppEvent::AgentsOverviewThreadsLoaded {
                 request_id,
                 result: Ok(AgentsOverviewThreadRefresh {
+                    cleared_unread: Vec::new(),
                     threads: HashMap::new(),
                     last_messages: HashMap::new(),
                     recent_seed_complete: true,

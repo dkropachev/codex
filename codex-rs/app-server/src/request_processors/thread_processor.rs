@@ -32,6 +32,7 @@ use codex_app_server_protocol::ThreadSampleParams;
 use codex_app_server_protocol::ThreadSampleResponse;
 use codex_app_server_protocol::ThreadSection;
 use codex_app_server_protocol::ThreadSectionAppearance;
+use codex_app_server_protocol::ThreadSectionChangedNotification;
 use codex_app_server_protocol::ThreadSectionMoveParams;
 use codex_app_server_protocol::ThreadSectionMoveResponse;
 use codex_config::types::WindowsSandboxModeToml;
@@ -785,6 +786,7 @@ impl ThreadRequestProcessor {
 
     pub(crate) async fn thread_section_move(
         &self,
+        request_id: ConnectionRequestId,
         params: ThreadSectionMoveParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let ThreadSectionMoveParams {
@@ -812,17 +814,23 @@ impl ThreadRequestProcessor {
             })
             .transpose()?;
 
-        {
-            let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-            self.thread_manager
-                .move_thread_to_section(thread_uuid, section_id.as_deref(), before_thread_uuid)
-                .await
-                .map_err(|err| core_thread_write_error("move thread in section", err))?;
-        }
-
-        Ok(Some(ClientResponsePayload::ThreadSectionMove(
-            ThreadSectionMoveResponse {},
-        )))
+        let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        self.thread_manager
+            .move_thread_to_section(thread_uuid, section_id.as_deref(), before_thread_uuid)
+            .await
+            .map_err(|err| core_thread_write_error("move thread in section", err))?;
+        self.outgoing
+            .send_response(request_id, ThreadSectionMoveResponse {})
+            .await;
+        self.outgoing
+            .send_server_notification(ServerNotification::ThreadSectionChanged(
+                ThreadSectionChangedNotification {
+                    thread_id: thread_uuid.to_string(),
+                    section_id,
+                },
+            ))
+            .await;
+        Ok(None)
     }
 
     pub(crate) async fn thread_memory_mode_set(
@@ -6127,7 +6135,7 @@ fn xcode_26_4_mcp_elicitations_auto_deny(
 const THREAD_TURNS_DEFAULT_LIMIT: usize = 25;
 const THREAD_TURNS_MAX_LIMIT: usize = 100;
 const THREAD_ITEMS_DEFAULT_LIMIT: usize = 25;
-const THREAD_ITEMS_MAX_LIMIT: usize = 100;
+pub(super) const THREAD_ITEMS_MAX_LIMIT: usize = 100;
 const THREAD_SEARCH_OCCURRENCES_DEFAULT_LIMIT: usize = 50;
 const THREAD_SEARCH_OCCURRENCES_MAX_LIMIT: usize = 250;
 

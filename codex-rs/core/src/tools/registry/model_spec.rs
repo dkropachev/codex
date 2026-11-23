@@ -1,6 +1,7 @@
 //! Keeps per-step model specs separate from shared execution runtimes.
 
 use super::CoreToolRuntime;
+use super::NativeReview;
 use super::ToolExposure;
 use super::ToolRegistry;
 use codex_tools::FunctionsNamespaceFunctionPrefixes;
@@ -14,6 +15,7 @@ use std::sync::Arc;
 pub(crate) struct RegisteredTool {
     pub(crate) runtime: Arc<dyn CoreToolRuntime>,
     pub(crate) exposure: ToolExposure,
+    pub(crate) native_review: NativeReview,
     /// Per-step description override; never written back to a shared runtime.
     pub(crate) model_spec: Option<Arc<ToolSpec>>,
 }
@@ -79,6 +81,7 @@ impl ToolRegistry {
         RegisteredTool {
             runtime,
             exposure,
+            native_review: NativeReview::Disabled,
             model_spec,
         }
     }
