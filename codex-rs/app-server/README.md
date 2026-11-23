@@ -182,10 +182,12 @@ later. Existing trust decisions and permission checks for projects are unchanged
 # Review delivery
 
 `review/start` runs the review on the supplied thread and returns that same
-`reviewThreadId`. Clients can omit `delivery`, send `null`, or specify `"inline"`.
-Clients that used `"detached"` should call `thread/start` and pass the new thread id
-to `review/start`. To keep the original conversation history with custom review
-instructions, use `thread/fork` followed by `turn/start`.
+`reviewThreadId` when clients omit `delivery`, send `null`, or specify `"inline"`.
+For non-paginated threads, `"detached"` starts a separate review thread and returns
+its ID as `reviewThreadId`. Paginated threads reject detached delivery; clients
+can instead call `thread/start` and pass the new thread ID to `review/start`.
+To keep the original conversation history with custom review instructions, use
+`thread/fork` followed by `turn/start`.
 
 # Thread removal
 

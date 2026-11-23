@@ -31,6 +31,7 @@ use codex_protocol::account::ProviderAccountPoolMember;
 use codex_protocol::auth::RefreshTokenFailedError;
 use codex_protocol::error::CodexErr;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_runtime_agent_instance::RuntimeAuth;
 use codex_runtime_agent_instance::RuntimeAuthManager;
 use http::HeaderValue;
 
@@ -853,13 +854,16 @@ impl ModelProvider for ConfiguredModelProvider {
     ) -> ModelProviderFuture<'_, codex_protocol::error::Result<(Provider, SharedAuthProvider)>>
     {
         Box::pin(async move {
+            if self.runtime_auth.is_some() {
+                let resolved = self.resolve_auth(/*scope*/ None).await?;
+                let provider = self
+                    .api_provider_for_auth(resolved.runtime.as_ref().map(RuntimeAuth::auth))
+                    .await?;
+                return Ok((provider, resolved.auth));
+            }
             let auth = self.auth().await;
             let provider = self.api_provider_for_auth(auth.as_ref()).await?;
-            let primary = resolve_provider_auth(auth.as_ref(), &self.info)?;
-            let auth = self
-                .compose_auth(ResolvedProviderAuth::new(primary))
-                .await?
-                .auth;
+            let auth = self.api_auth_for_auth(auth.as_ref()).await?;
             Ok((provider, auth))
         })
     }

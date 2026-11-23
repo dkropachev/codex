@@ -4,18 +4,13 @@
 use crate::GuardianApprovalRequest;
 use crate::GuardianMcpAnnotations;
 use crate::GuardianNetworkAccessTrigger;
-use crate::prompt::guardian_truncate_text;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::SandboxPermissions;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_utils_path_uri::LegacyAppPathString;
 use serde::Serialize;
-use serde::ser::Error as _;
 use serde_json::Value;
-
-const GUARDIAN_MAX_ACTION_BYTES: usize = 200_000;
-const GUARDIAN_MAX_ACTION_STRING_TOKENS: usize = 16_000;
 
 #[derive(Serialize)]
 struct CommandApprovalAction<'a> {
@@ -249,68 +244,6 @@ pub fn format_guardian_action_pretty(
         codex_guardian_context::action_for_review(guardian_approval_request_to_json(action)?);
     value.sort_all_objects();
     serde_json::to_string_pretty(&value)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FormattedGuardianAction {
-    pub text: String,
-    pub truncated: bool,
-}
-
-pub fn format_guardian_action_pretty_with_metadata(
-    action: &GuardianApprovalRequest,
-) -> serde_json::Result<FormattedGuardianAction> {
-    let value =
-        codex_guardian_context::action_for_review(guardian_approval_request_to_json(action)?);
-    let (value, truncated) = truncate_guardian_action_value(value);
-    let text = enforce_guardian_action_byte_limit(serde_json::to_string_pretty(&value)?)?;
-    Ok(FormattedGuardianAction { text, truncated })
-}
-
-fn truncate_guardian_action_value(value: Value) -> (Value, bool) {
-    match value {
-        Value::String(text) => {
-            let (text, truncated) =
-                guardian_truncate_text(&text, GUARDIAN_MAX_ACTION_STRING_TOKENS);
-            (Value::String(text), truncated)
-        }
-        Value::Array(values) => {
-            let mut truncated = false;
-            let values = values
-                .into_iter()
-                .map(|value| {
-                    let (value, value_truncated) = truncate_guardian_action_value(value);
-                    truncated |= value_truncated;
-                    value
-                })
-                .collect();
-            (Value::Array(values), truncated)
-        }
-        Value::Object(values) => {
-            let mut entries = values.into_iter().collect::<Vec<_>>();
-            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-            let mut truncated = false;
-            let values = entries
-                .into_iter()
-                .map(|(key, value)| {
-                    let (value, value_truncated) = truncate_guardian_action_value(value);
-                    truncated |= value_truncated;
-                    (key, value)
-                })
-                .collect();
-            (Value::Object(values), truncated)
-        }
-        other => (other, false),
-    }
-}
-
-fn enforce_guardian_action_byte_limit(text: String) -> serde_json::Result<String> {
-    if text.len() > GUARDIAN_MAX_ACTION_BYTES {
-        return Err(serde_json::Error::custom(format!(
-            "Guardian action exceeds the {GUARDIAN_MAX_ACTION_BYTES}-byte review limit"
-        )));
-    }
-    Ok(text)
 }
 
 #[cfg(test)]

@@ -15,6 +15,79 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 #[tokio::test]
+async fn combined_provider_auth_preserves_runtime_authentication() {
+    for mode in [RuntimeAuthMode::DualHeader, RuntimeAuthMode::AssertionOnly] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/register"))
+            .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+                "runtime_agent_instance_id": "runtime-a",
+                "agent_host_id": "host-a",
+                "actor": {"kind":"platform", "user_id":"user-a", "organization_id":"org-a", "project_id":"project-a"},
+            })))
+            .expect(/*r*/ 1)
+            .mount(&server)
+            .await;
+        let credentials = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("key-a"));
+        let context = crate::ProviderAuthContext {
+            runtime_auth: Some((runtime_manager(&server, Arc::clone(&credentials)), mode)),
+            credentials,
+        };
+        let mut info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+        info.env_http_headers = None;
+        let (provider, auth) = context
+            .model_provider(info)
+            .api_provider_and_auth()
+            .await
+            .unwrap();
+        assert_eq!(provider.base_url, "https://api.openai.com/v1");
+        let headers = auth
+            .apply_auth_headers(http::HeaderMap::new())
+            .await
+            .unwrap();
+        match mode {
+            RuntimeAuthMode::DualHeader => {
+                assert_eq!(headers["authorization"], "Bearer key-a");
+                assert!(headers.contains_key("x-openai-agent-assertion"));
+            }
+            RuntimeAuthMode::AssertionOnly => {
+                assert!(
+                    headers["authorization"]
+                        .to_str()
+                        .unwrap()
+                        .starts_with("AgentAssertion ")
+                );
+                assert!(!headers.contains_key("x-openai-agent-assertion"));
+            }
+        }
+        server.verify().await;
+    }
+}
+
+#[tokio::test]
+async fn combined_provider_auth_rejects_independent_provider_credentials() {
+    let server = MockServer::start().await;
+    let credentials = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("key-a"));
+    let context = crate::ProviderAuthContext {
+        runtime_auth: Some((
+            runtime_manager(&server, Arc::clone(&credentials)),
+            RuntimeAuthMode::AssertionOnly,
+        )),
+        credentials,
+    };
+    let mut info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    info.experimental_bearer_token = Some("provider-token".into());
+    let error = context
+        .model_provider(info)
+        .api_provider_and_auth()
+        .await
+        .err()
+        .expect("runtime authentication must not replace independent provider credentials");
+    assert!(error.to_string().contains("selected OpenAI credential"));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn provider_auth_rejects_selectors_that_do_not_match_the_registered_actor() {
     for mode in [RuntimeAuthMode::DualHeader, RuntimeAuthMode::AssertionOnly] {
         for selector in ["chatgpt-account-id", "openai-organization"] {
@@ -82,6 +155,12 @@ async fn provider_auth_rejects_selectors_that_do_not_match_the_registered_actor(
                 error.details(),
                 codex_protocol::error::CodexErrorDetails::UnsupportedOperation(_)
             ));
+            assert!(error.to_string().contains(selector));
+            let error = provider
+                .api_provider_and_auth()
+                .await
+                .err()
+                .expect("combined auth must reject mismatched selectors");
             assert!(error.to_string().contains(selector));
             assert!(!server.received_requests().await.unwrap().is_empty());
         }
@@ -213,6 +292,16 @@ async fn unsupported_openai_destinations_do_not_fall_back_to_bearer_auth() {
                 .await
                 .err()
                 .expect("unsupported inference origin");
+            assert!(
+                error
+                    .to_string()
+                    .contains("does not support this OpenAI endpoint")
+            );
+            let error = provider
+                .api_provider_and_auth()
+                .await
+                .err()
+                .expect("combined auth must reject unsupported inference origins");
             assert!(
                 error
                     .to_string()
