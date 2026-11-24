@@ -59,6 +59,8 @@ fn compaction_started_on_turn(id: &str, turn_id: &str) -> ServerNotification {
 
 fn compaction_completed_on_turn(id: &str, turn_id: &str) -> ServerNotification {
     ServerNotification::ItemCompleted(ItemCompletedNotification {
+        content_token_count: None,
+
         thread_id: "thread-1".to_string(),
         turn_id: turn_id.to_string(),
         completed_at_ms: 0,

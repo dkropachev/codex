@@ -1,0 +1,182 @@
+---
+source: core/tests/suite/scenarios_web_search.rs
+assertion_line: 346
+expression: "context_snapshot::format_request_history_snapshot(\"MCP returns a paper reference. A discovery outage withholds native search, then MCP opens the same reference after recovery. Switching to a standalone model retains the history.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+---
+Scenario: MCP returns a paper reference. A discovery outage withholds native search, then MCP opens the same reference after recovery. Switching to a standalone model retains the history.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  model: "hosted-paper"
+  parallel_tool_calls: true
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+  tools (9; hash=636ac43c2e563357):
+    - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
+    - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
+    - function/list_mcp_resources: Lists resources provided by MCP servers. Resources allow servers to share data that provides cont...; args=[cursor, server]; hash=6792edaff13561bd
+    - function/list_mcp_resource_templates: Lists resource templates provided by MCP servers. Parameterized resource templates allow servers ...; args=[cursor, server]; hash=60f17c90ef7a4ebb
+    - function/read_mcp_resource: Read a specific resource from an MCP server given the server name and resource URI.; args=[server, uri]; hash=24246896b39008ae
+    - function/request_user_input: Request user input for one to three short questions and wait for the response. Set autoResolution...; args=[autoResolutionMs, questions]; hash=dbb20a8935aee54b
+    - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[path]; hash=1908de9c0be7118a
+    - tool_search: # Tool discovery  Searches over deferred tool metadata with BM25 and exposes matching tools for t...; args=[limit, query]; hash=b573ed69c0b0e6c7
+-- request 1 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer[3]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <APPS_INSTRUCTIONS>
+    [03] <tools>
+        Deferred tool namespaces:
+        - mcp__codex_apps__search_service: Tools for working with search_service.
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+04:message/user:
+    <ENVIRONMENT_CONTEXT>
+05:message/user:
+    Find the FlashAttention-2 paper.
+-- request 2 (turn) --
+06:tool_search_call
+07:tool_search_output
+-- request 3 (turn) --
+08:function_call/mcp__codex_apps__search_service._web_run:{"literature_search_query":[{"q":"FlashAttention-2"}]}
+09:function_call_output:Wall time: <DURATION> seconds
+    Output: | [turn0academia0] FlashAttention-2 by Tri Dao.
+-- request 4 (turn) --
+10:message/assistant:
+    The paper is by Tri Dao.
+11:message/developer:
+    <tools>
+    Removed deferred tool namespaces:
+    - mcp__codex_apps__search_service: Tools for working with search_service.
+    </tools>
+12:message/user:
+    Open the paper and check its speedup.
+-- request 5 (turn) --
+13:message/assistant:
+    Search is temporarily unavailable.
+14:message/developer:
+    <tools>
+    Added deferred tool namespaces:
+    - mcp__codex_apps__search_service: Tools for working with search_service.
+    </tools>
+15:message/user:
+    Try opening the same paper again.
+-- request 6 (turn) --
+16:tool_search_call
+17:tool_search_output
+-- request 7 (turn) --
+18:function_call/mcp__codex_apps__search_service._web_run:{"open":[{"ref_id":"turn0academia0"}]}
+19:function_call_output:Wall time: <DURATION> seconds
+    Output: | The paper reports a 2x speedup.
+
+## Window 2 (after request 7)
+Settings: relative to window 1
+  model: "native-paper"
+  tools (10; hash=1b8fe197e5a70daf):
+    + namespace/web: Tools in the web namespace.; hash=0037b1ed8d50fab5
+      - function/run
+-- request 8 (turn) --
+00:message/developer:
+    <MODEL_INSTRUCTIONS>
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer[3]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <APPS_INSTRUCTIONS>
+    [03] <tools>
+        Deferred tool namespaces:
+        - mcp__codex_apps__search_service: Tools for working with search_service.
+        - multi_agent_v1: Tools for spawning and managing sub-agents.
+        </tools>
+04:message/user:
+    <ENVIRONMENT_CONTEXT>
+05:message/user:
+    Find the FlashAttention-2 paper.
+06:tool_search_call
+07:tool_search_output
+08:function_call/mcp__codex_apps__search_service._web_run:{"literature_search_query":[{"q":"FlashAttention-2"}]}
+09:function_call_output:Wall time: <DURATION> seconds
+    Output: | [turn0academia0] FlashAttention-2 by Tri Dao.
+10:message/assistant:
+    The paper is by Tri Dao.
+11:message/developer:
+    <tools>
+    Removed deferred tool namespaces:
+    - mcp__codex_apps__search_service: Tools for working with search_service.
+    </tools>
+12:message/user:
+    Open the paper and check its speedup.
+13:message/assistant:
+    Search is temporarily unavailable.
+14:message/developer:
+    <tools>
+    Added deferred tool namespaces:
+    - mcp__codex_apps__search_service: Tools for working with search_service.
+    </tools>
+15:message/user:
+    Try opening the same paper again.
+16:tool_search_call
+17:tool_search_output
+18:function_call/mcp__codex_apps__search_service._web_run:{"open":[{"ref_id":"turn0academia0"}]}
+19:function_call_output:Wall time: <DURATION> seconds
+    Output: | The paper reports a 2x speedup.
+20:message/assistant:
+    It reports a 2x speedup.
+21:message/developer:
+    <model_switch>
+    The user was previously using a different model. Please continue the conversation according to the following instructions:
+
+    Base instructions, part 1. Concatenate consecutive payloads without separators to obtain the complete instructions.
+    Payload (9249 UTF-8 bytes):
+    <model_switch>
+    The user was previously using a different model. Please continue the conversation according to the following instructions:
+
+    <OMITTED 49 LINES; ~1840 TOKENS; hash=288f68999a7654cb>
+    - For landing-page heroes, make the H1 the brand/product/place/person name or a literal offer/category; ...ive value props in supporting copy, not the headline. [hash=dc5206ffe4cccaad]
+    - Websites and games must use visual assets. You can use image search, known relevant images, or generat...specific game assets you use custom SVG/Three.js/etc. [hash=73bcc3ec23735236]
+    - For games or interactive tools with well-established rules, physics, parsing, or AI engines, you use a...er explicitly asks for a from-scratch implementation. [hash=61ff530849642482]
+    - You use Three.js for 3D elements, and make the primary 3D scene full-bleed or unframed and not inside ...renced assets render as intended without overlapping. [hash=d3babc719899ea1f]
+    - You do not put UI cards inside other cards. Do not style page sections as floating cards. Only use car...s or unframed layouts with constrained inner content. [hash=1a6ee6f0b8e59e4e]
+    - You do not add discrete orbs, gradient orbs, or bokeh blobs as decoration or backgrounds.
+    - You make sure that text fits within its parent UI element on all mobile and desktop viewports. Move it to a new line if need
+    </model_switch>
+22:message/developer:
+    <MODEL_SWITCH>
+23:message/developer:
+    <model_switch>
+    The user was previously using a different model. Please continue the conversation according to the following instructions:
+
+    Base instructions, part 3. Concatenate consecutive payloads without separators to obtain the complete instructions.
+    Payload (3141 UTF-8 bytes):
+    e are only one or two concrete changes, a clean prose close-out is usually the most humane shape.
+
+    - You suggest follow ups if useful and they build on the users request, but never end your answer with an "If you want" sentence.
+    <OMITTED 18 LINES; ~579 TOKENS; hash=6ae2849805839ee4>
+    - When working for a while, you keep updates informative and varied, but you stay concise.
+    - Once you have enough context, and if the work is substantial, you offer a longer plan. This is the onl...at may run past two sentences and include formatting. [hash=a4f9789e757eef2f]
+    - If you create a checklist or task list, you update item statuses incrementally as each item is completed rather than marking every item done only at the end.
+    - Before performing file edits of any kind, you provide updates explaining what edits you are making.
+    - Tone of your updates must match your personality.
+
+    </model_switch>
+    </model_switch>
+24:message/developer:
+    <tools>
+    Removed deferred tool namespaces:
+    - mcp__codex_apps__search_service: Tools for working with search_service.
+    </tools>
+25:message/user:
+    Summarize the result.

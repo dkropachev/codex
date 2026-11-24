@@ -88,6 +88,7 @@ use tracing::info;
 use tracing::warn;
 
 mod bem;
+mod caller_sideband;
 mod existing_call;
 mod sideband;
 mod transcript_tail;
@@ -160,12 +161,17 @@ impl RealtimeHandoffAdmission {
         Ok(())
     }
 
-    async fn record_transcript(&self, session: &Session, text: String) -> std::io::Result<()> {
+    async fn record_transcript(
+        &self,
+        session: &Session,
+        text: String,
+        source: RealtimeDelegationSource,
+    ) -> std::io::Result<()> {
         let Ok(_permit) = self.gate.acquire().await else {
             return Ok(());
         };
         if !self.retired.load(Ordering::Acquire) {
-            transcript_tail::record(session, text).await?;
+            transcript_tail::record(session, text, source).await?;
         }
         Ok(())
     }
@@ -544,6 +550,7 @@ struct ConversationState {
 }
 
 struct RealtimeStart {
+    sideband: Option<codex_protocol::protocol::RealtimeSidebandTransport>,
     api_provider: ApiProvider,
     http_client_factory: HttpClientFactory,
     realtime_sideband_base_url: Option<String>,
@@ -661,6 +668,7 @@ impl RealtimeConversationManager {
     ) -> CodexResult<RealtimeStartOutput> {
         let session_id = start.session_config.session_id.clone();
         let RealtimeStart {
+            sideband,
             api_provider,
             http_client_factory,
             realtime_sideband_base_url,
@@ -727,7 +735,29 @@ impl RealtimeConversationManager {
             enabled: flush_transcript_tail_on_session_end,
             tx: transcript_tail_tx,
         };
-        let (task, sdp) = if let Some(sdp) = sdp {
+        // Use the sideband transport passed from outside.
+        let (task, sdp) = if let Some(transport) = sideband {
+            // Existing naming uses websocket, actual link is defined by the transport.
+            let connection =
+                codex_api::RealtimeWebsocketConnection::from_sideband(transport, event_parser);
+
+            let task = caller_sideband::spawn_input_task(
+                RealtimeInputTask {
+                    writer: connection.writer(),
+                    events: connection.events(),
+                    text_rx: input_channels.text_rx,
+                    handoff_output_rx: input_channels.handoff_output_rx,
+                    audio_rx: input_channels.audio_rx,
+                    events_tx,
+                    handoff_state: handoff.clone(),
+                    session_kind,
+                    event_parser,
+                    stop_token: stop_token.clone(),
+                },
+                transcript_tail_flush,
+            );
+            (task, None)
+        } else if let Some(sdp) = sdp {
             let call = model_client
                 .create_realtime_call_with_headers(
                     sdp,
@@ -1338,6 +1368,7 @@ pub(crate) async fn handle_start(
 }
 
 struct PreparedRealtimeConversationStart {
+    sideband: Option<codex_protocol::protocol::RealtimeSidebandTransport>,
     api_provider: ApiProvider,
     http_client_factory: HttpClientFactory,
     realtime_sideband_base_url: Option<String>,
@@ -1498,6 +1529,7 @@ async fn prepare_realtime_start(
         extra_headers.insert(X_CODEX_TURN_METADATA_HEADER, metadata);
     }
     Ok(PreparedRealtimeConversationStart {
+        sideband: None,
         api_provider,
         http_client_factory,
         realtime_sideband_base_url,
@@ -1723,6 +1755,7 @@ async fn handle_start_inner(
     prepared_start: PreparedRealtimeConversationStart,
 ) -> CodexResult<()> {
     let PreparedRealtimeConversationStart {
+        sideband,
         api_provider,
         http_client_factory,
         realtime_sideband_base_url,
@@ -1753,6 +1786,7 @@ async fn handle_start_inner(
         end: realtime_end_instructions,
     };
     let start = RealtimeStart {
+        sideband,
         api_provider,
         http_client_factory,
         realtime_sideband_base_url,
@@ -1813,17 +1847,14 @@ async fn handle_start_inner(
         let mut handoff_error = None;
         // Drain already-parsed events so a queued handoff is routed before the final tail.
         while let Ok((event, completed)) = events_rx.recv().await {
-            if let Some(delta) = completed {
-                let text = wrap_realtime_delegation_input(
-                    "",
-                    Some(&delta),
-                    RealtimeDelegationSource::Handoff,
-                );
-                if let Err(err) = route_handoffs.record_transcript(&sess_clone, text).await {
-                    warn!("failed to save realtime transcript: {err}");
-                    handoff_error = Some("failed to save the realtime transcript");
-                    break;
-                }
+            if let Some(text) = completed
+                && let Err(err) = route_handoffs
+                    .record_transcript(&sess_clone, text, RealtimeDelegationSource::Handoff)
+                    .await
+            {
+                warn!("failed to save realtime transcript: {err}");
+                handoff_error = Some("failed to save the realtime transcript");
+                break;
             }
             match &event {
                 RealtimeEvent::AudioOut(_) => {}
@@ -1861,7 +1892,13 @@ async fn handle_start_inner(
         drop(events_rx);
         if handoff_error.is_none()
             && let Ok(text) = transcript_tail_rx.recv().await
-            && let Err(err) = route_handoffs.record_transcript(&sess_clone, text).await
+            && let Err(err) = route_handoffs
+                .record_transcript(
+                    &sess_clone,
+                    text,
+                    RealtimeDelegationSource::TranscriptTailFlush,
+                )
+                .await
         {
             warn!("failed to flush realtime transcript before closure: {err}");
             handoff_error = Some("failed to save the realtime transcript before closure");
@@ -2077,6 +2114,28 @@ pub(crate) async fn handle_attach(
     params: ConversationStartParams,
 ) -> CodexResult<()> {
     let prepared = prepare_realtime_start(sess, params).await?;
+    handle_start_inner(sess, &sub_id, prepared).await
+}
+
+/// Attaches Core to an existing call using the caller’s channels to receive
+/// events and send commands.
+pub(crate) async fn handle_attach_stream(
+    sess: &Arc<Session>,
+    sub_id: String,
+    params: ConversationStartParams,
+    transport: codex_protocol::protocol::RealtimeSidebandTransport,
+) -> CodexResult<()> {
+    if !matches!(
+        &params.transport,
+        Some(ConversationStartTransport::ExistingCall { .. })
+    ) {
+        return Err(CodexErr::InvalidRequest(
+            "sideband stream requires an existing call".into(),
+        ));
+    }
+
+    let mut prepared = prepare_realtime_start(sess, params).await?;
+    prepared.sideband = Some(transport);
     handle_start_inner(sess, &sub_id, prepared).await
 }
 
@@ -2854,6 +2913,7 @@ async fn send_conversation_error(
             misalignment: None,
             message,
             codex_error_info: Some(codex_error_info),
+            rejected_audio_file_ids: Vec::new(),
         }),
     })
     .await;

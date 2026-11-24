@@ -174,7 +174,9 @@ mod tests {
             let expression = format!("new Uint8Array({length}).fill(90)");
             let value = evaluate_script(scope, &expression);
             let view = v8::Local::<v8::ArrayBufferView>::try_from(value).unwrap();
-            let on_heap = uses_inline_typed_array_storage(length, v8::TYPED_ARRAY_MAX_SIZE_IN_HEAP);
+            // Empty arrays need no backing buffer even when nonempty inline storage is disabled.
+            let on_heap = length == 0
+                || uses_inline_typed_array_storage(length, v8::TYPED_ARRAY_MAX_SIZE_IN_HEAP);
             // Check native placement before asking C++ to copy into storage:
             // stale size-zero bindings must fail here rather than abort in FFI.
             assert_eq!(view.has_buffer(), !on_heap, "byte length {length}");
@@ -183,7 +185,7 @@ mod tests {
             let storage_ptr = storage.as_ptr();
             let contents = view.get_contents(&mut storage);
             assert_eq!(contents, vec![90; length], "byte length {length}");
-            if on_heap {
+            if on_heap && length > 0 {
                 assert_eq!(contents.as_ptr(), storage_ptr);
             }
             // Reading inline contents copies bytes without promoting the view.

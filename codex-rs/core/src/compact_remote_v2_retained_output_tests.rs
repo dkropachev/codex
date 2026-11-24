@@ -65,15 +65,19 @@ fn retained_tool_outputs_enforce_item_cap_in_all_budget_paths(
             items,
             RETAINED_MESSAGE_TOKEN_BUDGET,
             RetainedImageBudget::Enabled,
+            &FileAudioDurations::default(),
         ),
         RetainedBudgetPath::ImagesDisabled => truncate_retained_messages(
             items,
             RETAINED_MESSAGE_TOKEN_BUDGET,
             RetainedImageBudget::Disabled,
+            &FileAudioDurations::default(),
         ),
-        RetainedBudgetPath::FreshWindow => {
-            truncate_retained_messages_for_remote_compaction(items, RETAINED_MESSAGE_TOKEN_BUDGET)
-        }
+        RetainedBudgetPath::FreshWindow => truncate_retained_messages_for_remote_compaction(
+            items,
+            RETAINED_MESSAGE_TOKEN_BUDGET,
+            &FileAudioDurations::default(),
+        ),
     };
 
     // Guard large values before pretty equality so a cap regression has a bounded diff.

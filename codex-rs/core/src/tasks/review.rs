@@ -5,7 +5,6 @@ use codex_features::Feature;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_prompts::render_review_exit_interrupted;
 use codex_prompts::render_review_exit_success;
-use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::ExitedReviewModeItem;
 use codex_protocol::items::TurnItem;
@@ -315,7 +314,7 @@ pub(crate) async fn exit_review_mode(
             &[ResponseItem::Message {
                 status: None,
                 encrypted_content: None,
-                id: Some(ResponseItemId::new("msg")),
+                id: Some((session.item_id_generator)("msg")),
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text: user_message }],
                 phase: None,
@@ -337,7 +336,7 @@ pub(crate) async fn exit_review_mode(
             ResponseItem::Message {
                 status: None,
                 encrypted_content: None,
-                id: Some(ResponseItemId::new("msg")),
+                id: Some((session.item_id_generator)("msg")),
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
                     annotations: None,

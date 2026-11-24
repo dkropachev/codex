@@ -83,7 +83,10 @@ fn bounded_history_preserves_complete_instructions_metadata_and_identity() -> se
     );
     let text = "Quoted Unicode: \"診断\"\n".repeat(8_000);
     let mut original = ContextualUserFragment::into(BaseInstructionsFragment(text.clone()));
-    original.set_id(Some(ResponseItemId::new("msg")));
+    original.set_id(Some(ResponseItemId::with_suffix(
+        "msg",
+        uuid::Uuid::now_v7(),
+    )));
     if let ResponseItem::Message {
         internal_chat_message_metadata_passthrough: Some(metadata),
         ..

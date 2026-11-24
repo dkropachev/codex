@@ -173,6 +173,8 @@ fn stuck_collector_does_not_block_runtime_shutdown() -> Result<()> {
             drop(server);
             Ok::<_, anyhow::Error>(())
         })?;
+        let shutdown_marker = std::path::PathBuf::from(shutdown_marker);
+        std::fs::write(shutdown_marker.with_extension("started"), "")?;
         drop(runtime);
         std::fs::write(shutdown_marker, "runtime dropped")?;
         return Ok(());

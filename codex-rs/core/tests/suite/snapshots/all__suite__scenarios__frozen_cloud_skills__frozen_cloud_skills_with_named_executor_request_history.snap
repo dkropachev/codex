@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios_frozen_cloud_skills.rs
-assertion_line: 142
 expression: "context_snapshot::format_context_snapshot(\"A cloud parent lists and reads a frozen skill alongside a named executor after the snapshot file has been removed.\",\n&bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: A cloud parent lists and reads a frozen skill alongside a named executor after the snapshot file has been removed.
@@ -17,8 +16,8 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (request) --
-00:additional_tools/developer (3; hash=cdab27dffd3ba5b9):
-        - namespace/functions; hash=b862f50704bd4c51
+00:additional_tools/developer (3; hash=afb7ac852f1321b1):
+        - namespace/functions; hash=ce5bd2ff9eeee123
           - custom/exec
           - function/wait
           - function/request_user_input

@@ -74,6 +74,8 @@ impl SessionTask for WorkflowCommandTask {
                     .send_event(
                         turn_context.as_ref(),
                         EventMsg::Error(ErrorEvent {
+                            rejected_audio_file_ids: Vec::new(),
+
                             misalignment: None,
                             message: format!("invalid workflow run configuration: {err:#}"),
                             codex_error_info: None,
@@ -101,6 +103,8 @@ impl SessionTask for WorkflowCommandTask {
                     .send_event(
                         turn_context.as_ref(),
                         EventMsg::Error(ErrorEvent {
+                            rejected_audio_file_ids: Vec::new(),
+
                             misalignment: None,
                             message,
                             codex_error_info: None,
@@ -111,9 +115,12 @@ impl SessionTask for WorkflowCommandTask {
             }
         };
 
-        Ok(Some(
-            record_workflow_output(session, turn_context, markdown, run_config).await,
-        ))
+        Ok(Some(super::regular::RegularTaskOutput {
+            last_agent_message: Some(
+                record_workflow_output(session, turn_context, markdown, run_config).await,
+            ),
+            mcp_startup_requirements: Default::default(),
+        }))
     }
 }
 

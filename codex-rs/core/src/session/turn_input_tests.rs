@@ -781,6 +781,8 @@ async fn shell_command_cannot_replace_idle_turn_reservation() {
     assert_eq!(
         error,
         ErrorEvent {
+            rejected_audio_file_ids: Vec::new(),
+
             misalignment: None,
             message: "Cannot run a shell command while a turn is starting.".to_string(),
             codex_error_info: Some(CodexErrorInfo::BadRequest),

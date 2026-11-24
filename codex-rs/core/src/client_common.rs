@@ -42,6 +42,7 @@ pub struct Prompt {
     /// Optional per-turn verbosity control for models that support Responses
     /// API `text.verbosity`.
     pub verbosity: Option<Verbosity>,
+    pub(crate) prompt_cache_ttl: Option<crate::PromptCacheTtl>,
 
     pub(crate) cyber_access_program: Option<codex_protocol::turn_input::CyberAccessProgram>,
 }
@@ -56,6 +57,7 @@ impl Default for Prompt {
             output_schema: None,
             output_schema_strict: true,
             verbosity: None,
+            prompt_cache_ttl: None,
             cyber_access_program: None,
         }
     }

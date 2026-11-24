@@ -50,6 +50,7 @@ impl AppEventSender {
                 ) | AppEvent::RealtimeWebrtcOfferCreated { .. }
                     | AppEvent::RealtimeWebrtcConnected { .. }
                     | AppEvent::StopRealtimeConversation { .. }
+                    | AppEvent::RealtimeSessionLockStopped { .. }
                     | AppEvent::RealtimeConversationStateChanged
                     | AppEvent::BackgroundVoiceError { .. }
                     | AppEvent::SyncThreadGitBranch { .. }

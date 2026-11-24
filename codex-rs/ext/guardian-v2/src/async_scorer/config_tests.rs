@@ -135,7 +135,10 @@ fn evaluated_configuration_preserves_gate_and_caps_only_configured_prompt() {
     assert!(text.starts_with(TRANSCRIPT_JSON_INSTRUCTIONS));
     assert!(text.ends_with(CLASSIFICATION_OUTPUT_INSTRUCTIONS));
     let mut item = ResponseItem::from(rendered);
-    item.set_id(Some(ResponseItemId::new("msg")));
+    item.set_id(Some(ResponseItemId::with_suffix(
+        "msg",
+        uuid::Uuid::now_v7(),
+    )));
     assert!(guardian_model_context_item_is_bounded(&item));
 }
 
@@ -156,7 +159,10 @@ fn classifier_instructions_are_bounded_after_json_escaping() {
     assert!(text.ends_with(CLASSIFICATION_OUTPUT_INSTRUCTIONS));
 
     let mut instructions = ResponseItem::from(rendered);
-    instructions.set_id(Some(ResponseItemId::new("msg")));
+    instructions.set_id(Some(ResponseItemId::with_suffix(
+        "msg",
+        uuid::Uuid::now_v7(),
+    )));
 
     assert!(guardian_model_context_item_is_bounded(&instructions));
 }
@@ -367,6 +373,9 @@ fn model_runtime_settings_preserve_local_overrides() {
     assert!(text.starts_with(TRANSCRIPT_JSON_INSTRUCTIONS));
     assert!(text.ends_with(CLASSIFICATION_OUTPUT_INSTRUCTIONS));
     let mut item = ResponseItem::from(rendered);
-    item.set_id(Some(ResponseItemId::new("msg")));
+    item.set_id(Some(ResponseItemId::with_suffix(
+        "msg",
+        uuid::Uuid::now_v7(),
+    )));
     assert!(guardian_model_context_item_is_bounded(&item));
 }

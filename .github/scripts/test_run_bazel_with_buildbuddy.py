@@ -264,7 +264,6 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
         env = os.environ.copy()
         env["CODEX_BAZEL_BIN"] = sys.executable
         env.pop("BAZEL_OUTPUT_USER_ROOT", None)
-        env.pop("BUILDBUDDY_API_KEY", None)
         env.pop("GITHUB_ACTIONS", None)
 
         result = subprocess.run(

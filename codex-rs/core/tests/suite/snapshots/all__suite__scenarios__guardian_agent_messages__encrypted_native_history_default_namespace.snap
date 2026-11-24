@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios_guardian_agent_messages_tests.rs
-assertion_line: 265
 expression: snapshot
 ---
 Scenario: A historical MAv2 send_message call and an encrypted parent reply reach both Guardian reviews exactly once, in order. Calls retain their original IDs, namespace and encryption metadata, with a paired evidence-only output. The second review appends to the first request. Ciphertext and decisions are mocked; this verifies transport, not backend decryption or authorization outcomes.
@@ -89,8 +88,8 @@ Scenario: A historical MAv2 send_message call and an encrypted parent reply reac
 
 ## Window 3 (after request 3: input diverged at item 00, settings changed (model, parallel_tool_calls, prompt_cache_key, reasoning, text, tools))
 -- request 4 (turn) --
-00:additional_tools/developer (1; hash=35c0674abdfab0f9):
-        - namespace/functions; hash=07db9b47b01acd43
+00:additional_tools/developer (1; hash=6a58134e746f8bbf):
+        - namespace/functions; hash=e4819169cf2abf27
           - custom/exec
           - function/wait
 01:message/developer:
@@ -215,8 +214,8 @@ Scenario: A historical MAv2 send_message call and an encrypted parent reply reac
 
 ## Window 5 (after request 5: input diverged at item 00, settings changed (model, parallel_tool_calls, prompt_cache_key, reasoning, text, tools))
 -- request 6 (turn) --
-00:additional_tools/developer (1; hash=35c0674abdfab0f9):
-        - namespace/functions; hash=07db9b47b01acd43
+00:additional_tools/developer (1; hash=6a58134e746f8bbf):
+        - namespace/functions; hash=e4819169cf2abf27
           - custom/exec
           - function/wait
 01:message/developer:

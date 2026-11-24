@@ -236,6 +236,8 @@ mod tests {
             started_at_ms: 1,
         }));
         let completed = RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            content_token_count: None,
+
             thread_id,
             turn_id: "turn-1".to_string(),
             item,
@@ -282,6 +284,8 @@ mod tests {
         )));
         repeated.push(RolloutItem::EventMsg(EventMsg::ItemCompleted(
             ItemCompletedEvent {
+                content_token_count: None,
+
                 thread_id,
                 turn_id: "turn-1".to_string(),
                 item: second_item,

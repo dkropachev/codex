@@ -57,6 +57,8 @@ async fn prepare_handoff_plan_on_server(
     );
     app.chat_widget.handle_server_notification(
         ServerNotification::ItemCompleted(ItemCompletedNotification {
+            content_token_count: None,
+
             thread_id: source_thread_id.to_string(),
             turn_id: "planning-turn".to_string(),
             completed_at_ms: 0,
@@ -120,6 +122,8 @@ async fn accepted_steer_notification_invalidates_earlier_handoff_plan() -> Resul
     );
     app.chat_widget.handle_server_notification(
         ServerNotification::ItemCompleted(ItemCompletedNotification {
+            content_token_count: None,
+
             thread_id: source_thread_id.to_string(),
             turn_id: "planning-turn".to_string(),
             completed_at_ms: 0,
@@ -132,6 +136,8 @@ async fn accepted_steer_notification_invalidates_earlier_handoff_plan() -> Resul
     );
     app.chat_widget.handle_server_notification(
         ServerNotification::ItemCompleted(ItemCompletedNotification {
+            content_token_count: None,
+
             thread_id: source_thread_id.to_string(),
             turn_id: "planning-turn".to_string(),
             completed_at_ms: 0,

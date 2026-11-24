@@ -1,7 +1,6 @@
 ---
 source: core/tests/suite/scenarios_skill_catalog_dedup.rs
-assertion_line: 146
-expression: "context_snapshot::format_request_history_snapshot(\"Cloud skills replace duplicate executor listings before budgeting; unique executor skills retain their descriptions and e1 aliases across turns.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
+expression: "context_snapshot::format_request_history_snapshot(if omit_descriptions\n{\n    \"Cloud and executor skill catalogs retain names and aliases across turns with descriptions omitted.\"\n} else\n{\n    \"Cloud skills replace duplicate executor listings before budgeting; unique executor skills retain their descriptions and e1 aliases across turns.\"\n}, &requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Cloud skills replace duplicate executor listings before budgeting; unique executor skills retain their descriptions and e1 aliases across turns.
 
@@ -17,8 +16,8 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=1b8e33fab12cff2b):
-        - namespace/functions; hash=c3cf7d3beb684867
+00:additional_tools/developer (3; hash=139b37cd389e8d63):
+        - namespace/functions; hash=97aeb4eac0753f79
           - custom/exec
           - function/wait
           - function/request_user_input

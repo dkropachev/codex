@@ -38,7 +38,7 @@ pub(super) async fn review(sess: &Arc<Session>, sub_id: String, review_request: 
     } else if scope_requires_executor {
         if let Some(environment) = turn_context.initial_environments.primary() {
             let runner = ExecutorReviewCommandRunner::new(
-                environment.environment.get_exec_backend(),
+                environment.environment().get_exec_backend(),
                 &turn_context.config.permissions.shell_environment_policy,
             );
             crate::review_prompts::resolve_review_request_with_runner(
@@ -69,6 +69,8 @@ pub(super) async fn review(sess: &Arc<Session>, sub_id: String, review_request: 
             sess.send_event(
                 &turn_context,
                 EventMsg::Error(ErrorEvent {
+                    rejected_audio_file_ids: Vec::new(),
+
                     misalignment: None,
                     message: err.to_string(),
                     codex_error_info: Some(CodexErrorInfo::Other),

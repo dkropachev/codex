@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/scenarios_agent_message_board.rs
-assertion_line: 1172
+assertion_line: 1222
 expression: "context_snapshot::format_context_snapshot(\"Independent Codex runtimes share a local board: a writer publishes, an isolated Guardian reads and cannot publish.\",\n&bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
 Scenario: Independent Codex runtimes share a local board: a writer publishes, an isolated Guardian reads and cannot publish.
@@ -133,7 +133,8 @@ Scenario: Independent Codex runtimes share a local board: a writer publishes, an
 23:function_call_output:{"channel_name":"policy","enabled":true,"last_message_id":"<UUID 1>","target_agent":"/root/00000000000040008000000000000001","thread_id":null}
 24:message/assistant:
     Watching the policy board.
-25:function_call/collaboration.get_channels:{}
-26:function_call_output:{"board_permissions":{"create_channel":false,"edit_metadata":false,"manage_permissions":false},"has_more...ata":false,"post":false,"read":true,"reply":false}}]} [hash=7cc8dc25fc1c52b2]
-27:agent_message
-28:agent_message
+25:agent_message
+26:agent_message
+-- request 18 (request) --
+27:function_call/collaboration.get_channels:{}
+28:function_call_output:{"board_permissions":{"create_channel":false,"edit_metadata":false,"manage_permissions":false},"has_more...ata":false,"post":false,"read":true,"reply":false}}]} [hash=7cc8dc25fc1c52b2]

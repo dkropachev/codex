@@ -40,6 +40,17 @@ pub(super) fn truncated_path_variants(path: &str) -> Vec<String> {
         .collect()
 }
 
+/// Keep the running indicator stable in snapshots of selection and layout.
+pub(crate) fn normalize_working_snapshot(text: String) -> String {
+    let text = normalize_snapshot_paths(text)
+        .replace("◦ Working", "• Working")
+        .replace("◦ Wor…", "• Wor…");
+    regex_lite::Regex::new(r"(?m)^• Working \(\d+s")
+        .expect("valid working timer pattern")
+        .replace_all(&text, "• Working (0s")
+        .into_owned()
+}
+
 pub(crate) fn normalize_snapshot_paths(text: impl Into<String>) -> String {
     let mut text = text.into();
 
@@ -483,20 +494,6 @@ pub(super) fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> 
         s.push('\n');
     }
     s
-}
-
-impl ChatWidget {
-    pub(crate) fn status_line_text(&self) -> Option<String> {
-        self.status_line_content()
-            .cloned()
-            .map(|content| content.into_hyperlink_line().line.to_string())
-    }
-
-    pub(crate) fn status_line_content(
-        &self,
-    ) -> Option<&crate::bottom_pane::footer_content::FooterContent> {
-        self.bottom_pane.status_line_content()
-    }
 }
 
 pub(super) fn status_line_text(chat: &ChatWidget) -> Option<String> {

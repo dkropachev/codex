@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios_dynamic_tools.rs
-assertion_line: 187
 expression: "context_snapshot::format_request_history_snapshot(\"A pending release call survives replacement with deployment. The next step uses deployment. Replacement and clearing each survive restart.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
 Scenario: A pending release call survives replacement with deployment. The next step uses deployment. Replacement and clearing each survive restart.
@@ -16,7 +15,7 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (10; hash=709ab019e148dc94):
+  tools (10; hash=014c92517576d5dc):
     - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
     - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
     - function/request_user_input: Request user input for one to three short questions and wait for the response. Set autoResolution...; args=[autoResolutionMs, questions]; hash=dbb20a8935aee54b
@@ -25,7 +24,7 @@ Settings:
       - function/curr_time
       - function/sleep
     - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
-    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=3b766d5bdec5d50e
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[path]; hash=1908de9c0be7118a
     - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=8478a08e9ddf9239
       - function/followup_task
       - function/interrupt_agent
@@ -55,7 +54,7 @@ Settings:
 
 ## Window 2 (after request 1)
 Settings: relative to window 1
-  tools (10; hash=947c174bf316d9c8):
+  tools (10; hash=b42e25d45490fb70):
     - removed function/release
     + function/deployment: Check deployment.; args=[]; hash=2e9a71e9a20e43ad
 -- request 2 (turn) --
@@ -89,7 +88,7 @@ Settings: relative to window 1
 
 ## Window 3 (after request 4)
 Settings: relative to window 2
-  tools (9; hash=072b708f3ae79658):
+  tools (9; hash=b405ca65f55d4420):
     - removed function/deployment
 -- request 5 (turn) --
 00:message/developer:

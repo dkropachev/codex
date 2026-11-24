@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/skills_extension.rs
-assertion_line: 3365
 expression: "context_snapshot::format_request_history_snapshot(\"Cloud skills rebalance once to retain every executor skill. Post-turn compaction installs both catalogs and their allocation before resume; the saved catalogs remain visible while the executor reconnects.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
 ---
 Scenario: Cloud skills rebalance once to retain every executor skill. Post-turn compaction installs both catalogs and their allocation before resume; the saved catalogs remain visible while the executor reconnects.
@@ -16,13 +15,13 @@ Settings:
   stream: true
   text: {"verbosity":"low"}
   tool_choice: "auto"
-  tools (9; hash=0536c57c93b3558b):
+  tools (9; hash=311730bdfdd214b3):
     - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
     - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
     - function/wait_for_environment: Wait for the selected environment.; args=[environment_id]; hash=aac8552da86b3b20
     - function/request_user_input: Request user input for one to three short questions and wait for the response. Set autoResolution...; args=[autoResolutionMs, questions]; hash=dbb20a8935aee54b
     - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
-    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=3b766d5bdec5d50e
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[path]; hash=1908de9c0be7118a
     - namespace/skills: Tools in the skills namespace.; hash=998a720eb0f017bc
       - function/list
       - function/read

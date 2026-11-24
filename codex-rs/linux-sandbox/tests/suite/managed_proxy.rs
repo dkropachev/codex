@@ -18,6 +18,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicyContext;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_cargo_bin::cargo_bin;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::io::Read;
@@ -402,7 +403,8 @@ printf 'legacy proc fallback\n'
             "CODEX_TEST_PROTECTED_FILE".to_string(),
             protected_file.display().to_string(),
         );
-        let mut command = Command::new(env!("CARGO_BIN_EXE_codex-linux-sandbox"));
+        let mut command =
+            Command::new(cargo_bin("codex-linux-sandbox").expect("sandbox helper should exist"));
         command
             .arg("--sandbox-policy-cwd")
             .arg(std::env::current_dir().expect("current directory should exist"))
@@ -482,7 +484,8 @@ async fn unsupported_system_bwrap_falls_back_to_bundled_bwrap() {
     let sandbox_executable = tempdir.path().join("codex-linux-sandbox");
     let original_executable = codex_linux_sandbox_exe();
     if std::fs::hard_link(&original_executable, &sandbox_executable).is_err() {
-        std::fs::copy(&original_executable, &sandbox_executable).expect("copy sandbox executable");
+        codex_utils_cargo_bin::copy_executable(&original_executable, &sandbox_executable)
+            .expect("copy sandbox executable");
     }
 
     let resources_dir = tempdir.path().join("codex-resources");

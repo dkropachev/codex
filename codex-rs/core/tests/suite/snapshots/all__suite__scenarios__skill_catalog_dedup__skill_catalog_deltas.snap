@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios_skill_catalog_dedup.rs
+assertion_line: 507
 expression: "context_snapshot::format_request_history_snapshot(\"Skill additions and edits share the remaining metadata budget across turns and resume. Removals stay silent and do not refund budget. Compaction rebuilds the current catalog and resets the allowance.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Skill additions and edits share the remaining metadata budget across turns and resume. Removals stay silent and do not refund budget. Compaction rebuilds the current catalog and resets the allowance.
@@ -16,8 +17,8 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=68d6cf1d20dc114e):
-        - namespace/functions; hash=e1875bbf8d39f064
+00:additional_tools/developer (3; hash=9d1078a779c25d26):
+        - namespace/functions; hash=7d3d72aca93bf1f6
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -196,8 +197,8 @@ Settings:
 ## Window 2 (after request 7: input diverged at item 01)
 Settings: same as window 1
 -- request 8 (turn) --
-00:additional_tools/developer (3; hash=68d6cf1d20dc114e):
-        - namespace/functions; hash=e1875bbf8d39f064
+00:additional_tools/developer (3; hash=9d1078a779c25d26):
+        - namespace/functions; hash=7d3d72aca93bf1f6
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -367,8 +368,8 @@ Settings: same as window 1
 ## Window 3 (after request 11: input diverged at item 09)
 Settings: same as window 1
 -- request 12 (turn) --
-00:additional_tools/developer (3; hash=68d6cf1d20dc114e):
-        - namespace/functions; hash=e1875bbf8d39f064
+00:additional_tools/developer (3; hash=9d1078a779c25d26):
+        - namespace/functions; hash=7d3d72aca93bf1f6
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -544,8 +545,8 @@ Settings: same as window 1
 ## Window 4 (after request 18: input diverged at item 12)
 Settings: same as window 1
 -- request 19 (turn) --
-00:additional_tools/developer (3; hash=68d6cf1d20dc114e):
-        - namespace/functions; hash=e1875bbf8d39f064
+00:additional_tools/developer (3; hash=9d1078a779c25d26):
+        - namespace/functions; hash=7d3d72aca93bf1f6
           - custom/exec
           - function/wait
           - function/request_user_input

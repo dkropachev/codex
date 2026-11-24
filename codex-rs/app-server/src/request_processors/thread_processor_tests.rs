@@ -73,6 +73,8 @@ mod review_item_tests {
             assert_eq!(
                 stored_thread_item_to_entry(item).expect("review item should be accepted"),
                 Some(ThreadItemEntry {
+                    output_deferred: false,
+
                     turn_id: "turn-1".into(),
                     item: ThreadItem {
                         payload,
@@ -550,6 +552,8 @@ mod thread_processor_behavior_tests {
         let thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread");
         let stored_thread = StoredThread {
+            creator_user_id: None,
+            creator_account_id: None,
             originator: None,
             thread_id,
             extra_config: None,
