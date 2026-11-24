@@ -10,6 +10,7 @@ pub(super) use telemetry::SampledScore;
 
 use super::request::PreparedRequest;
 use super::score::PendingScore;
+use codex_protocol::ResponseItemId;
 use connection_pool::ConnectionPool;
 use std::sync::Arc;
 
@@ -26,7 +27,6 @@ use codex_http_client::HttpClientFactory;
 use codex_login::AgentIdentityAuthPolicy;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::WorkspaceRoutingContext;
-use codex_protocol::ResponseItemId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -76,6 +76,8 @@ pub struct LunaSamplerConfig {
 
 /// One tool-less Luna classification request.
 pub struct LunaSamplingRequest {
+    /// Generator selected by the owning session for response items.
+    pub item_id_generator: codex_protocol::ItemIdGenerator,
     /// Cyber selection captured from the owning turn; Daybreak reviews use Blue.
     pub cyber_access_program: Option<CyberAccessProgram>,
     /// ID of the response handling the classified tool.
@@ -227,7 +229,7 @@ impl LunaSampler {
             if item.id().is_none()
                 && let Some(prefix) = item.id_prefix()
             {
-                item.set_id(Some(ResponseItemId::new(prefix)));
+                item.set_id(Some((request.item_id_generator)(prefix)));
             }
         }
         let total_tokens = input
@@ -260,6 +262,7 @@ impl LunaSampler {
             include: Vec::new(),
             service_tier: None,
             prompt_cache_key: Some(format!("guardian-v2:{}", self.config.thread_id)),
+            prompt_cache_options: None,
             text: None,
             client_metadata: None,
             access_programs: None,
@@ -342,7 +345,10 @@ fn split_oversized_user_messages(items: Vec<ResponseItem>) -> Vec<ResponseItem> 
             if item.id().is_none()
                 && let Some(prefix) = item.id_prefix()
             {
-                item.set_id(Some(ResponseItemId::new(prefix)));
+                item.set_id(Some(ResponseItemId::with_suffix(
+                    prefix,
+                    uuid::Uuid::now_v7(),
+                )));
                 assigned_id = true;
             }
             if guardian_model_context_item_is_bounded(&item) || !assigned_id {
@@ -402,7 +408,7 @@ fn split_oversized_user_messages(items: Vec<ResponseItem>) -> Vec<ResponseItem> 
             let message = |content, start: usize, end: usize| ResponseItem::Message {
                 encrypted_content: None,
                 status: status.clone(),
-                id: Some(ResponseItemId::new("msg")),
+                id: Some(ResponseItemId::with_suffix("msg", uuid::Uuid::now_v7())),
                 role: role.clone(),
                 content,
                 phase: phase.clone(),

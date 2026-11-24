@@ -146,6 +146,12 @@ jobs:
           target: ${{ matrix.target }}
           cache-scope: bazel-${{ github.job }}
 
+      - name: Prepare native Windows audio dependencies
+        if: runner.os == 'Windows'
+        uses: ./third_party/voice/cargo-ci/windows-setup
+        with:
+          target: x86_64-pc-windows-msvc
+
       - name: Resolve app-server/exec-server compatibility releases
         if: runner.os == 'Linux'
         env:
@@ -155,8 +161,6 @@ jobs:
           echo "CODEX_COMPAT_RELEASES=$releases" >> "$GITHUB_ENV"
 
       - name: bazel build --config=clippy lint targets
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
           bazel_clippy_args=(
@@ -229,6 +233,12 @@ jobs:
           target: ${{ matrix.target }}
           cache-scope: bazel-${{ github.job }}
 
+      - name: Prepare native Windows audio dependencies
+        if: runner.os == 'Windows'
+        uses: ./third_party/voice/cargo-ci/windows-setup
+        with:
+          target: x86_64-pc-windows-msvc
+
       - name: Resolve app-server/exec-server compatibility releases
         if: runner.os == 'Linux'
         env:
@@ -238,8 +248,6 @@ jobs:
           echo "CODEX_COMPAT_RELEASES=$releases" >> "$GITHUB_ENV"
 
       - name: bazel build verify-release-build targets
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
           # This job exists to compile Rust code behind
@@ -272,8 +280,6 @@ jobs:
 
       - name: Verify Bazel builds bwrap
         if: runner.os == 'Linux'
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
           ./.github/scripts/run-bazel-ci.sh \

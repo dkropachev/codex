@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 1225
 expression: "context_snapshot::format_context_snapshot(description, &entries,\n&ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Astra keeps disabled skills hidden and uses each step's selected skills after the environment changes during preparation.
@@ -17,8 +16,8 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (request) --
-00:additional_tools/developer (3; hash=1b8e33fab12cff2b):
-        - namespace/functions; hash=c3cf7d3beb684867
+00:additional_tools/developer (3; hash=139b37cd389e8d63):
+        - namespace/functions; hash=97aeb4eac0753f79
           - custom/exec
           - function/wait
           - function/request_user_input

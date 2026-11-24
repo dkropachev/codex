@@ -1,5 +1,6 @@
 //! Records realtime transcript chunks in model and client history without inference.
 
+use crate::context::RealtimeDelegationSource;
 use crate::session::new_submission_id;
 use crate::session::session::Session;
 use codex_protocol::items::TurnItem;
@@ -18,7 +19,11 @@ use std::sync::Arc;
     clippy::await_holding_invalid_type,
     reason = "record history before the owning task can finish or a new task can start"
 )]
-pub(super) async fn record(session: &Session, text: String) -> std::io::Result<()> {
+pub(super) async fn record(
+    session: &Session,
+    text: String,
+    source: RealtimeDelegationSource,
+) -> std::io::Result<()> {
     let mut recording_context = session.new_inject_items_context().await;
     Arc::get_mut(&mut recording_context)
         .ok_or_else(|| std::io::Error::other("realtime transcript context is shared"))?
@@ -30,6 +35,16 @@ pub(super) async fn record(session: &Session, text: String) -> std::io::Result<(
         .map(|task| Arc::clone(&task.turn_context));
     let recording_turn = running_turn.is_none();
     let turn = running_turn.unwrap_or(recording_context);
+    // Persist a bounded model projection while client history keeps the complete speech.
+    let model_content = vec![UserInput::Text {
+        text: match source {
+            RealtimeDelegationSource::Handoff => {
+                super::wrap_realtime_delegation_input("", Some(&text), source)
+            }
+            RealtimeDelegationSource::TranscriptTailFlush => text.clone(),
+        },
+        text_elements: Vec::new(),
+    }];
     let content = vec![UserInput::Text {
         text,
         text_elements: Vec::new(),
@@ -52,7 +67,7 @@ pub(super) async fn record(session: &Session, text: String) -> std::io::Result<(
             .record_started_turn(&turn.sub_id, /*attribution*/ None)
             .await;
     }
-    let item = session.response_item_from_user_input(content.clone());
+    let item = session.response_item_from_user_input(model_content);
     session
         .record_conversation_items(&turn, turn.model_info(), &[item])
         .await;
@@ -60,6 +75,7 @@ pub(super) async fn record(session: &Session, text: String) -> std::io::Result<(
     // ItemCompleted is the existing source for thread/items/list. Keep the legacy
     // equivalent too; the store selects the appropriate format for this thread.
     let completed = EventMsg::ItemCompleted(ItemCompletedEvent {
+        content_token_count: None,
         thread_id: session.thread_id,
         turn_id: turn.sub_id.clone(),
         item: TurnItem::UserMessage(UserMessageItem::new(&content)),

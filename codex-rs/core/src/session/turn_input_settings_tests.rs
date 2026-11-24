@@ -371,6 +371,8 @@ async fn admission_revalidates_constraints_before_committing(kind: TurnStartKind
     assert_eq!(
         errors,
         vec![ErrorEvent {
+            rejected_audio_file_ids: Vec::new(),
+
             misalignment: None,
             message: expected_message,
             codex_error_info: Some(CodexErrorInfo::BadRequest),

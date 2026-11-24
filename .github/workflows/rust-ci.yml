@@ -172,7 +172,7 @@ jobs:
         run: python3 -m unittest discover -s tools/argument-comment-lint -p 'test_*.py'
       - name: Test argument comment lint package
         working-directory: tools/argument-comment-lint
-        run: bash ./test-with-clippy-compat.sh
+        run: cargo test --locked
         env:
           RUST_MIN_STACK: "8388608" # 8 MiB
 
@@ -197,7 +197,6 @@ jobs:
         uses: ./.github/actions/run-argument-comment-lint
         with:
           target: ${{ runner.os }}
-          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
       - name: Check for a clean worktree
         if: always() && !cancelled()

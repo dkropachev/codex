@@ -708,7 +708,7 @@ struct MentionCompletionTarget {
 }
 
 #[derive(Clone, Copy)]
-enum ShellPrefixHandling {
+pub(crate) enum ShellPrefixHandling {
     Interpret,
     Literal,
 }
@@ -729,6 +729,7 @@ pub(super) struct ComposerDraft {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ComposerDraftSnapshot {
     pub(crate) text: String,
+    pub(crate) shell_mode: Option<bool>,
     pub(crate) cursor: usize,
     pub(crate) text_elements: Vec<TextElement>,
     pub(crate) local_images: Vec<LocalImageAttachment>,
@@ -1643,7 +1644,7 @@ impl ChatComposer {
         );
     }
 
-    fn set_text_content_with_shell_prefix(
+    pub(super) fn set_text_content_with_shell_prefix(
         &mut self,
         text: String,
         text_elements: Vec<TextElement>,
@@ -1926,7 +1927,6 @@ impl ChatComposer {
         self.attachments.local_image_paths()
     }
 
-    #[cfg(test)]
     pub(crate) fn status_line_content(&self) -> Option<&FooterContent> {
         self.footer.status_line_value.as_ref()
     }
@@ -3392,8 +3392,11 @@ impl ChatComposer {
             return Some(InputResult::None);
         }
         self.stage_slash_command_history(&command);
-        self.draft.textarea.set_text_clearing_elements("");
-        self.draft.is_bash_mode = false;
+        if !matches!(command, SlashCommandItem::Builtin(cmd) if cmd.requires_dispatch_validation())
+        {
+            self.draft.textarea.set_text_clearing_elements("");
+            self.draft.is_bash_mode = false;
+        }
         Some(match command {
             SlashCommandItem::Builtin(cmd) => InputResult::Command(cmd),
             SlashCommandItem::ServiceTier(command) => InputResult::ServiceTierCommand(command),
@@ -3460,7 +3463,10 @@ impl ChatComposer {
     }
 
     fn reject_slash_command_if_unavailable(&self, command: &SlashCommandItem) -> bool {
-        if !self.is_task_running || command.available_during_task() {
+        if !self.is_task_running
+            || command.available_during_task()
+            || matches!(command, SlashCommandItem::Builtin(cmd) if cmd.requires_dispatch_validation())
+        {
             return false;
         }
         let message = format!(

@@ -50,7 +50,7 @@ pub(crate) async fn build_compaction_replacement_history(
     )
 }
 
-fn assemble_compaction_history(
+pub(crate) fn assemble_compaction_history(
     compacted_history: Vec<ResponseItemEnvelope>,
     prefix: Vec<ResponseItem>,
     context: Vec<ResponseItem>,

@@ -1,14 +1,13 @@
 ---
 source: core/tests/suite/scenarios_partial_answers.rs
-assertion_line: 325
 expression: "context_snapshot::format_request_history_snapshot(\"A worker inherits the parent prefix unchanged and receives its own instructions. Requests are grouped by parent, then child.\",\n&requests, &ContextSnapshotOptions::default().rewrite_known_segments())"
 ---
 Scenario: A worker inherits the parent prefix unchanged and receives its own instructions. Requests are grouped by parent, then child.
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (2; hash=be82b0cc6d5da824):
-        - namespace/functions; hash=27df215b02502e96
+00:additional_tools/developer (2; hash=6e906f40c6c96ebe):
+        - namespace/functions; hash=b6728902c5f05432
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -49,8 +48,8 @@ Scenario: A worker inherits the parent prefix unchanged and receives its own ins
 
 ## Window 2 (after request 3: input diverged at item 13)
 -- request 4 (turn) --
-00:additional_tools/developer (2; hash=be82b0cc6d5da824):
-        - namespace/functions; hash=27df215b02502e96
+00:additional_tools/developer (2; hash=6e906f40c6c96ebe):
+        - namespace/functions; hash=b6728902c5f05432
           - custom/exec
           - function/wait
           - function/request_user_input

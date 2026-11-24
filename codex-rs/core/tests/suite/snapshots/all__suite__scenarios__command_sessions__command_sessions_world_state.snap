@@ -1,0 +1,250 @@
+---
+source: core/tests/suite/scenarios_command_sessions_tests.rs
+assertion_line: 180
+expression: "context_snapshot::format_request_history_snapshot(\"A Code Mode script drops its command handle. WorldState retains it while polling is unavailable, restores it after compaction, preserves exited results, clears drained sessions, and deletes stale handles after restart.\",\n&responses::received_responses_requests(server).await,\n&ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: A Code Mode script drops its command handle. WorldState retains it while polling is unavailable, restores it after compaction, preserves exited results, clears drained sessions, and deletes stale handles after restart.
+
+## Window 1
+-- request 1 (turn) --
+00:additional_tools/developer (3; hash=d3d62f4712b2f55d):
+        - namespace/functions; hash=7d3d72aca93bf1f6
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=ae3d955e7de34f30
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
+    <MODEL_INSTRUCTIONS>
+04:message/developer[3]:
+    [01] <command_sessions>
+        Current command sessions for this thread (supersedes earlier snapshots). Exited sessions retain results ... busy with a tool interaction or result finalization. [hash=e247ea1c0c96e976]
+        None.
+        </command_sessions>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+    [03] <COLLABORATION_MODE>
+05:message/developer:
+    <MULTI_AGENT_ROLE>
+06:message/developer:
+    <MULTI_AGENT_MODE>
+07:message/user:
+    <ENVIRONMENT_CONTEXT>
+08:message/user:
+    Start the command and print only its output.
+09:configuration_update:reasoning={"effort":"low"}
+-- request 2 (turn) --
+10:custom_tool_call/exec:// @exec: {"yield_time_ms": 30000}
+    const result = await tools.exec_command({cmd: "while [ ! -f release-command ]; do sleep 0.02; done; prin...inished; exit 7", login: false, yield_time_ms: 250}); [hash=836937cabebedcb5]
+    text(result.output);
+11:custom_tool_call_output:Script completed
+    Wall time <DURATION> seconds
+    Output:
+
+12:message/developer:
+    <command_sessions>
+    Current command sessions for this thread (supersedes earlier snapshots). Exited sessions retain results ... busy with a tool interaction or result finalization. [hash=e247ea1c0c96e976]
+    1000: running
+    </command_sessions>
+-- request 3 (turn) --
+13:message/user:
+    Keep the command running.
+
+## Window 2 (after request 3: settings changed (model))
+-- request 4 (turn) --
+00:additional_tools/developer (3; hash=d3d62f4712b2f55d):
+        - namespace/functions; hash=7d3d72aca93bf1f6
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=ae3d955e7de34f30
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
+    <MODEL_INSTRUCTIONS>
+04:message/developer[3]:
+    [01] <command_sessions>
+        Current command sessions for this thread (supersedes earlier snapshots). Exited sessions retain results ... busy with a tool interaction or result finalization. [hash=e247ea1c0c96e976]
+        None.
+        </command_sessions>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+    [03] <COLLABORATION_MODE>
+05:message/developer:
+    <MULTI_AGENT_ROLE>
+06:message/developer:
+    <MULTI_AGENT_MODE>
+07:message/user:
+    <ENVIRONMENT_CONTEXT>
+08:message/user:
+    Start the command and print only its output.
+09:configuration_update:reasoning={"effort":"low"}
+10:custom_tool_call/exec:// @exec: {"yield_time_ms": 30000}
+    const result = await tools.exec_command({cmd: "while [ ! -f release-command ]; do sleep 0.02; done; prin...inished; exit 7", login: false, yield_time_ms: 250}); [hash=836937cabebedcb5]
+    text(result.output);
+11:custom_tool_call_output:Script completed
+    Wall time <DURATION> seconds
+    Output:
+
+12:message/developer:
+    <command_sessions>
+    Current command sessions for this thread (supersedes earlier snapshots). Exited sessions retain results ... busy with a tool interaction or result finalization. [hash=e247ea1c0c96e976]
+    1000: running
+    </command_sessions>
+13:message/user:
+    Keep the command running.
+14:message/developer:
+    <command_sessions>
+    Current command sessions for this thread (supersedes earlier snapshots). Exited sessions retain results ... busy with a tool interaction or result finalization. [hash=e247ea1c0c96e976]
+    write_stdin is unavailable with the current tool set.
+    1000: running
+    </command_sessions>
+15:message/developer:
+    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
+16:additional_tools/developer (1; hash=2a7a524a5c95d741):
+        - namespace/functions; hash=429e5891e0f9c86b
+          - custom/exec
+17:message/developer:
+    <model_instructions>
+    The current model is no-command-polling.
+    </model_instructions>
+18:message/developer:
+    <COLLABORATION_MODE>
+19:message/user:
+    Check the command while polling is unavailable.
+20:configuration_update:reasoning={"effort":"low"}
+-- request 5 (compaction) --
+21:compaction_trigger
+
+## Window 3 (after request 5: input diverged at item 00, settings changed (model))
+-- request 6 (turn) --
+00:additional_tools/developer (3; hash=574451aca0fead8b):
+        - namespace/functions; hash=f6b275d9aa007be2
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=ae3d955e7de34f30
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer:
+    <MODEL_INSTRUCTIONS>
+03:message/developer:
+    <MODEL_INSTRUCTIONS>
+04:message/user:
+    Start the command and print only its output.
+05:message/user:
+    Keep the command running.
+06:message/developer[3]:
+    [01] <command_sessions>
+        Current command sessions for this thread (supersedes earlier snapshots). Exited sessions retain results ... busy with a tool interaction or result finalization. [hash=e247ea1c0c96e976]
+        write_stdin is unavailable with the current tool set.
+        1000: running
+        </command_sessions>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+    [03] <COLLABORATION_MODE>
+07:message/developer:
+    <MULTI_AGENT_ROLE>
+08:message/developer:
+    <MULTI_AGENT_MODE>
+09:message/user:
+    <ENVIRONMENT_CONTEXT>
+10:message/user:
+    Check the command while polling is unavailable.
+11:compaction:encrypted=true; chars=18; hash=d39d579de36e4e75
+12:message/developer:
+    <command_sessions>
+    Current command sessions for this thread (supersedes earlier snapshots). Exited sessions retain results ... busy with a tool interaction or result finalization. [hash=e247ea1c0c96e976]
+    1000: running
+    </command_sessions>
+13:message/developer:
+    This is an incremental tools update. Previously declared tools remain available for direct calls unless ...here, its latest definition replaces the earlier one. [hash=bceb65fad1afdf9c]
+14:additional_tools/developer (1; hash=a7ab0a6f4b87ccef):
+        - namespace/functions; hash=0333247c27f9e8b7
+          - custom/exec
+15:message/developer:
+    <model_instructions>
+    The current model is gpt-6-astra.
+    </model_instructions>
+16:message/developer:
+    <COLLABORATION_MODE>
+17:message/user:
+    Check the command after compaction with polling restored.
+-- request 7 (turn) --
+18:message/developer:
+    <command_sessions>
+    Current command sessions for this thread (supersedes earlier snapshots). Exited sessions retain results ... busy with a tool interaction or result finalization. [hash=e247ea1c0c96e976]
+    1000: exited; poll to collect
+    </command_sessions>
+19:message/user:
+    Check the command after it exits.
+-- request 8 (turn) --
+20:message/user:
+    Collect the final command result.
+-- request 9 (turn) --
+21:custom_tool_call/exec:const result = await tools.write_stdin({session_id: 1000, chars: ""}); text({output: result.output, exit_code: result.exit_code});
+22:custom_tool_call_output:Script completed
+    Wall time <DURATION> seconds
+    Output:
+     | {"output":"finished","exit_code":7}
+23:message/developer:
+    <command_sessions>
+    Current command sessions for this thread (supersedes earlier snapshots). Exited sessions retain results ... busy with a tool interaction or result finalization. [hash=e247ea1c0c96e976]
+    None.
+    </command_sessions>
+-- request 10 (turn) --
+24:message/user:
+    Start another command before restarting.
+-- request 11 (turn) --
+25:custom_tool_call/exec:// @exec: {"yield_time_ms": 30000}
+    const result = await tools.exec_command({cmd: "while [ ! -f release-second-command ]; do sleep 0.02; don...inished; exit 7", login: false, yield_time_ms: 250}); [hash=f914f064e7e2bfce]
+    text(result.output);
+26:custom_tool_call_output:Script completed
+    Wall time <DURATION> seconds
+    Output:
+
+27:message/developer:
+    <command_sessions>
+    Current command sessions for this thread (supersedes earlier snapshots). Exited sessions retain results ... busy with a tool interaction or result finalization. [hash=e247ea1c0c96e976]
+    1001: running
+    </command_sessions>
+-- request 12 (turn) --
+28:message/developer:
+    <command_sessions>
+    Current command sessions for this thread (supersedes earlier snapshots). Exited sessions retain results ... busy with a tool interaction or result finalization. [hash=e247ea1c0c96e976]
+    None.
+    </command_sessions>
+29:message/user:
+    <ENVIRONMENT_CONTEXT>
+30:message/user:
+    Check command sessions after restarting.
+31:configuration_update:reasoning={"effort":"low"}

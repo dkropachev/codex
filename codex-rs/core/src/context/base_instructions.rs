@@ -198,7 +198,7 @@ pub(crate) fn bound_model_instruction_items(items: Vec<ResponseItem>) -> Vec<Res
             let id = if part == 1 {
                 template.id().cloned()
             } else {
-                Some(ResponseItemId::new("msg"))
+                Some(ResponseItemId::with_suffix("msg", uuid::Uuid::now_v7()))
             };
             let make_item = |payload| {
                 let mut result = template.clone();

@@ -69,6 +69,7 @@ fn trim(items: Vec<ResponseItem>, max_tokens: usize) -> Vec<ResponseItem> {
         items.into_iter().map(ResponseItemEnvelope::new).collect(),
         max_tokens,
         RetainedImageBudget::Enabled,
+        &FileAudioDurations::default(),
     )
     .into_iter()
     .map(ResponseItemEnvelope::into_item)
@@ -98,7 +99,11 @@ fn image_only_boundary_is_atomic_and_does_not_backfill_older_messages() {
             message(vec![image.clone()]),
             newest.clone(),
         ];
-        let image_tokens = images::content_item_token_count(&image);
+        let image_tokens = media::content_item_token_count(
+            &image,
+            RetainedImageBudget::Enabled,
+            &FileAudioDurations::default(),
+        );
         for (max_tokens, expected) in [
             (
                 image_tokens + 1,
@@ -147,7 +152,13 @@ fn later_image_parts_preserve_labels_audio_and_annotations() {
     });
     let image_tokens = parts[1..4]
         .iter()
-        .map(images::content_item_token_count)
+        .map(|item| {
+            media::content_item_token_count(
+                item,
+                RetainedImageBudget::Enabled,
+                &FileAudioDurations::default(),
+            )
+        })
         .sum::<usize>();
     for (max_tokens, start) in [(image_tokens, 4), (image_tokens + 1, 1)] {
         let mut expected = source.clone();
@@ -188,9 +199,22 @@ fn image_notice_is_retained_only_when_all_source_images_survive() {
     let source = message(vec![image(), image(), text("keep")]);
     let notice = resize_notice(/*image_count*/ 2);
     let retained_source = unknown_annotated_message(vec![image(), text("keep")]);
-    let boundary_budget = message_text_token_count(&notice).max(1)
-        + images::content_item_token_count(&image())
-        + images::content_item_token_count(&text("keep"));
+    let boundary_budget = retained_message_token_count(
+        &notice,
+        RetainedImageBudget::Disabled,
+        &FileAudioDurations::default(),
+    )
+    .max(1)
+        + media::content_item_token_count(
+            &image(),
+            RetainedImageBudget::Enabled,
+            &FileAudioDurations::default(),
+        )
+        + media::content_item_token_count(
+            &text("keep"),
+            RetainedImageBudget::Enabled,
+            &FileAudioDurations::default(),
+        );
 
     assert_eq!(
         trim(vec![source.clone(), notice.clone()], boundary_budget),
@@ -223,8 +247,13 @@ fn image_treatment_preserves_text_only_boundary_behavior() {
                 vec![source.clone()],
                 max_tokens,
                 RetainedImageBudget::Enabled,
+                &FileAudioDurations::default(),
             ),
-            truncate_retained_messages_for_remote_compaction(vec![source.clone()], max_tokens),
+            truncate_retained_messages_for_remote_compaction(
+                vec![source.clone()],
+                max_tokens,
+                &FileAudioDurations::default()
+            ),
         );
     }
 }
@@ -248,9 +277,14 @@ fn image_treatment_preserves_client_developer_boundary_behavior() {
             truncate_retained_messages(
                 vec![source.clone()],
                 max_tokens,
-                RetainedImageBudget::Enabled
+                RetainedImageBudget::Enabled,
+                &FileAudioDurations::default()
             ),
-            truncate_retained_messages_for_remote_compaction(vec![source.clone()], max_tokens),
+            truncate_retained_messages_for_remote_compaction(
+                vec![source.clone()],
+                max_tokens,
+                &FileAudioDurations::default()
+            ),
         );
     }
 }

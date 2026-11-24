@@ -64,7 +64,7 @@ impl Session {
                 .clone()
         };
         let runner = ExecutorReviewCommandRunner::new(
-            environment.environment.get_exec_backend(),
+            environment.environment().get_exec_backend(),
             &shell_environment_policy,
         );
         Ok(codex_git_utils::resolve_review_scope(&runner, environment.cwd()).await)

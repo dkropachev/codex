@@ -27,6 +27,7 @@ fn modern_compaction_ids_survive_history_reconstruction() {
             started_at_ms: 1,
         }));
         builder.handle_event(&EventMsg::ItemCompleted(ItemCompletedEvent {
+            content_token_count: None,
             thread_id,
             turn_id: turn_id.clone(),
             item,

@@ -125,6 +125,8 @@ pub async fn run_user_shell_command(
         sess.send_event_raw(Event {
             id: sub_id,
             msg: EventMsg::Error(ErrorEvent {
+                rejected_audio_file_ids: Vec::new(),
+
                 misalignment: None,
                 message: "Cannot run a shell command while a turn is starting.".to_string(),
                 codex_error_info: Some(CodexErrorInfo::BadRequest),
@@ -157,6 +159,8 @@ pub async fn run_workflow_command(
         sess.send_event_raw(Event {
             id: sub_id,
             msg: EventMsg::Error(ErrorEvent {
+                rejected_audio_file_ids: Vec::new(),
+
                 misalignment: None,
                 message: "Cannot run workflow command while a turn is in progress.".to_string(),
                 codex_error_info: Some(CodexErrorInfo::BadRequest),
@@ -332,6 +336,7 @@ pub async fn set_thread_memory_mode(sess: &Arc<Session>, sub_id: String, mode: T
                 misalignment: None,
                 message: err.to_string(),
                 codex_error_info: Some(CodexErrorInfo::Other),
+                rejected_audio_file_ids: Vec::new(),
             }),
         };
         sess.send_event_raw(event).await;
@@ -339,6 +344,9 @@ pub async fn set_thread_memory_mode(sess: &Arc<Session>, sub_id: String, mode: T
 }
 
 pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
+    if let Some(reporting) = &sess.outcome_reporting {
+        reporting.handoffs.close();
+    }
     let startup_prewarm = {
         let mut state = sess.state.lock().await;
         // Stop admission and take the current warmup together so resume cannot replace it.
@@ -352,6 +360,9 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     {
         let _turn_start_guard = sess.acquire_turn_start_lock().await;
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        if let Some(reporting) = &sess.outcome_reporting {
+            reporting.handoffs.wait().await;
+        }
     }
     super::async_compaction::shutdown(sess).await;
     let shell_snapshot_prewarm = sess.state.lock().await.shell_snapshot_prewarm.take();
@@ -435,6 +446,7 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
                 misalignment: None,
                 message: "Failed to shutdown thread persistence".to_string(),
                 codex_error_info: Some(CodexErrorInfo::Other),
+                rejected_audio_file_ids: Vec::new(),
             }),
         };
         sess.send_event_raw(event).await;
@@ -457,6 +469,11 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
 pub(super) async fn submission_loop(sess: Arc<Session>, rx_sub: Receiver<Submission>) {
     // To break out of this loop, send Op::Shutdown.
     let mut shutdown_received = false;
+    let mut catalog_updates = sess.services.models_manager.model_catalog_updates();
+    if let Some(updates) = &mut catalog_updates {
+        // A resumed chat must also consume a catalog fetched before it was opened.
+        updates.mark_changed();
+    }
     let mut mailbox = sess.input_queue.mailbox_updates();
     if let Some(updates) = &mut mailbox {
         updates.mark_changed();
@@ -467,6 +484,19 @@ pub(super) async fn submission_loop(sess: Arc<Session>, rx_sub: Receiver<Submiss
             _ = sess.services.local_agent_runtime.shutdown.cancelled() => {
                 shutdown_received = shutdown(&sess, super::new_submission_id()).await;
                 break;
+            }
+            update = async {
+                match &mut catalog_updates {
+                    Some(updates) => updates.changed().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if update.is_err() {
+                    catalog_updates = None;
+                } else {
+                    super::model_catalog_settings::apply(&sess).await;
+                }
+                continue;
             }
             sub = rx_sub.recv() => match sub {
                 Ok(sub) => sub,
@@ -528,6 +558,7 @@ pub(super) async fn submission_loop(sess: Arc<Session>, rx_sub: Receiver<Submiss
                                 misalignment: None,
                                 message: err.to_string(),
                                 codex_error_info: Some(CodexErrorInfo::Other),
+                                rejected_audio_file_ids: Vec::new(),
                             }),
                         })
                         .await;
@@ -537,6 +568,18 @@ pub(super) async fn submission_loop(sess: Arc<Session>, rx_sub: Receiver<Submiss
                 Op::RealtimeConversationAttach { params, reply } => {
                     let result =
                         crate::realtime_conversation::handle_attach(&sess, sub.id, params).await;
+                    let _ = reply.send(result);
+                    false
+                }
+                Op::RealtimeConversationAttachStream {
+                    params,
+                    transport,
+                    reply,
+                } => {
+                    let result = crate::realtime_conversation::handle_attach_stream(
+                        &sess, sub.id, params, transport,
+                    )
+                    .await;
                     let _ = reply.send(result);
                     false
                 }
@@ -645,6 +688,7 @@ pub(super) async fn submission_loop(sess: Arc<Session>, rx_sub: Receiver<Submiss
                                         misalignment: None,
                                         message,
                                         codex_error_info: Some(CodexErrorInfo::BadRequest),
+                                        rejected_audio_file_ids: Vec::new(),
                                     }),
                                 })
                                 .await;

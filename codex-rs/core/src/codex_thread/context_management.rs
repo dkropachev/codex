@@ -37,6 +37,9 @@ impl CodexThread {
             TurnInputSubmission::NotSubmitted { reason } => {
                 Ok(StartIfIdleSubmission::NotSubmitted { reason })
             }
+            TurnInputSubmission::Accepted => {
+                unreachable!("user-owned idle input cannot be accepted as an agent message")
+            }
             TurnInputSubmission::Steered { .. } => {
                 unreachable!("start-if-idle submission cannot steer")
             }

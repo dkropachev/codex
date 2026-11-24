@@ -65,7 +65,12 @@ async fn launch_metadata_wait_consumes_the_hook_timeout() -> anyhow::Result<()> 
         /*managed_allowed_domains_only*/ false,
     ));
     environment.selection.config = EnvironmentConfigState::Ready(config);
-    environment.environment = remote;
+    let (attachment, _detach_guard, _events) =
+        crate::environment_selection::EnvironmentAttachment::new(
+            &environment.selection.environment_id,
+            remote,
+        );
+    environment.attachment = attachment;
     let environment_id = environment.selection.environment_id.clone();
     let executor = EnvironmentCommandExecutor {
         environments: TurnEnvironmentSnapshot {

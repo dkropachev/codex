@@ -44,6 +44,7 @@ fn conversion_preserves_argv_cwd_and_only_inheritable_environment() {
         .prepare_command_for_direct_spawn_with_runtime(
             SandboxDirectSpawnTransformRequest {
                 transform: SandboxTransformRequest {
+                    workspace_roots: None,
                     command: SandboxCommand {
                         program: "tool".into(),
                         args: vec!["".to_string(), "two words".to_string(), "λ".to_string()],
@@ -210,6 +211,7 @@ fn public_atomic_preparation_wraps_windows_restricted_command() {
     let permissions = PermissionProfile::read_only();
     let launch_request = || SandboxDirectSpawnTransformRequest {
         transform: SandboxTransformRequest {
+            workspace_roots: None,
             command: SandboxCommand {
                 program: inner.as_os_str().to_owned(),
                 args: vec!["install".to_string()],

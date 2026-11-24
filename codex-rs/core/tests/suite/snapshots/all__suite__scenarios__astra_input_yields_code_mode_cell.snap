@@ -1,14 +1,13 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 2170
 expression: snapshot
 ---
 Scenario: Astra continues after new user input yields a running code cell, then waits for its result.
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=13ce6b188d976431):
-        - namespace/functions; hash=cbd898fac5b49c11
+00:additional_tools/developer (3; hash=e177a8aa2f4979cd):
+        - namespace/functions; hash=ffb1c8eddd6536bb
           - custom/exec
           - function/wait
           - function/request_user_input

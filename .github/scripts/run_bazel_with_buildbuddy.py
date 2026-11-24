@@ -58,8 +58,7 @@ def startup_args(args: Sequence[str], env: Mapping[str, str]) -> list[str]:
         for arg in configured_startup_args
     ):
         # Work around Bazel 9 overlay materialization failures seen in CI. This
-        # disables only the startup-level repo contents cache; keyed runs still
-        # use BuildBuddy.
+        # disables only the startup-level repo contents cache.
         injected_args.append("--noexperimental_remote_repo_contents_cache")
 
     return injected_args

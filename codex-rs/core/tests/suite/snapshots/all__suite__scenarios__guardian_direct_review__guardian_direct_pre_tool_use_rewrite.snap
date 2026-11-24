@@ -6,8 +6,8 @@ Scenario: Direct Guardian review applies the PreToolUse rewrite before checking 
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (1; hash=35c0674abdfab0f9):
-        - namespace/functions; hash=07db9b47b01acd43
+00:additional_tools/developer (1; hash=6a58134e746f8bbf):
+        - namespace/functions; hash=e4819169cf2abf27
           - custom/exec
           - function/wait
 01:message/developer:

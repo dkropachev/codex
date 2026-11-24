@@ -11,7 +11,10 @@ fn continuations_preserve_escaped_unicode_payload_metadata_and_identity() {
             text.clone(),
             codex_protocol::models::ContentItemNamespace::Functions,
         ));
-        original.set_id(Some(ResponseItemId::new("msg")));
+        original.set_id(Some(ResponseItemId::with_suffix(
+            "msg",
+            uuid::Uuid::now_v7(),
+        )));
         if let ResponseItem::Message {
             internal_chat_message_metadata_passthrough: metadata,
             ..

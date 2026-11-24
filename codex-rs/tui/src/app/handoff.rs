@@ -298,6 +298,7 @@ impl App {
                     initial_user_message: Some(initial_user_message),
                     presentation: ThreadAttachPresentation::SessionLineage,
                     summary,
+                    account: None,
                 },
             )
             .await

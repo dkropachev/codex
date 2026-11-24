@@ -7,6 +7,7 @@ use codex_context_fragments::AnnotatedContent;
 use codex_context_fragments::message_from_parts;
 use codex_features::TokenBudgetMode;
 use codex_protocol::AgentPath;
+use codex_protocol::ContextWindowId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
@@ -16,16 +17,15 @@ use codex_protocol::protocol::CONTEXT_WINDOW_CLOSE_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_OPEN_TAG;
 use codex_protocol::protocol::CONTEXT_WINDOW_OPEN_TAG;
-use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TokenBudgetContext {
     thread_id: ThreadId,
     agent_path: AgentPath,
     mode: TokenBudgetMode,
-    first_window_id: Uuid,
-    previous_window_id: Option<Uuid>,
-    window_id: Uuid,
+    first_window_id: ContextWindowId,
+    previous_window_id: Option<ContextWindowId>,
+    window_id: ContextWindowId,
 }
 
 impl TokenBudgetContext {
@@ -33,9 +33,9 @@ impl TokenBudgetContext {
         thread_id: ThreadId,
         agent_path: AgentPath,
         mode: TokenBudgetMode,
-        first_window_id: Uuid,
-        previous_window_id: Option<Uuid>,
-        window_id: Uuid,
+        first_window_id: ContextWindowId,
+        previous_window_id: Option<ContextWindowId>,
+        window_id: ContextWindowId,
     ) -> Self {
         Self {
             thread_id,
@@ -85,14 +85,14 @@ impl ContextualUserFragment for TokenBudgetContext {
             TokenBudgetMode::Thread => format!("Thread id: {}", self.thread_id),
             TokenBudgetMode::Name => format!("Agent name: {}", self.agent_path),
         };
-        let first_window_id = self.first_window_id;
-        let window_id = self.window_id;
+        let first_window_id = &self.first_window_id;
+        let window_id = &self.window_id;
         let mut lines = vec![
             identity,
             format!("First context window id: {first_window_id}"),
             format!("Current context window id: {window_id}"),
         ];
-        if let Some(previous_window_id) = self.previous_window_id {
+        if let Some(previous_window_id) = &self.previous_window_id {
             lines.push(format!("Previous context window id: {previous_window_id}"));
         }
         input_text(format!("\n{}\n", lines.join("\n")))
@@ -113,15 +113,8 @@ impl WorldStateSection for TokenBudgetContext {
         };
         let fragment =
             matches!(previous, PreviousSectionState::Known(identity) if identity != &current)
-                .then(|| Box::new(self.clone()) as Box<dyn ContextualUserFragment>);
-        (
-            Some(current),
-            fragment
-                .into_iter()
-                .map(WorldStateUpdate::boxed_fragment)
-                .map(WorldStateUpdate::standalone)
-                .collect(),
-        )
+                .then(|| WorldStateUpdate::fragment(self.clone()).standalone());
+        (Some(current), fragment.into_iter().collect())
     }
 }
 

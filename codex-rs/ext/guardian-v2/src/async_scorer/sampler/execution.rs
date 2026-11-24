@@ -157,6 +157,7 @@ impl SamplingExecution {
                 | ApiError::QuotaExceeded
                 | ApiError::UsageNotIncluded
                 | ApiError::UsageLimitReached(_)
+                | ApiError::SessionBudgetExceeded
                 | ApiError::RateLimit(_)
                 | ApiError::InvalidRequest { .. }
                 | ApiError::InvalidAudioInput { .. }

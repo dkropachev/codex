@@ -803,7 +803,10 @@ fn catalog_batches_preserve_all_members_and_bound_final_items() {
     let mut restored = Vec::new();
     for batch in batches {
         let mut response = item(batch.clone());
-        crate::session::session::Session::assign_missing_response_item_id(&mut response);
+        crate::session::assign_missing_item_id(
+            &mut response,
+            &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+        );
         assert!(serde_json::to_vec(&response).unwrap().len() <= 40_000);
         for namespace in batch {
             assert_eq!(namespace["name"], "sample");
@@ -913,7 +916,10 @@ fn atomic_declaration_fitting_the_exact_final_item_budget_is_accepted() {
     let mut tool = declaration("exact_boundary");
     tool["description"] = json!("");
     let mut empty_description = item(vec![tool.clone()]);
-    crate::session::session::Session::assign_missing_response_item_id(&mut empty_description);
+    crate::session::assign_missing_item_id(
+        &mut empty_description,
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+    );
     let description_bytes = 40_000 - serde_json::to_vec(&empty_description).unwrap().len();
     tool["description"] = json!("x".repeat(description_bytes));
     let state = TopLevelToolsState::new(
@@ -925,6 +931,9 @@ fn atomic_declaration_fitting_the_exact_final_item_budget_is_accepted() {
     let (_, updates) = state.render_diff(PreviousSectionState::Absent);
     let mut items = merge_world_state_updates(updates);
     assert_eq!(items, vec![item(vec![tool])]);
-    crate::session::session::Session::assign_missing_response_item_id(&mut items[0]);
+    crate::session::assign_missing_item_id(
+        &mut items[0],
+        &codex_protocol_test_support::uuid_v7_item_id_generator_for_test(),
+    );
     assert_eq!(serde_json::to_vec(&items[0]).unwrap().len(), 40_000);
 }

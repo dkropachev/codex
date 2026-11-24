@@ -476,6 +476,18 @@ impl ModelProvider for AmazonBedrockModelProvider {
         ))
     }
 
+    fn models_manager_with_settings(
+        &self,
+        config_model_catalog: Option<ModelsResponse>,
+        settings: codex_models_manager::manager::ModelCatalogSettings,
+    ) -> SharedModelsManager {
+        self.models_manager(
+            PathBuf::new(),
+            config_model_catalog,
+            settings.collaboration_modes_config,
+        )
+    }
+
     fn models_manager_without_cache(
         &self,
         config_model_catalog: Option<ModelsResponse>,

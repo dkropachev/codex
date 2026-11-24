@@ -32,6 +32,8 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
 
     session.multi_agent_version = std::sync::OnceLock::from(MultiAgentVersion::V2);
     let expected = CompactionResumeMetadata {
+        rejected_audio_file_ids: Default::default(),
+
         dynamic_tools: Some(Box::new(DynamicToolsSnapshot {
             thread_id: session.thread_id(),
             tools: Vec::new(),
@@ -96,6 +98,7 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
             ],
             turn_context_baseline.clone(),
             world_state.render_full().0,
+            /*rejected_audio_file_ids*/ Default::default(),
             CompactedHistoryMetadata {
                 input_goal_ids,
                 message: String::new(),

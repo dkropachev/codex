@@ -1,14 +1,13 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 613
 expression: "context_snapshot::format_context_snapshot(\"Astra uses the catalog question schema to ask who a launch update is for, keeps working, and receives the user's answer in the active turn.\",\n&entries, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
 Scenario: Astra uses the catalog question schema to ask who a launch update is for, keeps working, and receives the user's answer in the active turn.
 
 ## Window 1
 -- request 1 (request) --
-00:additional_tools/developer (3; hash=f29bec158417da08):
-        - namespace/functions; hash=ca732771497983b0
+00:additional_tools/developer (3; hash=c9d02227f11d5920):
+        - namespace/functions; hash=d91955a921f3abc6
           - custom/exec
           - function/wait
           - function/request_user_input

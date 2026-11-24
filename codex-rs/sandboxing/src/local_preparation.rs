@@ -169,6 +169,7 @@ pub fn prepare_local_sandbox_command(
             SandboxDirectSpawnTransformRequest {
                 transform: SandboxTransformRequest {
                     command,
+                    workspace_roots: None,
                     permissions: &permissions,
                     sandbox,
                     enforce_managed_network: false,
@@ -201,7 +202,8 @@ pub fn prepare_local_sandbox_command(
             Err(
                 SandboxTransformError::InvalidCommandCwd { .. }
                 | SandboxTransformError::InvalidSandboxPolicyCwd { .. }
-                | SandboxTransformError::EnvironmentNetworkProxy(_),
+                | SandboxTransformError::EnvironmentNetworkProxy(_)
+                | SandboxTransformError::InvalidPolicy(_),
             ) => anyhow::bail!("sandbox transformation failed after local input validation"),
             #[cfg(target_os = "macos")]
             Err(SandboxTransformError::SeatbeltPreparation(_)) => {

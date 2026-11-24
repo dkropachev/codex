@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios.rs
-assertion_line: 2654
 expression: "context_snapshot::format_request_history_snapshot(\"The parent finishes above the compaction threshold. Its prediction fork retains the parent's context and reminder, but neither compacts nor adds another reminder after a tool call.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: The parent finishes above the compaction threshold. Its prediction fork retains the parent's context and reminder, but neither compacts nor adds another reminder after a tool call.
@@ -17,8 +16,8 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=8e0e54c4716a79fa):
-        - namespace/functions; hash=63fe63a0e6828be0
+00:additional_tools/developer (3; hash=ffaec8d1151b2d26):
+        - namespace/functions; hash=42e98c248d8171a2
           - custom/exec
           - function/wait
           - function/request_user_input

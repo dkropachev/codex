@@ -90,6 +90,9 @@ pub(super) async fn submit_turn(
     .map_err(|err| internal_error(format!("failed to submit turn input: {err}")))?;
 
     match submission {
+        TurnInputSubmission::Accepted => Err(internal_error(
+            "user input unexpectedly returned agent acceptance".to_string(),
+        )),
         TurnInputSubmission::Started {
             turn_id,
             root_turn_id,

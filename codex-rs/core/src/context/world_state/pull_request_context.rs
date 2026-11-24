@@ -49,7 +49,7 @@ impl WorldStateSection for PullRequestContextState {
             Some(snapshot.clone()),
             vec![WorldStateUpdate::standalone(
                 WorldStateUpdate::boxed_fragment(
-                    Box::new(snapshot) as Box<dyn ContextualUserFragment>
+                    Box::new(snapshot) as Box<dyn ContextualUserFragment + Send>
                 ),
             )],
         )

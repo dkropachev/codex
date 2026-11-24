@@ -70,6 +70,8 @@ async fn resume_replays_usage_with_its_completed_compaction_item_id() -> Result<
         }))?,
         token_count,
         event_line(EventMsg::ItemCompleted(ItemCompletedEvent {
+            content_token_count: None,
+
             thread_id,
             turn_id: turn_id.to_string(),
             item,

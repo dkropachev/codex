@@ -37,11 +37,12 @@ async fn combined_provider_auth_preserves_runtime_authentication() {
         info.env_http_headers = None;
         let (provider, auth) = context
             .model_provider(info)
-            .api_provider_and_auth()
+            .request_provider_and_auth(/*scope*/ None)
             .await
             .unwrap();
         assert_eq!(provider.base_url, "https://api.openai.com/v1");
         let headers = auth
+            .auth
             .apply_auth_headers(http::HeaderMap::new())
             .await
             .unwrap();
@@ -79,7 +80,7 @@ async fn combined_provider_auth_rejects_independent_provider_credentials() {
     info.experimental_bearer_token = Some("provider-token".into());
     let error = context
         .model_provider(info)
-        .api_provider_and_auth()
+        .request_provider_and_auth(/*scope*/ None)
         .await
         .err()
         .expect("runtime authentication must not replace independent provider credentials");
@@ -157,7 +158,7 @@ async fn provider_auth_rejects_selectors_that_do_not_match_the_registered_actor(
             ));
             assert!(error.to_string().contains(selector));
             let error = provider
-                .api_provider_and_auth()
+                .request_provider_and_auth(/*scope*/ None)
                 .await
                 .err()
                 .expect("combined auth must reject mismatched selectors");
@@ -208,13 +209,28 @@ async fn model_requests_keep_the_selected_project_while_reusing_one_runtime() {
                 headers.insert("openai-project".into(), project.into());
             }
             info.http_headers = Some(headers);
-            let auth = context
-                .model_provider(info.clone())
-                .api_auth()
-                .await
-                .unwrap();
+            let provider = context.model_provider(info.clone());
+            let request = crate::resolve_request(
+                provider.as_ref(),
+                /*scope*/ None,
+                /*routing*/ None,
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            )
+            .await
+            .unwrap();
+            assert_eq!(request.runtime_id.as_deref(), Some("runtime-a"));
+            assert_eq!(
+                request
+                    .api_provider
+                    .headers
+                    .get("openai-project")
+                    .map(|value| value.to_str().unwrap()),
+                project,
+            );
             assert!(
-                auth.to_auth_headers()
+                request
+                    .api_auth
+                    .to_auth_headers()
                     .unwrap()
                     .contains_key("authorization")
             );
@@ -298,7 +314,7 @@ async fn unsupported_openai_destinations_do_not_fall_back_to_bearer_auth() {
                     .contains("does not support this OpenAI endpoint")
             );
             let error = provider
-                .api_provider_and_auth()
+                .request_provider_and_auth(/*scope*/ None)
                 .await
                 .err()
                 .expect("combined auth must reject unsupported inference origins");

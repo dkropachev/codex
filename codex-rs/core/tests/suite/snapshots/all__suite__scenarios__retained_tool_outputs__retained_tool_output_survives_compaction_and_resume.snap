@@ -7,8 +7,8 @@ Scenario: Individually bounded retained outputs exceed the shared 64K-token budg
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=68d6cf1d20dc114e):
-        - namespace/functions; hash=e1875bbf8d39f064
+00:additional_tools/developer (3; hash=9d1078a779c25d26):
+        - namespace/functions; hash=7d3d72aca93bf1f6
           - custom/exec
           - function/wait
           - function/request_user_input
@@ -81,8 +81,8 @@ Scenario: Individually bounded retained outputs exceed the shared 64K-token budg
 
 ## Window 2 (after request 11: input diverged at item 01)
 -- request 12 (turn) --
-00:additional_tools/developer (3; hash=68d6cf1d20dc114e):
-        - namespace/functions; hash=e1875bbf8d39f064
+00:additional_tools/developer (3; hash=9d1078a779c25d26):
+        - namespace/functions; hash=7d3d72aca93bf1f6
           - custom/exec
           - function/wait
           - function/request_user_input

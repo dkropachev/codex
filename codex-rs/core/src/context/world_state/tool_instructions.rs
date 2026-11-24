@@ -172,7 +172,10 @@ pub(crate) fn bound_tool_instruction_items(items: Vec<ResponseItem>) -> Vec<Resp
         for (index, payload) in payloads.iter().enumerate() {
             let mut part = part_item(&template, payload, index + 1, payloads.len());
             if index != 0 {
-                part.set_id(Some(ResponseItemId::new("msg")));
+                part.set_id(Some(ResponseItemId::with_suffix(
+                    "msg",
+                    uuid::Uuid::now_v7(),
+                )));
             }
             debug_assert!(serialized_bytes(&part) <= limit);
             bounded.push(part);
