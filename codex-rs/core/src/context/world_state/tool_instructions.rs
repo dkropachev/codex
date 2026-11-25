@@ -1,4 +1,4 @@
-//! Bounds newly appended tool instruction text after history IDs and metadata are present.
+//! Bounds newly appended tool catalog text after history IDs and metadata are present.
 //! Structured declarations are bounded separately; already retained history is never partitioned.
 
 use crate::context::ContextualUserFragment;
@@ -17,17 +17,12 @@ const CONTENT_KIND: &str = "tools.namespace_instructions";
 
 pub(super) struct ToolInstructions {
     text: String,
-    part: Option<(usize, usize)>,
     namespace: ContentItemNamespace,
 }
 
 impl ToolInstructions {
     pub(super) fn new(text: String, namespace: ContentItemNamespace) -> Self {
-        Self {
-            text,
-            part: None,
-            namespace,
-        }
+        Self { text, namespace }
     }
 }
 
@@ -48,15 +43,7 @@ impl ContextualUserFragment for ToolInstructions {
         ContentItemMetadata::tool(Some(self.namespace.clone()))
     }
     fn body(&self) -> ContentItem {
-        let Some((part, parts)) = self.part else {
-            return input_text(self.text.clone());
-        };
-        let payload = &self.text;
-        let bytes = payload.len();
-        // Fixed-width counts make sizing independent of the final number of parts.
-        input_text(format!(
-            "Tool namespace instructions, part {part:020}/{parts:020}. Join these {parts:020} consecutive payloads without separators to recover the complete instruction.\nPayload ({bytes:020} UTF-8 bytes):\n{payload}"
-        ))
+        input_text(self.text.clone())
     }
 }
 
@@ -66,16 +53,26 @@ fn serialized_bytes(item: &ResponseItem) -> usize {
 
 fn part_item(template: &ResponseItem, text: &str, part: usize, parts: usize) -> ResponseItem {
     let mut item = template.clone();
-    if let ResponseItem::Message { content, .. } = &mut item {
+    if let ResponseItem::Message {
+        content,
+        internal_chat_message_metadata_passthrough,
+        ..
+    } = &mut item
+    {
+        let label = match internal_chat_message_metadata_passthrough
+            .as_ref()
+            .and_then(|metadata| metadata.content_item_kinds.as_deref())
+        {
+            Some([kind]) if kind.0 == "tools.incremental_update" => "Tool catalog update",
+            Some([kind]) if kind.0 == "tools.removed_definition" => "Tool catalog removal notice",
+            _ => "Tool namespace instructions",
+        };
+        let bytes = text.len();
+        // Fixed-width counts make sizing independent of the final number of parts.
         *content = vec![ContentItem::InputText {
-            text: ToolInstructions {
-                text: text.to_string(),
-                part: Some((part, parts)),
-                namespace: ContentItemNamespace::Functions,
-            }
-            .render()
-            .into_text()
-            .unwrap_or_default(),
+            text: format!(
+                "{label}, part {part:020}/{parts:020}. Join these {parts:020} consecutive payloads without separators to recover the complete instruction.\nPayload ({bytes:020} UTF-8 bytes):\n{text}"
+            ),
         }];
     }
     item
@@ -99,9 +96,9 @@ pub(crate) fn bound_tool_instruction_items(items: Vec<ResponseItem>) -> Vec<Resp
             bounded.push(item);
             continue;
         };
+        let supported_kind = matches!(metadata.content_item_kinds.as_deref(), Some([kind]) if matches!(kind.0.as_str(), CONTENT_KIND | "tools.incremental_update" | "tools.removed_definition"));
         if role != "developer"
-            || metadata.content_item_kinds.as_deref()
-                != Some(&[ContentItemKind(CONTENT_KIND.to_string())])
+            || !supported_kind
             || text.is_empty()
             || serialized_bytes(&item) <= TEXT_ITEM_BYTES
         {

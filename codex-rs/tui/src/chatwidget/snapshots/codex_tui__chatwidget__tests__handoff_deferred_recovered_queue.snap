@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/plan_handoff_deferred.rs
+assertion_line: 248
 expression: stable_lines
 ---
 • Queued follow-up inputs
@@ -7,4 +8,5 @@ expression: stable_lines
 
 › Ask Codex to do anything
 
+  GPT-5.6-Sol default · /tmp/project
   Handoff ready next prompt starts fresh

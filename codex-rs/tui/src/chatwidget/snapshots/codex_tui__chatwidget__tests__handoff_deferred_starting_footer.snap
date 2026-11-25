@@ -1,8 +1,9 @@
 ---
 source: tui/src/chatwidget/tests/plan_handoff_deferred.rs
-assertion_line: 69
+assertion_line: 70
 expression: "render_bottom_popup(&chat, 80)"
 ---
 › Ask Codex to do anything
 
+  GPT-5.6-Sol default · /tmp/project
   Handoff starting awaiting fresh thread

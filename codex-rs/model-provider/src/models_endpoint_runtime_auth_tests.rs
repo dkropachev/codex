@@ -66,8 +66,21 @@ async fn combined_provider_auth_preserves_runtime_authentication() {
 }
 
 #[tokio::test]
-async fn combined_provider_auth_rejects_independent_provider_credentials() {
+async fn combined_provider_auth_registers_the_selected_provider_credential() {
     let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/register"))
+        .and(wiremock::matchers::body_partial_json(json!({
+            "actor_auth": {"type": "platform_api_key", "credential": "provider-token"},
+        })))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+            "runtime_agent_instance_id": "runtime-provider",
+            "agent_host_id": "host-a",
+            "actor": {"kind":"platform", "user_id":"provider-user", "organization_id":"org-a", "project_id":"project-a"},
+        })))
+        .expect(/*r*/ 1)
+        .mount(&server)
+        .await;
     let credentials = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("key-a"));
     let context = crate::ProviderAuthContext {
         runtime_auth: Some((
@@ -78,14 +91,20 @@ async fn combined_provider_auth_rejects_independent_provider_credentials() {
     };
     let mut info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
     info.experimental_bearer_token = Some("provider-token".into());
-    let error = context
+    let (_, auth) = context
         .model_provider(info)
         .request_provider_and_auth(/*scope*/ None)
         .await
-        .err()
-        .expect("runtime authentication must not replace independent provider credentials");
-    assert!(error.to_string().contains("selected OpenAI credential"));
-    assert!(server.received_requests().await.unwrap().is_empty());
+        .expect("runtime authentication should bind the selected provider credential");
+    assert_eq!(
+        auth.credential,
+        Some(CodexAuth::from_api_key("provider-token"))
+    );
+    assert_eq!(
+        context.credentials.auth().await,
+        Some(CodexAuth::from_api_key("key-a"))
+    );
+    server.verify().await;
 }
 
 #[tokio::test]
@@ -282,6 +301,87 @@ async fn model_requests_keep_the_selected_project_while_reusing_one_runtime() {
             }
         }
         server.verify().await;
+    }
+}
+
+#[tokio::test]
+async fn runtime_registration_environment_matches_inference_and_catalog() {
+    for mode in [RuntimeAuthMode::DualHeader, RuntimeAuthMode::AssertionOnly] {
+        for (registration_base, destination, matching_destination) in [
+            (
+                "https://chatgpt.com",
+                Some("https://api.openai-staging.com/v1"),
+                "https://eu.api.openai.com/v1",
+            ),
+            (
+                "https://chatgpt-staging.com",
+                Some("https://api.openai.com/v1"),
+                "https://api.openai-staging.com/v1",
+            ),
+            (
+                "https://chatgpt-staging.com",
+                None,
+                "https://chatgpt-staging.com/backend-api/codex",
+            ),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            // Keep external network access disabled even if destination validation regresses.
+            let controller = codex_http_client::NetworkPolicyController::default();
+            let factory = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+                .with_network_policy(controller.policy());
+            let credentials = AuthManager::from_api_key(
+                "ambient-key",
+                codex_login::AuthRuntimeConfig {
+                    codex_home: home.path().to_path_buf(),
+                    auth_route_config: codex_login::AuthRouteConfig::from_http_client_factory(
+                        factory.clone(),
+                    ),
+                },
+            );
+            let runtime = Arc::new(RuntimeAuthManager::for_chatgpt(
+                Arc::clone(&credentials),
+                "00000000-0000-0000-0000-000000000000".into(),
+                registration_base.into(),
+                RuntimeRegistrationMetadata {
+                    harness: None,
+                    harness_version: None,
+                    role: RuntimeRole::Orchestrator,
+                },
+            ));
+            crate::validate_runtime_environment(&runtime, Some(matching_destination)).unwrap();
+            let info = ModelProviderInfo {
+                experimental_bearer_token: Some("provider-key".into()),
+                env_http_headers: None,
+                ..ModelProviderInfo::create_openai_provider(destination.map(str::to_owned))
+            };
+            let provider = crate::provider::create_model_provider_with_runtime(
+                info.clone(),
+                Some(Arc::clone(&credentials)),
+                Some((Arc::clone(&runtime), mode)),
+            );
+            let error = provider.request_auth(/*scope*/ None).await.err().unwrap();
+            assert!(matches!(
+                error.details(),
+                codex_protocol::error::CodexErrorDetails::InvalidRequest(_)
+            ));
+
+            let mut catalog_info = info;
+            if let Some(destination) = destination {
+                catalog_info.base_url = Some(matching_destination.into());
+                catalog_info.model_catalog_url = Some(format!("{destination}/models").into());
+            }
+            let catalog = OpenAiModelsEndpoint::new(
+                catalog_info,
+                Some(credentials),
+                /*gateway_auth_manager*/ None,
+            )
+            .with_runtime_auth(Some((runtime, mode)));
+            let error = catalog.list_models("0.0.0", factory).await.unwrap_err();
+            assert!(matches!(
+                error.details(),
+                codex_protocol::error::CodexErrorDetails::InvalidRequest(_)
+            ));
+        }
     }
 }
 

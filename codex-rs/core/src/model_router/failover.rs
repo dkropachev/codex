@@ -128,6 +128,10 @@ pub(crate) fn model_router_failure_scope(err: &CodexErr) -> Option<ModelRouterFa
         CodexErrorDetails::TurnAborted
         | CodexErrorDetails::PolicyCapacityUnavailable
         | CodexErrorDetails::ContentFilter
+        | CodexErrorDetails::WorkspaceAccessDenied(_)
+        | CodexErrorDetails::AccessProgramNotEnabled(_)
+        | CodexErrorDetails::InferenceHookDenied { .. }
+        | CodexErrorDetails::ContentPolicyViolation { .. }
         | CodexErrorDetails::Interrupted
         | CodexErrorDetails::EnvVar(_)
         | CodexErrorDetails::Fatal(_)

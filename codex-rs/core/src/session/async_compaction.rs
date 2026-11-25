@@ -2,6 +2,7 @@
 //! Discarded requests still charge completed usage; session shutdown cancels remaining network work.
 //! Snapshot capture and launch registration hold session state; prompt preparation does not.
 
+use codex_login::AuthOwner;
 use std::sync::Arc;
 
 use crate::client::ResponsesRoutingSnapshot;
@@ -27,7 +28,7 @@ struct CompactionAttempt {
     history_version: u64,
     model_slug: String,
     compaction_hash: Option<String>,
-    auth_owner_generation: Option<u64>,
+    auth_owner: Option<AuthOwner>,
 }
 
 #[derive(Default)]
@@ -88,7 +89,7 @@ pub(super) async fn maybe_start(
     }
 
     let base_instructions = sess.get_prompt_base_instructions().await;
-    let auth_owner_generation = routing_snapshot.auth_owner_generation;
+    let auth_owner = routing_snapshot.auth_owner.clone();
     let (prepared_input, tasks, shutdown_cancellation, launch, send) = {
         let mut state = sess.state.lock().await;
         let model_info = &step_context.settings.model_info;
@@ -96,14 +97,14 @@ pub(super) async fn maybe_start(
             history_version: state.history.history_version(),
             model_slug: model_info.slug.clone(),
             compaction_hash: model_info.comp_hash.clone(),
-            auth_owner_generation,
+            auth_owner: auth_owner.clone(),
         };
         // Stop blocks new launches; already-running compaction remains session-owned.
         if turn_cancellation.is_cancelled()
             || state.shutting_down
             || state.async_compaction.last_attempt.as_ref() == Some(&attempt)
             || state.history.annotated_items().is_empty()
-            || sess.services.model_client.auth_owner_generation() != auth_owner_generation
+            || sess.services.model_client.auth_owner() != auth_owner
         {
             return;
         }
@@ -193,7 +194,7 @@ pub(crate) async fn wait_for_pending(
         if attempt.history_version != state.history.history_version()
             || attempt.model_slug != model.slug
             || attempt.compaction_hash != model.comp_hash
-            || attempt.auth_owner_generation != sess.services.model_client.auth_owner_generation()
+            || attempt.auth_owner != sess.services.model_client.auth_owner()
         {
             return None;
         }

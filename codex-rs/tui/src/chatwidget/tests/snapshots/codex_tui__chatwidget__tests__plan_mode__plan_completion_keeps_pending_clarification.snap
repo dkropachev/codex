@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/plan_mode.rs
-assertion_line: 1016
+assertion_line: 1012
 expression: "normalize_snapshot_paths(render_bottom_popup(&chat, 80))"
 ---
 • Queued follow-up inputs
@@ -9,4 +9,5 @@ expression: "normalize_snapshot_paths(render_bottom_popup(&chat, 80))"
 
 › Main draft
 
-  gpt-5 medium · /tmp/project                        Plan mode (⇧tab to cycle)
+  gpt-5 medium · /tmp/project
+                                                      Plan mode (⇧tab to cycle)

@@ -305,6 +305,7 @@ async fn new_config(
         tui_auto_handoff_threshold_percent: None,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         tui_fullscreen_transcript: false,
+        tui_collapse_turn_details: false,
         tui_sidebar_width_percent: None,
         tui_mouse_scroll_speed: None,
         tui_copy_on_select: Default::default(),

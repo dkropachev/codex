@@ -76,6 +76,7 @@ fn server_config(server: &MockServer) -> codex_config::types::McpServerConfig {
 
 enum ResponsesTransport {
     Http,
+    HttpCodeMode,
     Websocket(String),
 }
 
@@ -87,17 +88,33 @@ async fn fixture(
 ) -> Result<TestCodex> {
     let config = server_config(mcp);
     let realtime_url = realtime_url.to_string();
+    let code_mode = matches!(&transport, ResponsesTransport::HttpCodeMode);
     let mut test = test_codex()
-        .with_model_info_override("gpt-5.5", |model| {
+        .with_model_info_override("gpt-5.5", move |model| {
             model.use_responses_lite = true;
             model.supports_search_tool = false;
-            model.tool_mode = Some(ToolMode::Direct);
+            model.tool_mode = Some(if code_mode {
+                ToolMode::CodeModeOnly
+            } else {
+                ToolMode::Direct
+            });
         })
         .with_config(move |config_builder| {
             config_builder
                 .features
                 .enable(Feature::IncrementalTools)
                 .expect("feature");
+            if code_mode {
+                config_builder
+                    .features
+                    .enable(Feature::IncrementalExecTools)
+                    .expect("incremental exec tools");
+                config_builder
+                    .features
+                    .disable(Feature::CodeModeOnlyStrictThirdPartyTools)
+                    .expect("allow eager tools");
+                config_builder.code_mode.disable_in_process_fallback = true;
+            }
             config_builder
                 .mcp_servers
                 .set(std::collections::HashMap::from([(
@@ -117,7 +134,15 @@ async fn fixture(
         options.config.model_provider.supports_websockets = true;
     }
     options.thread_extension_init.insert(ToolPolicy {
-        allowed_tools: Some(vec![ToolName::namespaced("mcp__sample", "lookup")]),
+        allowed_tools: Some(if code_mode {
+            vec![
+                ToolName::plain("exec"),
+                ToolName::plain("wait"),
+                ToolName::namespaced("mcp__sample", "lookup"),
+            ]
+        } else {
+            vec![ToolName::namespaced("mcp__sample", "lookup")]
+        }),
         ..Default::default()
     });
     test.codex.shutdown_and_wait().await?;
@@ -131,7 +156,15 @@ async fn fixture(
 async fn capture(test: &TestCodex, api: &MockServer) -> Result<Vec<Value>> {
     let mock =
         responses::mount_sse_once(api, responses::sse(vec![responses::ev_completed("done")])).await;
-    test.submit_text_turn("Continue.").await?;
+    test.codex
+        .start_or_steer_turn(codex_core::TurnInputRequest::user_input(vec![
+            codex_protocol::user_input::UserInput::Text {
+                text: "Continue.".to_string(),
+                text_elements: Vec::new(),
+            },
+        ]))
+        .await?;
+    core_test_support::wait_for_successful_turn(&test.codex).await;
     Ok(mock.single_request().input())
 }
 
@@ -184,6 +217,43 @@ fn instruction_text(items: &[Value]) -> String {
                 .map_or(text, |(_, payload)| payload)
         })
         .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn incremental_exec_refresh_splits_large_updates_without_rewriting_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let api = responses::start_mock_server().await;
+    let instructions = format!("{}end", "escaped é🦀\\\"end\n".repeat(/*n*/ 800));
+    let initial_mcp = mcp_server("old".to_string(), "a").await;
+    let changed_mcp = mcp_server(instructions.clone(), "a").await;
+    let test = fixture(
+        &api,
+        &initial_mcp,
+        "ws://127.0.0.1:1",
+        ResponsesTransport::HttpCodeMode,
+    )
+    .await?;
+    let initial = capture(&test, &api).await?;
+    refresh(&test, &changed_mcp).await?;
+    let changed = capture(&test, &api).await?;
+    assert_eq!(&changed[..initial.len()], initial.as_slice());
+    let delta = &changed[initial.len()..];
+    assert_bounded(delta);
+    assert!(
+        delta
+            .iter()
+            .filter(
+                |item| item["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                    == json!(["tools.incremental_update"])
+            )
+            .count()
+            > 1
+    );
+    assert!(instruction_text(delta).contains(&instructions));
+    let unchanged = capture(&test, &api).await?;
+    assert_eq!(&unchanged[..changed.len()], changed.as_slice());
+    assert_eq!(instruction_text(&unchanged[changed.len()..]), "");
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

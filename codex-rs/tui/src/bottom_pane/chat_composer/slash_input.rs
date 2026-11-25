@@ -1063,6 +1063,6 @@ mod tests {
             press(&mut composer, KeyCode::Enter),
             InputResult::Command(SlashCommand::Review)
         );
-        assert!(composer.draft.textarea.is_empty());
+        assert_eq!(composer.draft.textarea.text(), "/review ");
     }
 }

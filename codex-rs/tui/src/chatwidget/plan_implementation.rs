@@ -12,12 +12,6 @@ const PLAN_IMPLEMENTATION_CLEAR_CONTEXT: &str = "Yes, clear context and implemen
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const CONFIG_IMPLEMENTATION_NO: &str = "No, stay in Config mode";
 pub(super) const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
-pub(super) const PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX: &str = concat!(
-    "A previous agent produced the plan below to accomplish the user's task. ",
-    "Implement the plan in a fresh context. Treat the plan as the source of ",
-    "user intent, re-read files as needed, and carry the work through ",
-    "implementation and verification."
-);
 pub(super) const PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE: &str = "Default mode unavailable";
 pub(super) const PLAN_IMPLEMENTATION_NO_APPROVED_PLAN: &str = "No approved plan available";
 
@@ -36,7 +30,6 @@ pub(super) fn selection_view_params(
         plan_markdown,
         clear_context_usage_label,
         "Switch to Default and start coding.",
-        PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX,
         PLAN_IMPLEMENTATION_NO,
         "Continue planning with the model.",
     )
@@ -47,7 +40,6 @@ fn selection_view_params_with_copy(
     plan_markdown: Option<&str>,
     clear_context_usage_label: Option<&str>,
     implement_description: &'static str,
-    clear_context_prefix: &'static str,
     stay_in_mode_label: &'static str,
     stay_in_mode_description: &'static str,
 ) -> SelectionViewParams {
@@ -76,11 +68,9 @@ fn selection_view_params_with_copy(
             Some(PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE.to_string()),
         ),
         (Some(_), Some(plan_markdown)) if !plan_markdown.trim().is_empty() => {
-            let user_text = format!("{clear_context_prefix}\n\n{plan_markdown}");
+            let plan = plan_markdown.to_owned();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::ClearUiAndSubmitUserMessage {
-                    text: user_text.clone(),
-                });
+                tx.send(AppEvent::ImplementPlanInFreshSession { plan: plan.clone() });
             })];
             (actions, None)
         }
@@ -138,14 +128,12 @@ pub(super) fn config_selection_view_params(
     config_edit_mask: Option<CollaborationModeMask>,
     plan_markdown: Option<&str>,
     clear_context_usage_label: Option<&str>,
-    clear_context_prefix: &'static str,
 ) -> SelectionViewParams {
     selection_view_params_with_copy(
         config_edit_mask,
         plan_markdown,
         clear_context_usage_label,
         "Switch to Config edit mode and apply the plan.",
-        clear_context_prefix,
         CONFIG_IMPLEMENTATION_NO,
         "Continue configuring with the model.",
     )

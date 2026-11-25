@@ -4182,3 +4182,6 @@ async fn production_turn_fairly_shortens_extension_catalog_descriptions() -> Res
 
     Ok(())
 }
+
+#[path = "skills_extension/discovery_grants_tests.rs"]
+mod discovery_grants_tests;

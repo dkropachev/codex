@@ -19,6 +19,14 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+/// Selects whether callable declarations come from history or this request's catalog.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ToolDeclarationLocation {
+    #[default]
+    Request,
+    History,
+}
+
 /// API request payload for a single model turn
 #[derive(Debug, Clone)]
 pub struct Prompt {
@@ -27,6 +35,7 @@ pub struct Prompt {
 
     /// Tool definitions to inject into this request, empty when supplied by history.
     pub(crate) tools: Arc<[ToolSpec]>,
+    pub(crate) tool_declaration_location: ToolDeclarationLocation,
 
     /// Whether parallel tool calls are permitted for this prompt.
     pub(crate) parallel_tool_calls: bool,
@@ -52,6 +61,7 @@ impl Default for Prompt {
         Self {
             input: Vec::new(),
             tools: Arc::default(),
+            tool_declaration_location: ToolDeclarationLocation::Request,
             parallel_tool_calls: false,
             base_instructions: BaseInstructions::default(),
             output_schema: None,

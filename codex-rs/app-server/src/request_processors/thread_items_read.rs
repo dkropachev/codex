@@ -43,6 +43,7 @@ impl ThreadRequestProcessor {
                 sort_direction: StoreSortDirection::Asc,
                 sort_key: StoreItemSortKey::CreatedAtOrdinal,
                 after_updated_at_ordinal: None,
+                before_updated_at_ordinal: None,
             })
             .await
             .map_err(|err| match err {

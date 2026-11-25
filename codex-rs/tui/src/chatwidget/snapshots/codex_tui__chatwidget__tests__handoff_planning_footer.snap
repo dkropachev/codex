@@ -1,7 +1,9 @@
 ---
 source: tui/src/chatwidget/tests/plan_handoff_commands.rs
+assertion_line: 41
 expression: "render_bottom_popup(&chat, 80)"
 ---
 › Ask Codex to do anything
 
-  GPT-5.6-Sol medium · /tmp/project               Handoff mode (⇧tab to cycle)
+  GPT-5.6-Sol medium · /tmp/project
+  ? for shortcuts                                  Handoff mode (⇧tab to cycle)

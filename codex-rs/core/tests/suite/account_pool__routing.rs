@@ -21,8 +21,16 @@ use codex_config::config_toml::ModelRouterModelsToml;
 use codex_config::config_toml::ModelRouterToml;
 use codex_core::TurnInputRequest;
 use codex_features::Feature;
+use codex_login::AccountPoolCacheHint;
+use codex_login::AccountPoolOperationKind;
+use codex_login::AccountPoolSelectionContext;
 use codex_login::AccountPoolUsageBucket;
+use codex_protocol::protocol::ConversationStartParams;
+use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RealtimeConversationVersion;
+use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::WebSocketConnectionConfig;
@@ -46,6 +54,129 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn realtime_sideband_preserves_the_thread_account_pool_assignment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    let realtime = responses::start_websocket_server(vec![vec![vec![json!({
+        "type": "session.started",
+        "session": {"id": "rtc_pool", "instructions": "backend prompt"}
+    })]]])
+    .await;
+    let test = test_codex()
+        .with_config_auth_manager()
+        .with_pre_build_hook(|home| {
+            write_chatgpt_auth(home, "work-pro", "work@example.com");
+            write_chatgpt_auth(home, "personal-pro", "personal@example.com");
+        })
+        .with_config(|config| {
+            config.account_pool = Some(AccountPoolToml {
+                enabled: true,
+                default_pool: Some("codex-pro".to_string()),
+                pools: [(
+                    "codex-pro".to_string(),
+                    AccountPoolDefinitionToml {
+                        provider: "openai".to_string(),
+                        policy: AccountPoolPolicyToml::LoadBalance,
+                        auto_consume_resets: false,
+                        auto_consume_credits: false,
+                        fallback_priority: Default::default(),
+                        accounts: vec!["work-pro".to_string(), "personal-pro".to_string()],
+                    },
+                )]
+                .into(),
+            });
+            config.experimental_realtime_ws_backend_prompt = Some("backend prompt".to_string());
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let auth = test.thread_manager.auth_manager();
+    let thread_selection = auth
+        .auth_for_account_pool_selection_context(AccountPoolSelectionContext {
+            bucket: AccountPoolUsageBucket::Regular,
+            affinity_key: test.session_configured.thread_id.to_string(),
+            operation_kind: AccountPoolOperationKind::Stream,
+            cache_hint: Some(AccountPoolCacheHint {
+                input_tokens: 20_000,
+                cached_input_tokens: 20_000,
+            }),
+            pinned_account_id: Some("work-pro".to_string()),
+        })
+        .await
+        .expect("seed thread assignment");
+    let default_selection = auth
+        .auth_for_account_pool_selection_context(AccountPoolSelectionContext::default_for_bucket(
+            AccountPoolUsageBucket::Regular,
+        ))
+        .await
+        .expect("select a different account for the cold default affinity");
+    assert_eq!(
+        (
+            thread_selection.account_id.as_str(),
+            default_selection.account_id.as_str()
+        ),
+        ("work-pro", "personal-pro")
+    );
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            client_managed_handoffs: false,
+            delegation_ack_filler: None,
+            flush_transcript_tail_on_session_end: false,
+            codex_responses_as_items: false,
+            codex_response_item_prefix: None,
+            codex_response_handoff_mode:
+                codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
+            codex_response_handoff_channel_prefixes: None,
+            model: None,
+            output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: false,
+            initial_items: Vec::new(),
+            realtime_start_instructions: None,
+            realtime_end_instructions: None,
+            prompt: None,
+            realtime_session_id: None,
+            voice_session_id: None,
+            transport: Some(ConversationStartTransport::ExistingCall {
+                call_id: "rtc_pool".to_string(),
+                sideband_base_url: Some(realtime.uri().to_string()),
+            }),
+            version: Some(RealtimeConversationVersion::V3),
+            voice: None,
+        }))
+        .await?;
+    let started = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::RealtimeConversationStarted(_) | EventMsg::Error(_)
+        )
+    })
+    .await;
+    let handshakes = realtime.handshakes();
+    if matches!(started, EventMsg::RealtimeConversationStarted(_)) {
+        test.codex.submit(Op::RealtimeConversationClose).await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::RealtimeConversationClosed(_))
+        })
+        .await;
+    }
+    test.codex.shutdown_and_wait().await?;
+    realtime.shutdown().await;
+    assert!(
+        matches!(started, EventMsg::RealtimeConversationStarted(_)),
+        "{started:?}"
+    );
+    assert_eq!(
+        handshakes
+            .iter()
+            .map(|handshake| handshake.header("chatgpt-account-id"))
+            .collect::<Vec<_>>(),
+        vec![Some("work-pro".to_string())]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn account_pool_retries_regular_usage_limit_with_next_member() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
@@ -65,21 +196,36 @@ enum BackgroundRoutingOwner {
     NextMember,
 }
 
-#[test_case::test_case(BackgroundRoutingOwner::SameMember; "same member replays captured state")]
-#[test_case::test_case(BackgroundRoutingOwner::NextMember; "new member clears captured state")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BackgroundTransport {
+    Http,
+    WebsocketFallback,
+}
+
+#[test_case::test_case(BackgroundRoutingOwner::SameMember, BackgroundTransport::Http; "same member replays captured state")]
+#[test_case::test_case(BackgroundRoutingOwner::NextMember, BackgroundTransport::Http; "new member clears captured state")]
+#[test_case::test_case(BackgroundRoutingOwner::SameMember, BackgroundTransport::WebsocketFallback; "fallback preserves captured state")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn account_pool_background_compaction_preserves_routing_owner(
     owner: BackgroundRoutingOwner,
+    transport: BackgroundTransport,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(/*s*/ 426))
+        .mount(&server)
+        .await;
     let test = test_codex()
         .with_config_auth_manager()
         .with_pre_build_hook(|codex_home| {
             write_chatgpt_auth(codex_home, "work-pro", "work@example.com");
             write_chatgpt_auth(codex_home, "personal-pro", "personal@example.com");
         })
-        .with_config(|config| {
+        .with_config(move |config| {
+            config.model_provider.supports_websockets =
+                transport == BackgroundTransport::WebsocketFallback;
             config.account_pool = Some(AccountPoolToml {
                 enabled: true,
                 default_pool: Some("codex-pro".to_string()),
@@ -203,6 +349,17 @@ async fn account_pool_background_compaction_preserves_routing_owner(
     );
     assert_eq!(remaining.requests().len(), 3);
     assert_eq!(requests[1].inputs_of_type("compaction_trigger").len(), 1);
+    if transport == BackgroundTransport::WebsocketFallback {
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("recorded Responses requests")
+                .iter()
+                .any(|request| request.method.as_str() == "GET"
+                    && request.url.path() == "/v1/responses")
+        );
+    }
     assert_eq!(
         auth.auth_change_state_receiver().borrow().owner_generation,
         original_owner,

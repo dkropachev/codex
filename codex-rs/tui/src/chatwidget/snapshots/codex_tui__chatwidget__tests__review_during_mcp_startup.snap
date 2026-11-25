@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/mcp_startup.rs
+assertion_line: 235
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Select a review scope
+
+
+›    Loading review scopes...
+
+  enter select · esc back

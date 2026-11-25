@@ -171,7 +171,8 @@ pub fn prepare_local_sandbox_command(
                     command,
                     workspace_roots: None,
                     permissions: &permissions,
-                    sandbox,
+                    selection: crate::SandboxSelection::Explicit(sandbox),
+                    runtime_readable_paths: &[],
                     enforce_managed_network: false,
                     environment_id: None,
                     network: None,
@@ -189,6 +190,11 @@ pub fn prepare_local_sandbox_command(
         );
         let transformed = match transformed {
             Ok(transformed) => transformed,
+            Err(SandboxTransformError::SandboxUnavailable) => {
+                return Ok(LocalSandboxPreparation::Unavailable(
+                    LocalSandboxUnavailableReason::SelectionUnavailable,
+                ));
+            }
             Err(SandboxTransformError::MissingLinuxSandboxExecutable) => {
                 return Ok(LocalSandboxPreparation::Unavailable(
                     LocalSandboxUnavailableReason::MissingLinuxSandboxExecutable,

@@ -309,14 +309,14 @@ async fn run_remote_compaction_request_v2(
                 .await;
             let trace = InferenceTraceContext::disabled();
             // Replay the token with its account owner without sharing foreground routing state.
-            let auth_owner_generation = routing_snapshot.auth_owner_generation;
+            let auth_owner = routing_snapshot.auth_owner.clone();
             let mut http_state = ResponsesHttpState::new(routing_snapshot.as_ref().clone());
             let http_executor = ResponsesHttpExecutor::new(&sess.services.model_client);
             let stream = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => return Err(CodexErr::TurnAborted),
                 stream = http_executor.stream_responses_http(
-                    &mut http_state, auth_owner_generation, /*event_sender*/ None, prompt, &settings.model_info, &step_context.session_telemetry, effort,
+                    &mut http_state, auth_owner.clone(), /*event_sender*/ None, prompt, &settings.model_info, &step_context.session_telemetry, effort,
                     settings.reasoning_summary, settings.service_tier.clone(), responses_metadata,
                     &trace,
                 ) => stream?,
