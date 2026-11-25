@@ -3,11 +3,11 @@
 use super::*;
 
 /// Normal appends keep this generation; compaction and rollback start a new one.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct CompactionPrefix {
     pub(crate) generation: u64,
     pub(crate) len: usize,
-    pub(crate) auth_owner_generation: Option<u64>,
+    pub(crate) auth_owner: Option<AuthOwner>,
 }
 
 pub(crate) enum CompactedHistoryInstallation<'a> {
@@ -93,8 +93,7 @@ impl Session {
                     // Validate immediately before slicing and replacing the captured prefix.
                     if state.history.history_version() != prefix.generation
                         || state.history.annotated_items().len() < prefix.len
-                        || self.services.model_client.auth_owner_generation()
-                            != prefix.auth_owner_generation
+                        || self.services.model_client.auth_owner() != prefix.auth_owner
                     {
                         return false;
                     }
@@ -202,12 +201,9 @@ impl Session {
                 retained_context: Some(state.history.retained_context().clone()),
                 mcp_resource_origins: self.services.mcp_runtime.resource_origin_checkpoint(),
                 window_number: Some(metadata.window_number),
-                first_window_id: Some(metadata.window_ids.first_window_id.to_string()),
-                previous_window_id: metadata
-                    .window_ids
-                    .previous_window_id
-                    .map(|id| id.to_string()),
-                window_id: Some(metadata.window_ids.window_id.to_string()),
+                first_window_id: Some(metadata.window_ids.first_window_id),
+                previous_window_id: metadata.window_ids.previous_window_id,
+                window_id: Some(metadata.window_ids.window_id),
                 compaction_response_id: metadata.compaction_response_id,
                 latest_token_usage_record: state.latest_token_usage_record.clone(),
                 resume_metadata: Some(CompactionResumeMetadata {

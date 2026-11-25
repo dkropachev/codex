@@ -103,6 +103,9 @@ impl ChatWidget {
                     )
             })
             .map(|pending| (pending.mode.clone(), pending.thread_id.is_none()));
+        if previous_thread_id != Some(session.thread_id) || self.cloud_picker_selection.is_some() {
+            self.dismiss_stale_model_picker();
+        }
         let connector_scope_changed = previous_thread_id != Some(session.thread_id)
             || self.config.cwd.as_path() != session.cwd.as_path();
         self.thread_id = Some(session.thread_id);
@@ -140,8 +143,11 @@ impl ChatWidget {
             self.recent_auto_review_denials = Default::default();
             self.clear_thread_usage_state();
         }
+        let has_turn_history =
+            previous_thread_id == self.thread_id && self.turn_lifecycle.has_turn_history;
         self.turn_lifecycle.reset_thread();
         self.review.reset_for_thread_change();
+        self.turn_lifecycle.has_turn_history = has_turn_history;
         self.safety_recourse = None;
         self.clear_safety_buffering();
         self.thread_name = session.thread_name.clone();

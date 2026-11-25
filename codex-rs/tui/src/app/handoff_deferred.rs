@@ -27,12 +27,12 @@ impl App {
                     }),
                 ))
             }
-            AppEvent::ClearUiAndSubmitUserMessage { text } => {
-                let text = text.clone();
+            AppEvent::ImplementPlanInFreshSession { plan } => {
+                let plan = plan.clone();
                 Some((
                     "clear this session",
                     Box::new(move |tx| {
-                        tx.send(AppEvent::ClearUiAndSubmitUserMessage { text: text.clone() });
+                        tx.send(AppEvent::ImplementPlanInFreshSession { plan: plan.clone() });
                     }),
                 ))
             }

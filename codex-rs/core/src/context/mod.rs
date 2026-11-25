@@ -50,6 +50,8 @@ mod realtime_start_instructions;
 mod realtime_start_with_instructions;
 mod recommended_plugins_instructions;
 mod rollout_budget;
+mod side_conversation;
+pub use side_conversation::SideConversationPolicy;
 mod subagent_notification;
 mod token_budget_context;
 mod turn_aborted;

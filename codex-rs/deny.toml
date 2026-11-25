@@ -339,6 +339,8 @@ allow-git = [
     "https://github.com/seanh-oai/rusty_v8.git",
     # Pinned upstream age source with the patched RustCrypto dependency chain.
     "https://github.com/str4d/rage",
+    # The immutable SQLx driver/Core pin carries the SQLite 3.54 compatibility fix.
+    "https://github.com/transact-rs/sqlx",
 ]
 
 [sources.allow-org]

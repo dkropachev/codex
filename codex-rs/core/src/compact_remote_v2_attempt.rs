@@ -14,6 +14,7 @@ use super::run_remote_compaction_request_v2;
 use crate::Prompt;
 use crate::client::ModelClientSession;
 use crate::client::ResponsesRoutingSnapshot;
+use crate::client_common::ToolDeclarationLocation;
 use crate::compact::CompactionAnalyticsDetails;
 use crate::compact_remote_history::trim_function_call_history_to_fit_context_window;
 use crate::context::world_state::WorldState;
@@ -35,6 +36,7 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_rollout_trace::CompactionTraceContext;
+use codex_tools::ToolSpec;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -173,15 +175,25 @@ pub(super) async fn run_remote_compact_v2_attempt(
     let mut unavailable =
         rejected_audio::unavailable_file_audio(&input, sess.services.image_store.as_ref()).await;
     rejected_audio::project_compaction_audio(&mut input, &mut prompt_input_metadata, &unavailable);
-    let tools_in_history = model_info.use_responses_lite
+    let tools_in_history = step_context.incremental_tools_feature().is_some()
         && input
             .iter()
             .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }));
     let tool_router = &step_context.tool_router;
     let mut prompt = Prompt {
         input,
+        tool_declaration_location: if tools_in_history {
+            ToolDeclarationLocation::History
+        } else {
+            ToolDeclarationLocation::Request
+        },
         tools: if tools_in_history {
-            Arc::default()
+            tool_router
+                .model_visible_specs()
+                .iter()
+                .filter(|tool| matches!(tool, ToolSpec::WebSearch { .. }))
+                .cloned()
+                .collect()
         } else {
             tool_router.model_visible_specs()
         },
@@ -298,7 +310,7 @@ pub(crate) async fn capture_background_input(
     let prefix = CompactionPrefix {
         generation: snapshot.history_version(),
         len: snapshot.annotated_items().len(),
-        auth_owner_generation: routing_snapshot.auth_owner_generation,
+        auth_owner: routing_snapshot.auth_owner.clone(),
     };
     trim_function_call_history_to_fit_context_window(
         &mut snapshot,
@@ -341,7 +353,7 @@ pub(crate) async fn run_background_compaction(
             sess.services.image_store.as_ref(),
         ) => {},
     }
-    let prefix = prepared_input.prefix;
+    let prefix = prepared_input.prefix.clone();
     let metadata = CompactionTurnMetadata::new(
         CompactionTrigger::Auto,
         CompactionReason::ContextLimit,

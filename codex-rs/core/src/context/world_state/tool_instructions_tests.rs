@@ -3,8 +3,10 @@ use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 
-#[test]
-fn continuations_preserve_escaped_unicode_payload_metadata_and_identity() {
+#[test_case::test_case(CONTENT_KIND; "namespace instructions")]
+#[test_case::test_case("tools.incremental_update"; "incremental definitions")]
+#[test_case::test_case("tools.removed_definition"; "removed definitions")]
+fn continuations_preserve_escaped_unicode_payload_metadata_and_identity(kind: &str) {
     let text = "prefix\n\"\\\0é🦀suffix".repeat(/*n*/ 5_000);
     for turn_id_bytes in [36, 38_900, 39_600, 40_100] {
         let mut original = ContextualUserFragment::into(ToolInstructions::new(
@@ -23,7 +25,7 @@ fn continuations_preserve_escaped_unicode_payload_metadata_and_identity() {
             *metadata = Some(InternalChatMessageMetadataPassthrough {
                 turn_id: Some("t".repeat(turn_id_bytes)),
                 create_time: Some(serde_json::Number::from(/*i*/ 1_792_098_000)),
-                content_item_kinds: Some(vec![ContentItemKind(CONTENT_KIND.to_string())]),
+                content_item_kinds: Some(vec![ContentItemKind(kind.to_string())]),
                 ..Default::default()
             });
         }

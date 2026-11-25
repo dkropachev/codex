@@ -16,6 +16,14 @@ impl ChatComposer {
             return (InputResult::None, false);
         }
 
+        let is_char = matches!(key_event.code, KeyCode::Char(_));
+        if !is_char {
+            if self.draft.skill_completion_space.is_some() && self.draft.paste_burst.is_active() {
+                self.handle_paste_burst_flush(tokio::time::Instant::now().into_std());
+            }
+            self.draft.skill_completion_space = None;
+        }
+
         if self.history_search.is_none()
             && !self.popups.active()
             && self.config.slash_commands_enabled
@@ -31,6 +39,9 @@ impl ChatComposer {
         self.draft.textarea_state.get_mut().follow_cursor();
         let before = self.before_sparkle_key(key_event);
         let result = self.handle_key_event_inner(key_event);
+        if is_char && !self.draft.paste_burst.is_active() {
+            self.draft.skill_completion_space = None;
+        }
         self.after_sparkle_key(before, &result.0);
         result
     }

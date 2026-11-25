@@ -474,6 +474,7 @@ pub(in crate::async_scorer) async fn proxy_websocket_servers_with_http(
 pub(in crate::async_scorer) fn sampler_config(base_url: String) -> LunaSamplerConfig {
     LunaSamplerConfig {
         api_key_cyber_access_programs: ApiKeyCyberAccessPrograms::Disabled,
+        inherit_parent_cyber_access_program: true,
         workspace_routing: codex_model_provider::WorkspaceRoutingContext::new(
             "https://chatgpt.com/backend-api".into(),
         ),
@@ -890,6 +891,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
 
     let sampler = connect_sampler(LunaSamplerConfig {
         api_key_cyber_access_programs: ApiKeyCyberAccessPrograms::Disabled,
+        inherit_parent_cyber_access_program: true,
         workspace_routing: codex_model_provider::WorkspaceRoutingContext::new(
             "https://chatgpt.com/backend-api".into(),
         ),
@@ -1072,6 +1074,7 @@ async fn sampler_returns_classification_token_before_terminal_response_events() 
     );
     let sampler = connect_sampler(LunaSamplerConfig {
         api_key_cyber_access_programs: ApiKeyCyberAccessPrograms::Disabled,
+        inherit_parent_cyber_access_program: true,
         workspace_routing: codex_model_provider::WorkspaceRoutingContext::new(
             "https://chatgpt.com/backend-api".into(),
         ),

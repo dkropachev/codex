@@ -253,6 +253,7 @@ impl App {
                 Some(ThreadStartSource::Clear),
                 /*remote_cwd_override*/ None,
                 /*selected_profile*/ None,
+                self.backend_preference_context.local_cwd.as_deref(),
             )
             .await
         {

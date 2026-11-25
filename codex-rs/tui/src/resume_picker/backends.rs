@@ -206,7 +206,11 @@ fn spawn_app_server_source(backend: AppServerPickerBackend) -> sources::Source {
                         preview = load_transcript_preview(&mut app_server, thread_id, config.as_ref()) => preview,
                         _ = bg_tx.closed() => continue,
                     };
-                    let _ = bg_tx.send(BackgroundEvent::Preview { thread_id, preview });
+                    let _ = bg_tx.send(BackgroundEvent::Preview {
+                        backend_id,
+                        thread_id,
+                        preview,
+                    });
                 }
                 PickerLoadRequest::Transcript {
                     thread_id,
@@ -245,7 +249,11 @@ fn spawn_app_server_source(backend: AppServerPickerBackend) -> sources::Source {
                         .await
                         .map(|_| ())
                         .map_err(std::io::Error::other);
-                    let _ = bg_tx.send(BackgroundEvent::Archive { thread_id, result });
+                    let _ = bg_tx.send(BackgroundEvent::Archive {
+                        backend_id,
+                        thread_id,
+                        result,
+                    });
                 }
                 PickerLoadRequest::Unarchive { thread_id, .. } => {
                     let result = archive_request_handle

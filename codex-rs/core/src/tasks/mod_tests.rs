@@ -83,6 +83,13 @@ struct StalledRefreshModelsManager {
 }
 
 impl ModelsManager for StalledRefreshModelsManager {
+    fn ensure_initialized(
+        &self,
+        http_client_factory: HttpClientFactory,
+    ) -> ModelsManagerFuture<'_, ()> {
+        self.inner.ensure_initialized(http_client_factory)
+    }
+
     fn get_model_info<'a>(
         &'a self,
         model: &'a str,

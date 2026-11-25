@@ -13,7 +13,7 @@ use crate::context::ModelInstructions;
 use crate::context::MultiAgentModeInstructions;
 use crate::context::MultiAgentRoleInstructions;
 use crate::context::MultiAgentUsageHint;
-use crate::context::world_state::IncrementalToolsHint;
+use crate::context::world_state::IncrementalToolsUpdate;
 use crate::context::world_state::PersistentModeState;
 use crate::session::multi_agents::resolve_usage_hints;
 use crate::tasks::InterruptedTurnHistoryMarker;
@@ -323,7 +323,7 @@ pub(super) async fn prepare_forked_history(
                     BaseInstructionsFragment::KIND
                         | "model.base_instructions.part"
                         | "model.instructions.part"
-                        | IncrementalToolsHint::KIND
+                        | IncrementalToolsUpdate::KIND
                 ) {
                     return preserve_context_baselines;
                 }

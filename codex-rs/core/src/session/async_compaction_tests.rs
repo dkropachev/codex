@@ -120,11 +120,11 @@ async fn cancelled_turn_skips_launch_but_preserves_existing_work(trigger: Compac
     let world_state = Arc::new(WorldState::default());
     let cancelled = CancellationToken::new();
     cancelled.cancel();
-    let auth = sess.services.model_client.auth_owner_generation();
+    let auth = sess.services.model_client.auth_owner();
     let routing_snapshot = || crate::client::ResponsesRoutingSnapshot {
         turn_state: Some("routing".to_string()),
         account_pool_selection: None,
-        auth_owner_generation: auth,
+        auth_owner: auth.clone(),
     };
     maybe_start(
         &sess,

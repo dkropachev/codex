@@ -411,6 +411,8 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let mut pending_steers = VecDeque::new();
     pending_steers.push_back(PendingSteer {
+        admitted_turn_id: None,
+        optimistically_rendered: false,
         client_id: "test-submission".to_string(),
         user_message: UserMessage::from("pending steer"),
         history_record: UserMessageHistoryRecord::UserMessageText,

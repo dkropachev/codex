@@ -15,6 +15,7 @@ use crate::SandboxDirectSpawnRuntime;
 use crate::SandboxDirectSpawnTransformRequest;
 use crate::SandboxExecRequest;
 use crate::SandboxManager;
+use crate::SandboxSelection;
 use crate::SandboxTransformRequest;
 use crate::SandboxType;
 use crate::WindowsSandboxProxySettingsMode;
@@ -54,7 +55,8 @@ fn conversion_preserves_argv_cwd_and_only_inheritable_environment() {
                         additional_permissions: None,
                     },
                     permissions: &permissions,
-                    sandbox: SandboxType::None,
+                    runtime_readable_paths: &[],
+                    selection: SandboxSelection::Explicit(SandboxType::None),
                     enforce_managed_network: false,
                     environment_id: None,
                     network: None,
@@ -221,7 +223,8 @@ fn public_atomic_preparation_wraps_windows_restricted_command() {
                 additional_permissions: None,
             },
             permissions: &permissions,
-            sandbox: SandboxType::WindowsRestrictedToken,
+            runtime_readable_paths: &[],
+            selection: SandboxSelection::Explicit(SandboxType::WindowsRestrictedToken),
             enforce_managed_network: false,
             environment_id: None,
             network: None,

@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/workflows__slash_commands.rs
+assertion_line: 679
 expression: normalized_backend_snapshot(terminal.backend())
 ---
 "                                                                                "
@@ -9,3 +10,4 @@ expression: normalized_backend_snapshot(terminal.backend())
 "› Ask Codex to do anything                                                      "
 "                                                                                "
 "  GPT-5.6-Sol default · /tmp/project                                            "
+"  ? for shortcuts                                                               "

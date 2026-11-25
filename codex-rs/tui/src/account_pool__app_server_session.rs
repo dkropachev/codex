@@ -8,6 +8,7 @@ use pretty_assertions::assert_eq;
 #[test]
 fn account_ui_state_from_response_preserves_chatgpt_pool_details() {
     let response = GetAccountResponse {
+        user_id: None,
         account: Some(Account::ChatgptPool {
             id: "codex-pro".to_string(),
             active_account_id: Some("work-pro".to_string()),
@@ -79,6 +80,7 @@ fn account_ui_state_from_response_preserves_chatgpt_pool_details() {
 #[test]
 fn account_ui_state_from_response_uses_pool_member_metadata_without_active_assignment() {
     let response = GetAccountResponse {
+        user_id: None,
         account: Some(Account::ChatgptPool {
             id: "codex-pro".to_string(),
             active_account_id: None,

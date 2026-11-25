@@ -135,7 +135,8 @@ selection are separate features despite also using the word handoff.
   execution prompt. This does not roll back repository changes made during the source session.
 - Each transfer must match the current source, generation, completed plan turn, and plan text.
 - New input, stale callbacks, or unverifiable source history cannot silently authorize old plans.
-- The generated prompt is the destination's initial user turn, not a Core-injected context fragment.
+- The destination's initial user prompt references the approved attachment or the complete plan
+  admitted as untrusted context. Fallback chunks respect the history payload cap without losing text.
 - Remote workspaces and different supported app-server/exec-server operating systems remain usable.
 
 ## Test Places
@@ -144,19 +145,20 @@ selection are separate features despite also using the word handoff.
 
 #### Description
 
-Handoff orchestration belongs to the TUI. It reuses existing Plan and user-turn behavior without
-adding a Core handoff operation; shared Core admission coverage belongs to context management.
+Handoff orchestration belongs to the TUI. Core prepares the approved attachment or admits the
+complete fallback plan before the destination's first user turn.
 
-#### Status
+#### Test cases
 
-Not covered
+- Approved-plan fallback preserves complete ASCII and Unicode plans across the history payload cap: codex-rs/core/tests/suite/approved_plan_tests.rs:approved_plan_fallback_survives_the_history_payload_cap
 
 ### app-server-api (app-server API behavior)
 
 #### Description
 
-Handoff uses existing thread start, read, turn paging, and turn submission RPCs. There is no
-handoff-specific RPC; source revision checks and recovery are covered through TUI components.
+Handoff uses thread start, read, turn paging, and turn submission RPCs. The experimental
+`thread/prepareApprovedPlan` RPC prepares the destination attachment or complete fallback context;
+source revision checks and recovery are covered through TUI components.
 
 #### Status
 
