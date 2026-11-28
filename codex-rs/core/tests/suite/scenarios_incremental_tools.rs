@@ -164,12 +164,12 @@ async fn prediction_fork_keeps_inherited_tools() -> Result<()> {
 #[test_case(true, "Review results before responding.".to_string(), None, true, OPENAI_PROVIDER_ID, &[]; "responses_lite")]
 #[test_case(true, "Review results before responding.".to_string(), Some(true), true, OPENAI_PROVIDER_ID, &[]; "announcements_suppressed")]
 #[test_case(false, "Review results before responding.".to_string(), None, false, OPENAI_PROVIDER_ID, &[]; "responses_api")]
-#[test_case(false, "Review results before responding.".to_string(), None, false, AMAZON_BEDROCK_PROVIDER_ID, &[]; "mantle_default")]
-#[test_case(false, "Review results before responding.".to_string(), None, true, AMAZON_BEDROCK_PROVIDER_ID,
-    &[(Feature::IncrementalToolsLegacy, true), (Feature::IncrementalToolsLegacyGcp, false)]; "mantle_enabled")]
-#[test_case(false, "Review results before responding.".to_string(), None, false, AMAZON_BEDROCK_RUNTIME_PROVIDER_ID, &[]; "runtime_default")]
-#[test_case(false, "Review results before responding.".to_string(), None, true, AMAZON_BEDROCK_RUNTIME_PROVIDER_ID,
-    &[(Feature::IncrementalToolsLegacy, true), (Feature::IncrementalToolsLegacyGcp, false)]; "runtime_enabled")]
+#[test_case(false, "Review results before responding.".to_string(), None, true, AMAZON_BEDROCK_PROVIDER_ID, &[]; "mantle_default")]
+#[test_case(false, "Review results before responding.".to_string(), None, false, AMAZON_BEDROCK_PROVIDER_ID,
+    &[(Feature::IncrementalToolsLegacy, false)]; "mantle_opt_out")]
+#[test_case(false, "Review results before responding.".to_string(), None, true, AMAZON_BEDROCK_RUNTIME_PROVIDER_ID, &[]; "runtime_default")]
+#[test_case(false, "Review results before responding.".to_string(), None, false, AMAZON_BEDROCK_RUNTIME_PROVIDER_ID,
+    &[(Feature::IncrementalToolsLegacy, false)]; "runtime_opt_out")]
 #[test_case(false, "Review results before responding.".to_string(), None, true, GCP_PROVIDER_ID, &[]; "gcp_default")]
 #[test_case(false, "Review results before responding.".to_string(), None, false, GCP_PROVIDER_ID,
     &[(Feature::IncrementalToolsLegacyGcp, false), (Feature::IncrementalToolsLegacy, true)]; "gcp_opt_out")]
